@@ -3,7 +3,7 @@ name = "math-atoms-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Native Math Atoms Coder runtime: Spiderweb Bus, graph retrieval, provider setup, and proof state."
+description = "Native Atom Vibe Coder runtime: Spiderweb Bus, graph retrieval, provider setup, and proof state."
 
 [dependencies]
 math-atoms-doctrine = { path = "../math-atoms-doctrine" }

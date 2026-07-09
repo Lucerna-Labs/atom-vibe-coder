@@ -181,8 +181,8 @@ try {
     Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Settings tab command"
-    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
-        throw "Settings tab did not expose provider connections as the default settings panel. Title: $($proc.MainWindowTitle)"
+    if ($proc.MainWindowTitle -notmatch "settings-runtime") {
+        throw "Settings tab did not expose runtime settings as the default settings panel. Title: $($proc.MainWindowTitle)"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle $CommandRuntimeSettingsTab
@@ -195,14 +195,14 @@ try {
     Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Provider connections tab command"
-    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
+    if ($proc.MainWindowTitle -notmatch "provider-connections") {
         throw "Provider connections tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle $CommandDesignUploadTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Design Upload settings tab command"
-    if ($proc.MainWindowTitle -notmatch "settings-design-upload") {
+    if ($proc.MainWindowTitle -notmatch "design-upload") {
         throw "Design Upload tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
     }
 
@@ -215,15 +215,15 @@ try {
     Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Workspace tab command"
-    if ($proc.MainWindowTitle -notmatch "workspace") {
-        throw "Workspace tab did not return to the workspace surface. Title: $($proc.MainWindowTitle)"
+    if ($proc.MainWindowTitle -notmatch "assistant") {
+        throw "Workspace tab did not return to the assistant surface. Title: $($proc.MainWindowTitle)"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
     Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Provider settings before apply"
-    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
+    if ($proc.MainWindowTitle -notmatch "provider-connections") {
         throw "Provider apply path was not on the provider connections settings tab. Title: $($proc.MainWindowTitle)"
     }
 

@@ -483,9 +483,9 @@ impl DesignTokens {
         let accent_mix = if matches!(role, Role::Button | Role::Toggle | Role::Select) {
             0.26 + pulse * 0.12
         } else if src.r + src.g + src.b > 2.15 {
-            0.08 + self.glass * 0.12
+            0.04 + self.glass * 0.08
         } else {
-            0.14 + self.glass * 0.10
+            0.05 + self.glass * 0.05
         };
         let mut out = mix_rgba(src, self.accent, accent_mix.clamp(0.0, 0.45));
         if self.glass > 0.0 {
@@ -495,7 +495,7 @@ impl DesignTokens {
     }
 
     fn border(self, src: Rgba) -> Rgba {
-        mix_rgba(src, self.accent_2, 0.34 + self.glass * 0.22).with_alpha(0.76)
+        mix_rgba(src, self.accent_2, 0.22 + self.glass * 0.16).with_alpha(0.76)
     }
 }
 

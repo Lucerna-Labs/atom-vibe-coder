@@ -8,7 +8,7 @@ on:
 
 jobs:
   verify:
-    name: Verify Math Atoms Coder
+    name: Verify Atom Vibe Coder
     runs-on: windows-latest
 
     steps:

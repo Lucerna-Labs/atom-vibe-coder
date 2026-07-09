@@ -1,6 +1,6 @@
-# Math Atoms Coder
+# Atom Vibe Coder
 
-Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest atom doctrine. The current product path is the native PMRE shell backed by `math-atoms-core`: Spiderweb Bus routing, wiki graph retrieval, provider adapters, and proof state.
+Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for the Rekonquest atom doctrine. The current product path is the native PMRE shell backed by `math-atoms-core`: Spiderweb Bus routing, wiki graph retrieval, provider adapters, and proof state.
 
 ## Current Surface
 
@@ -73,7 +73,7 @@ Run a real DeepSeek Flash model test that asks the provider to generate a depend
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-DeepSeekToyApp.ps1
 ```
 
-Run the stricter app-build gate. The provider receives only a natural-language user request; Math Atoms Coder owns the PMRE renderer scaffold, compiles the resulting app, exercises UI events, writes a BMP, and exposes it in the native side artifact window:
+Run the stricter app-build gate. The provider receives only a natural-language user request; Atom Vibe Coder owns the PMRE renderer scaffold, compiles the resulting app, exercises UI events, writes a BMP, and exposes it in the native side artifact window:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-ProviderBuildRealPmreApp.ps1

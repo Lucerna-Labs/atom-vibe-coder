@@ -2,7 +2,10 @@ use math_atoms_core::{
     provider_output_hash, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
     ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus,
 };
-use pmre_orchestrator::UiState;
+use pmre_orchestrator::{
+    UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
+    DESIGN_RADIUS_SLIDER, DESIGN_SAT_SLIDER, DESIGN_TEXT_SLIDER,
+};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
@@ -20,7 +23,6 @@ pub const PROVIDER_MODEL_INPUT: u32 = 9;
 pub const PROVIDER_URL_INPUT: u32 = 10;
 pub const PROVIDER_KEY_ENV_INPUT: u32 = 11;
 pub const APPLY_PROVIDER: u32 = 12;
-pub const LEFT_SCROLL: u32 = 13;
 pub const PROVIDER_FORMAT_INPUT: u32 = 14;
 pub const PROVIDER_AUTH_HEADER_INPUT: u32 = 15;
 pub const PROVIDER_AUTH_SCHEME_INPUT: u32 = 16;
@@ -37,9 +39,13 @@ pub const DESIGN_UPLOAD_TAB: u32 = 26;
 pub const DESIGN_HTML_PATH_INPUT: u32 = 27;
 pub const DESIGN_CSS_PATH_INPUT: u32 = 28;
 pub const BUILD_DESIGN_UPLOAD: u32 = 29;
+pub const WIKI_TAB: u32 = 30;
+pub const MCP_TAB: u32 = 31;
+pub const SKILLS_TAB: u32 = 32;
+pub const HOOKS_TAB: u32 = 33;
 
 pub fn default_intent() -> &'static str {
-    "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and production app readiness."
+    "Build a native Atom Vibe Coder app on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and side artifact preview."
 }
 
 #[derive(Clone, Debug)]
@@ -69,7 +75,13 @@ pub struct SideArtifact {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MainTab {
     Workspace,
+    Provider,
+    Wiki,
+    Mcp,
+    Skills,
+    Hooks,
     Settings,
+    DesignUpload,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +143,7 @@ impl NativeApp {
             .or_insert_with(|| default_intent().to_string());
         seed_provider_inputs(self.runtime.provider(), ui);
         seed_design_inputs(ui);
+        seed_lucerna_design_defaults(ui);
         ui.focused = Some(INTENT_INPUT);
     }
 
@@ -176,10 +189,11 @@ impl NativeApp {
 
     pub fn show_settings(&mut self) {
         self.active_main_tab = MainTab::Settings;
+        self.active_settings_tab = SettingsTab::Runtime;
     }
 
     pub fn show_provider_connections(&mut self) {
-        self.active_main_tab = MainTab::Settings;
+        self.active_main_tab = MainTab::Provider;
         self.active_settings_tab = SettingsTab::ProviderConnections;
     }
 
@@ -189,8 +203,24 @@ impl NativeApp {
     }
 
     pub fn show_design_upload(&mut self) {
-        self.active_main_tab = MainTab::Settings;
+        self.active_main_tab = MainTab::DesignUpload;
         self.active_settings_tab = SettingsTab::DesignUpload;
+    }
+
+    pub fn show_wiki(&mut self) {
+        self.active_main_tab = MainTab::Wiki;
+    }
+
+    pub fn show_mcp(&mut self) {
+        self.active_main_tab = MainTab::Mcp;
+    }
+
+    pub fn show_skills(&mut self) {
+        self.active_main_tab = MainTab::Skills;
+    }
+
+    pub fn show_hooks(&mut self) {
+        self.active_main_tab = MainTab::Hooks;
     }
 
     pub fn apply_provider_config(&mut self, ui: &UiState) {
@@ -385,12 +415,14 @@ impl NativeApp {
 
     pub fn nav_title_state(&self) -> &'static str {
         match (self.active_main_tab, self.active_settings_tab) {
-            (MainTab::Workspace, _) => "workspace",
-            (MainTab::Settings, SettingsTab::ProviderConnections) => {
-                "settings-provider-connections"
-            }
-            (MainTab::Settings, SettingsTab::DesignUpload) => "settings-design-upload",
-            (MainTab::Settings, SettingsTab::Runtime) => "settings-runtime",
+            (MainTab::Workspace, _) => "assistant",
+            (MainTab::Provider, _) => "provider-connections",
+            (MainTab::Wiki, _) => "wiki-graph",
+            (MainTab::Mcp, _) => "mcp",
+            (MainTab::Skills, _) => "skills",
+            (MainTab::Hooks, _) => "hooks",
+            (MainTab::DesignUpload, _) => "design-upload",
+            (MainTab::Settings, _) => "settings-runtime",
         }
     }
 
@@ -487,6 +519,16 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
 fn seed_design_inputs(ui: &mut UiState) {
     ui.inputs.entry(DESIGN_HTML_PATH_INPUT).or_default();
     ui.inputs.entry(DESIGN_CSS_PATH_INPUT).or_default();
+}
+
+fn seed_lucerna_design_defaults(ui: &mut UiState) {
+    ui.set_slider(DESIGN_HUE_SLIDER, 0.12);
+    ui.set_slider(DESIGN_SAT_SLIDER, 0.72);
+    ui.set_slider(DESIGN_LIGHT_SLIDER, 0.42);
+    ui.set_slider(DESIGN_TEXT_SLIDER, 0.50);
+    ui.set_slider(DESIGN_RADIUS_SLIDER, 0.26);
+    ui.set_slider(DESIGN_GLASS_SLIDER, 0.24);
+    ui.set_slider(DESIGN_ANIMATION_SLIDER, 0.12);
 }
 
 fn initial_provider_output(provider: &ProviderConfig) -> String {
@@ -769,13 +811,18 @@ mod tests {
     }
 
     #[test]
-    fn settings_provider_connections_tab_owns_provider_controls() {
+    fn provider_connections_tab_owns_provider_controls() {
         let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
         let ui = UiState::new(1200, 800);
 
         {
             let build = |state: &UiState| crate::ui::build(&app, state);
             assert!(widget_rect(&build, &ui, SETTINGS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_CONNECTIONS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, WIKI_TAB).is_some());
+            assert!(widget_rect(&build, &ui, MCP_TAB).is_some());
+            assert!(widget_rect(&build, &ui, SKILLS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, HOOKS_TAB).is_some());
             assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_none());
         }
 
@@ -791,7 +838,7 @@ mod tests {
         }
 
         app.show_provider_connections();
-        assert_eq!(app.nav_title_state(), "settings-provider-connections");
+        assert_eq!(app.nav_title_state(), "provider-connections");
         {
             let build = |state: &UiState| crate::ui::build(&app, state);
             assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_some());
@@ -806,7 +853,7 @@ mod tests {
         let ui = UiState::new(1200, 800);
 
         app.show_design_upload();
-        assert_eq!(app.nav_title_state(), "settings-design-upload");
+        assert_eq!(app.nav_title_state(), "design-upload");
         {
             let build = |state: &UiState| crate::ui::build(&app, state);
             assert!(widget_rect(&build, &ui, DESIGN_HTML_PATH_INPUT).is_some());
@@ -889,6 +936,7 @@ mod tests {
 
         click_control(&app, &mut ui, PROVIDER_CONNECTIONS_TAB);
         app.show_provider_connections();
+        assert_eq!(app.active_main_tab, MainTab::Provider);
         assert_eq!(app.active_settings_tab, SettingsTab::ProviderConnections);
 
         click_control(&app, &mut ui, APPLY_PROVIDER);

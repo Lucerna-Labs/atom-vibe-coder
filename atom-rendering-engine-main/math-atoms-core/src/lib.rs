@@ -1,4 +1,4 @@
-//! Native Math Atoms Coder product core.
+//! Native Atom Vibe Coder product core.
 //!
 //! This crate owns the non-rendering runtime: atom doctrine data, the Spiderweb Bus,
 //! graph-native retrieval, provider request setup, and proof-loop state. The PMRE app

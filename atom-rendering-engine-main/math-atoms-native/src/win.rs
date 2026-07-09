@@ -1,7 +1,7 @@
 use crate::model::{
     NativeApp, APPLY_PROVIDER, BUILD_DESIGN_UPLOAD, CAPTURE_PROOF, DESIGN_UPLOAD_TAB,
-    EXEC_PROVIDER, MARK_DRIFT, PROVIDER_CONNECTIONS_TAB, RUNTIME_SETTINGS_TAB, RUN_LOOP,
-    SETTINGS_TAB, WORKSPACE_TAB,
+    EXEC_PROVIDER, HOOKS_TAB, MARK_DRIFT, MCP_TAB, PROVIDER_CONNECTIONS_TAB, RUNTIME_SETTINGS_TAB,
+    RUN_LOOP, SETTINGS_TAB, SKILLS_TAB, WIKI_TAB, WORKSPACE_TAB,
 };
 use crate::ui;
 use core::ffi::c_void;
@@ -211,7 +211,7 @@ pub fn run() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_PER_MONITOR_V2);
         let class_name = wide("math_atoms_native_window");
-        let title = wide("Math Atoms Coder - Native PMRE");
+        let title = wide("Atom Vibe Coder by Lucerna Labs - Native PMRE");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WndClassW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -536,6 +536,10 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
         PROVIDER_CONNECTIONS_TAB => app.model.show_provider_connections(),
         DESIGN_UPLOAD_TAB => app.model.show_design_upload(),
         RUNTIME_SETTINGS_TAB => app.model.show_runtime_settings(),
+        WIKI_TAB => app.model.show_wiki(),
+        MCP_TAB => app.model.show_mcp(),
+        SKILLS_TAB => app.model.show_skills(),
+        HOOKS_TAB => app.model.show_hooks(),
         _ => {}
     }
 }
@@ -640,7 +644,7 @@ fn paint(hwnd: Hwnd) {
                     SRCCOPY,
                 );
                 let title = format!(
-                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {} {} {} {}]",
+                    "Atom Vibe Coder by Lucerna Labs - Native PMRE [{:.1}ms {} {} {} {} {} {}]",
                     ms,
                     app.model.status().as_str(),
                     app.model.provider_title_state(),

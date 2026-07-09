@@ -3,7 +3,7 @@ name = "math-atoms-native"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Native PMRE shell for Math Atoms Coder."
+description = "Native PMRE shell for Atom Vibe Coder."
 
 [dependencies]
 math-atoms-core = { path = "../math-atoms-core" }

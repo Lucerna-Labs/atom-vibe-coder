@@ -274,7 +274,7 @@ impl ProviderConfig {
             context.push('\n');
         }
         let prompt = format!(
-            "Mission: build the requested app through Math Atoms Coder using the selected recipe and current graph evidence.\nSelected recipe: {selected_recipe}\nIntent: {intent}\nGraph evidence:\n{context}\nReturn a concise implementation or proof action for that request. Reject unsupported paths."
+            "Mission: build the requested app through Atom Vibe Coder using the selected recipe and current graph evidence.\nSelected recipe: {selected_recipe}\nIntent: {intent}\nGraph evidence:\n{context}\nReturn a concise implementation or proof action for that request. Reject unsupported paths."
         );
         Ok(PreparedProviderCall {
             endpoint: self.endpoint.clone(),

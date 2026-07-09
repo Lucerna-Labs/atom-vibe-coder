@@ -68,7 +68,7 @@ if ($MaxAttempts -lt 1) {
 function New-AppIntent($Spec, [string]$FailureEvidence) {
     $requirements = ($Spec.Requirements | ForEach-Object { "- $_" }) -join "`n"
     $intent = @"
-provider model build a complete tiny dependency-free Rust console app through Math Atoms Coder.
+provider model build a complete tiny dependency-free Rust console app through Atom Vibe Coder.
 Return exactly one fenced rust code block and no prose.
 The generated source must be one file, Rust standard library only, deterministic, and compile with:
 rustc --edition=2021 -D warnings
