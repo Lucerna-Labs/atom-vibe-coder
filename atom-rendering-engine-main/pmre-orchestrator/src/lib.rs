@@ -34,7 +34,7 @@ use pmre_kit::{
     layout::{self, LaidBox, Painted},
     paint::{Bounds, Paint, Rgba, Shape},
     post, raster, text,
-    ux::{Role, UxNode},
+    ux::{Align, Dim, Edges, Justify, Role, Shadow, Span, Style, UxNode},
     DrawCmd,
 };
 
@@ -340,6 +340,165 @@ fn tiled_strategy() -> Strategy {
 // Interactive UI: state, events, stateful render
 // ----------------------------------------------------------------------------
 
+pub const DESIGN_TAB_ID: u32 = 3_900_000_000;
+pub const DESIGN_HUE_SLIDER: u32 = 3_900_000_001;
+pub const DESIGN_SAT_SLIDER: u32 = 3_900_000_002;
+pub const DESIGN_LIGHT_SLIDER: u32 = 3_900_000_003;
+pub const DESIGN_TEXT_SLIDER: u32 = 3_900_000_004;
+pub const DESIGN_RADIUS_SLIDER: u32 = 3_900_000_005;
+pub const DESIGN_GLASS_SLIDER: u32 = 3_900_000_006;
+pub const DESIGN_ANIMATION_SLIDER: u32 = 3_900_000_007;
+pub const DESIGN_TYPOGRAPHY_SELECT: u32 = 3_900_000_008;
+pub const DESIGN_SHAPE_SELECT: u32 = 3_900_000_009;
+pub const DESIGN_PANEL_SCROLL: u32 = 3_900_000_010;
+pub const DESIGN_MIC_ON_BUTTON: u32 = 3_900_000_011;
+pub const DESIGN_MIC_OFF_BUTTON: u32 = 3_900_000_012;
+pub const DESIGN_MUTE_TOGGLE: u32 = 3_900_000_013;
+pub const DESIGN_RECORD_TOGGLE: u32 = 3_900_000_014;
+
+const TYPOGRAPHY_OPTIONS: [&str; 8] = [
+    "Clean",
+    "Display",
+    "Code",
+    "Editorial",
+    "Dense",
+    "Rounded",
+    "Readable",
+    "Poster",
+];
+const SHAPE_OPTIONS: [&str; 6] = ["Soft", "Square", "Round", "Pill", "Circle", "Sharp"];
+
+#[derive(Clone, Copy)]
+struct DesignTokens {
+    hue: f32,
+    sat: f32,
+    light: f32,
+    text: f32,
+    radius: f32,
+    glass: f32,
+    animation: f32,
+    phase: f32,
+    typography: usize,
+    shape: usize,
+    accent: Rgba,
+    accent_2: Rgba,
+    ink: Rgba,
+    panel: Rgba,
+}
+
+impl DesignTokens {
+    fn from_state(state: &UiState) -> Self {
+        let hue = state.slider_value(DESIGN_HUE_SLIDER, 0.52);
+        let sat = state.slider_value(DESIGN_SAT_SLIDER, 0.62);
+        let light = state.slider_value(DESIGN_LIGHT_SLIDER, 0.48);
+        let text = state.slider_value(DESIGN_TEXT_SLIDER, 0.50);
+        let radius = state.slider_value(DESIGN_RADIUS_SLIDER, 0.38);
+        let glass = state.slider_value(DESIGN_GLASS_SLIDER, 0.20);
+        let animation = state.slider_value(DESIGN_ANIMATION_SLIDER, 0.30);
+        let typography = state.select_index(DESIGN_TYPOGRAPHY_SELECT) % TYPOGRAPHY_OPTIONS.len();
+        let shape = state.select_index(DESIGN_SHAPE_SELECT) % SHAPE_OPTIONS.len();
+        let accent = hsl_to_rgb(hue, 0.35 + sat * 0.55, 0.26 + light * 0.50);
+        let accent_2 = hsl_to_rgb((hue + 0.34) % 1.0, 0.42 + sat * 0.50, 0.30 + light * 0.45);
+        let ink = if light > 0.58 {
+            Rgba::rgb8(15, 22, 22)
+        } else {
+            Rgba::rgb8(246, 250, 248)
+        };
+        let panel = if light > 0.58 {
+            Rgba::new(0.98, 0.99, 0.97, 1.0)
+        } else {
+            Rgba::new(0.08, 0.10, 0.11, 1.0)
+        };
+        Self {
+            hue,
+            sat,
+            light,
+            text,
+            radius,
+            glass,
+            animation,
+            phase: state.animation_time,
+            typography,
+            shape,
+            accent,
+            accent_2,
+            ink,
+            panel,
+        }
+    }
+
+    fn text_factor(self, size: f32) -> f32 {
+        let slider = 0.82 + self.text * 0.44;
+        let family = match TYPOGRAPHY_OPTIONS[self.typography] {
+            "Display" => {
+                if size >= 18.0 {
+                    1.12
+                } else {
+                    0.98
+                }
+            }
+            "Code" => 0.94,
+            "Editorial" => 1.06,
+            "Dense" => 0.88,
+            "Rounded" => 1.02,
+            "Readable" => 1.10,
+            "Poster" => {
+                if size >= 20.0 {
+                    1.20
+                } else {
+                    0.96
+                }
+            }
+            _ => 1.0,
+        };
+        (slider * family).clamp(0.75, 1.45)
+    }
+
+    fn radius_for(self, base: f32, role: Role, height_hint: f32) -> f32 {
+        let range = 2.0 + self.radius * 26.0;
+        let shaped = match SHAPE_OPTIONS[self.shape] {
+            "Square" => 0.0,
+            "Round" => range * 1.2,
+            "Pill" => 999.0,
+            "Circle" => height_hint.max(range),
+            "Sharp" => 2.0,
+            _ => base.max(range * 0.55),
+        };
+        if matches!(
+            role,
+            Role::Button | Role::Toggle | Role::Input | Role::Slider | Role::Select
+        ) {
+            shaped.max(2.0)
+        } else {
+            base.max(range * 0.35)
+        }
+    }
+
+    fn surface(self, src: Rgba, role: Role) -> Rgba {
+        let pulse = if self.animation > 0.01 {
+            ((self.phase * std::f32::consts::TAU).sin() * 0.5 + 0.5) * self.animation
+        } else {
+            0.0
+        };
+        let accent_mix = if matches!(role, Role::Button | Role::Toggle | Role::Select) {
+            0.26 + pulse * 0.12
+        } else if src.r + src.g + src.b > 2.15 {
+            0.08 + self.glass * 0.12
+        } else {
+            0.14 + self.glass * 0.10
+        };
+        let mut out = mix_rgba(src, self.accent, accent_mix.clamp(0.0, 0.45));
+        if self.glass > 0.0 {
+            out.a = (1.0 - self.glass * 0.36).clamp(0.60, 1.0);
+        }
+        out
+    }
+
+    fn border(self, src: Rgba) -> Rgba {
+        mix_rgba(src, self.accent_2, 0.34 + self.glass * 0.22).with_alpha(0.76)
+    }
+}
+
 /// All UI interaction state. The app's `build(&UiState) -> UxNode` reads this to style
 /// widgets (hover/press/toggle) so the tree always reflects current state.
 ///
@@ -356,8 +515,14 @@ pub struct UiState {
     pub clicked: Option<u32>,
     pub toggles: HashMap<u32, bool>,
     pub scrolls: HashMap<u32, f32>,
+    /// Normalized slider values per slider id.
+    pub sliders: HashMap<u32, f32>,
+    /// Selected option index per select id.
+    pub selects: HashMap<u32, usize>,
     /// Scroll region whose scrollbar thumb is currently being dragged.
     pub drag: Option<u32>,
+    /// Slider whose track is currently being dragged.
+    pub slider_drag: Option<u32>,
     /// Pointer offset from the thumb's top edge at grab time, so the thumb doesn't
     /// jump to center itself under the cursor.
     pub drag_grab: f32,
@@ -367,6 +532,8 @@ pub struct UiState {
     pub inputs: HashMap<u32, String>,
     /// Input field that received Enter since it was last polled.
     pub submit: Option<u32>,
+    /// Monotonic animation clock in seconds for renderer-owned visual effects.
+    pub animation_time: f32,
 }
 
 impl Default for UiState {
@@ -380,11 +547,15 @@ impl Default for UiState {
             clicked: None,
             toggles: HashMap::new(),
             scrolls: HashMap::new(),
+            sliders: HashMap::new(),
+            selects: HashMap::new(),
             drag: None,
+            slider_drag: None,
             drag_grab: 0.0,
             focused: None,
             inputs: HashMap::new(),
             submit: None,
+            animation_time: 0.0,
         }
     }
 }
@@ -408,6 +579,22 @@ impl UiState {
     }
     pub fn scroll_of(&self, id: u32) -> f32 {
         self.scrolls.get(&id).copied().unwrap_or(0.0)
+    }
+    pub fn slider_value(&self, id: u32, default: f32) -> f32 {
+        self.sliders
+            .get(&id)
+            .copied()
+            .unwrap_or(default)
+            .clamp(0.0, 1.0)
+    }
+    pub fn set_slider(&mut self, id: u32, value: f32) {
+        self.sliders.insert(id, value.clamp(0.0, 1.0));
+    }
+    pub fn select_index(&self, id: u32) -> usize {
+        self.selects.get(&id).copied().unwrap_or(0)
+    }
+    pub fn set_select_index(&mut self, id: u32, index: usize) {
+        self.selects.insert(id, index);
     }
     /// True exactly once for the widget clicked on the most recent PointerUp.
     pub fn take_click(&mut self) -> Option<u32> {
@@ -442,12 +629,423 @@ pub enum UiEvent {
     Backspace,
     /// Enter pressed; marks the focused input as submitted.
     Enter,
+    /// Advance renderer-owned animation time by this many seconds.
+    Tick(f32),
+}
+
+fn with_design_customizer(root: UxNode, state: &UiState) -> UxNode {
+    let tokens = DesignTokens::from_state(state);
+    let open = state.toggle_on(DESIGN_TAB_ID);
+    let mut children = vec![
+        UxNode::boxed(
+            Style::col().w(Dim::Flex(1.0)).h(Dim::Flex(1.0)),
+            vec![apply_design(root, &tokens)],
+        ),
+        design_rail(open, tokens),
+    ];
+    if open {
+        children.push(design_panel(state, tokens));
+    }
+    UxNode::boxed(
+        Style::row().w(Dim::Flex(1.0)).h(Dim::Flex(1.0)).gap(8.0),
+        children,
+    )
+}
+
+fn apply_design(node: UxNode, tokens: &DesignTokens) -> UxNode {
+    match node {
+        UxNode::Box {
+            mut style,
+            children,
+        } => {
+            style = themed_style(style, *tokens);
+            UxNode::boxed(
+                style,
+                children
+                    .into_iter()
+                    .map(|child| apply_design(child, tokens))
+                    .collect(),
+            )
+        }
+        UxNode::Text {
+            content,
+            size,
+            color,
+        } => UxNode::Text {
+            content,
+            size: (size * tokens.text_factor(size)).clamp(7.0, 72.0),
+            color: themed_text_color(color, *tokens),
+        },
+        UxNode::Rich { spans, align } => UxNode::Rich {
+            spans: spans
+                .into_iter()
+                .map(|span| themed_span(span, *tokens))
+                .collect(),
+            align,
+        },
+    }
+}
+
+fn themed_style(mut style: Style, tokens: DesignTokens) -> Style {
+    let height_hint = match style.height {
+        Dim::Px(v) => v,
+        _ => 38.0,
+    };
+    if let Some(bg) = style.background {
+        style.background = Some(tokens.surface(bg, style.role));
+        style.radius = tokens.radius_for(style.radius, style.role, height_hint);
+        style.border = match style.border {
+            Some((w, c)) => Some((w.max(1.0), tokens.border(c))),
+            None if tokens.glass > 0.05 => Some((1.0, tokens.border(tokens.accent))),
+            None => None,
+        };
+        if style.shadow.is_some()
+            || tokens.glass > 0.15
+            || matches!(style.role, Role::Button | Role::Toggle | Role::Select)
+        {
+            style.shadow = Some(Shadow {
+                dx: 0.0,
+                dy: 4.0 + tokens.glass * 8.0,
+                blur: 10.0 + tokens.glass * 18.0,
+                color: Rgba::new(0.0, 0.0, 0.0, 0.10 + tokens.glass * 0.20),
+            });
+        }
+    } else if matches!(
+        style.role,
+        Role::Button | Role::Toggle | Role::Input | Role::Slider | Role::Select
+    ) {
+        style.radius = tokens.radius_for(style.radius, style.role, height_hint);
+    }
+    style
+}
+
+fn themed_text_color(color: Rgba, tokens: DesignTokens) -> Rgba {
+    let readable = if tokens.light > 0.58 {
+        Rgba::rgb8(20, 28, 28)
+    } else {
+        Rgba::rgb8(238, 244, 244)
+    };
+    mix_rgba(color, readable, 0.18)
+}
+
+fn themed_span(mut span: Span, tokens: DesignTokens) -> Span {
+    span.size = (span.size * tokens.text_factor(span.size)).clamp(7.0, 72.0);
+    span.color = themed_text_color(span.color, tokens);
+    if matches!(TYPOGRAPHY_OPTIONS[tokens.typography], "Display" | "Poster") {
+        span.bold = true;
+    }
+    span
+}
+
+fn design_rail(open: bool, tokens: DesignTokens) -> UxNode {
+    UxNode::boxed(
+        Style::col()
+            .w(Dim::Px(78.0))
+            .h(Dim::Flex(1.0))
+            .gap(8.0)
+            .pad(Edges::xy(8.0, 10.0))
+            .radius(14.0)
+            .bg(tokens.panel.with_alpha(0.94))
+            .border(1.0, tokens.border(tokens.accent)),
+        vec![
+            UxNode::boxed(
+                Style::row()
+                    .toggle(DESIGN_TAB_ID)
+                    .h(Dim::Px(42.0))
+                    .align(Align::Center)
+                    .justify(Justify::Center)
+                    .radius(if open { 16.0 } else { 10.0 })
+                    .bg(if open { tokens.accent } else { tokens.panel })
+                    .border(1.0, tokens.border(tokens.accent)),
+                vec![UxNode::text(
+                    "Design",
+                    12.0,
+                    if open {
+                        Rgba::rgb8(255, 255, 255)
+                    } else {
+                        tokens.ink
+                    },
+                )],
+            ),
+            palette_strip(tokens),
+        ],
+    )
+}
+
+fn palette_strip(tokens: DesignTokens) -> UxNode {
+    UxNode::boxed(
+        Style::col().gap(5.0),
+        (0..6)
+            .map(|i| {
+                let hue = (tokens.hue + i as f32 / 6.0) % 1.0;
+                UxNode::boxed(
+                    Style::row()
+                        .h(Dim::Px(18.0))
+                        .radius(9.0)
+                        .bg(hsl_to_rgb(
+                            hue,
+                            0.45 + tokens.sat * 0.45,
+                            0.35 + tokens.light * 0.38,
+                        ))
+                        .border(1.0, tokens.border(tokens.accent)),
+                    vec![],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn design_panel(state: &UiState, tokens: DesignTokens) -> UxNode {
+    UxNode::boxed(
+        Style::col()
+            .scroll(DESIGN_PANEL_SCROLL)
+            .w(Dim::Px(326.0))
+            .h(Dim::Flex(1.0))
+            .gap(12.0)
+            .pad(Edges::all(14.0))
+            .radius(14.0)
+            .bg(tokens.panel.with_alpha(0.94))
+            .border(1.0, tokens.border(tokens.accent))
+            .shadow(0.0, 8.0, 22.0, Rgba::new(0.0, 0.0, 0.0, 0.18)),
+        vec![
+            UxNode::text("Renderer Customizer", 18.0, tokens.ink),
+            UxNode::text(
+                "Dependency-free style controls for generated PMRE apps.",
+                11.0,
+                tokens.ink,
+            ),
+            slider_control("Hue", DESIGN_HUE_SLIDER, tokens.hue, tokens),
+            slider_control("Saturation", DESIGN_SAT_SLIDER, tokens.sat, tokens),
+            slider_control("Light", DESIGN_LIGHT_SLIDER, tokens.light, tokens),
+            slider_control("Text", DESIGN_TEXT_SLIDER, tokens.text, tokens),
+            slider_control("Radius", DESIGN_RADIUS_SLIDER, tokens.radius, tokens),
+            slider_control("Glass", DESIGN_GLASS_SLIDER, tokens.glass, tokens),
+            slider_control(
+                "Animation",
+                DESIGN_ANIMATION_SLIDER,
+                tokens.animation,
+                tokens,
+            ),
+            select_control(
+                "Typography",
+                DESIGN_TYPOGRAPHY_SELECT,
+                state.select_index(DESIGN_TYPOGRAPHY_SELECT),
+                &TYPOGRAPHY_OPTIONS,
+                tokens,
+            ),
+            select_control(
+                "Control shape",
+                DESIGN_SHAPE_SELECT,
+                state.select_index(DESIGN_SHAPE_SELECT),
+                &SHAPE_OPTIONS,
+                tokens,
+            ),
+            UxNode::text("Palette", 12.0, tokens.ink),
+            palette_grid(tokens),
+            UxNode::text("Buttons and toggles", 12.0, tokens.ink),
+            preview_controls(state, tokens),
+        ],
+    )
+}
+
+fn slider_control(label: &str, id: u32, value: f32, tokens: DesignTokens) -> UxNode {
+    let pct = value.clamp(0.0, 1.0);
+    UxNode::boxed(
+        Style::col().gap(5.0),
+        vec![
+            UxNode::boxed(
+                Style::row().justify(Justify::SpaceBetween),
+                vec![
+                    UxNode::text(label, 11.0, tokens.ink),
+                    UxNode::text(
+                        format!("{}%", (pct * 100.0).round() as u32),
+                        11.0,
+                        tokens.ink,
+                    ),
+                ],
+            ),
+            UxNode::boxed(
+                Style::row()
+                    .slider(id)
+                    .h(Dim::Px(20.0))
+                    .pad(Edges::all(3.0))
+                    .radius(999.0)
+                    .bg(mix_rgba(tokens.panel, tokens.accent, 0.10))
+                    .border(1.0, tokens.border(tokens.accent)),
+                vec![UxNode::boxed(
+                    Style::row()
+                        .w(Dim::Pct((pct * 100.0).max(1.0)))
+                        .h(Dim::Flex(1.0))
+                        .radius(999.0)
+                        .bg(mix_rgba(tokens.accent, tokens.accent_2, pct * 0.45)),
+                    vec![],
+                )],
+            ),
+        ],
+    )
+}
+
+fn select_control(
+    label: &str,
+    id: u32,
+    index: usize,
+    options: &[&str],
+    tokens: DesignTokens,
+) -> UxNode {
+    let value = options[index % options.len()];
+    UxNode::boxed(
+        Style::row()
+            .select(id)
+            .h(Dim::Px(36.0))
+            .align(Align::Center)
+            .justify(Justify::SpaceBetween)
+            .pad(Edges::xy(10.0, 0.0))
+            .radius(10.0)
+            .bg(mix_rgba(tokens.panel, tokens.accent, 0.10))
+            .border(1.0, tokens.border(tokens.accent)),
+        vec![
+            UxNode::text(format!("{label}: {value}"), 12.0, tokens.ink),
+            UxNode::text("v", 12.0, tokens.accent),
+        ],
+    )
+}
+
+fn palette_grid(tokens: DesignTokens) -> UxNode {
+    UxNode::boxed(
+        Style::col().gap(6.0),
+        (0..4)
+            .map(|row| {
+                UxNode::boxed(
+                    Style::row().gap(6.0).h(Dim::Px(28.0)),
+                    (0..6)
+                        .map(|col| {
+                            let i = row * 6 + col;
+                            let hue = (tokens.hue + i as f32 / 24.0) % 1.0;
+                            let sat =
+                                (0.35 + tokens.sat * 0.60 - row as f32 * 0.04).clamp(0.2, 1.0);
+                            let light =
+                                (0.30 + tokens.light * 0.45 + col as f32 * 0.025).clamp(0.18, 0.82);
+                            UxNode::boxed(
+                                Style::row()
+                                    .w(Dim::Flex(1.0))
+                                    .h(Dim::Flex(1.0))
+                                    .radius(tokens.radius_for(6.0, Role::None, 28.0))
+                                    .bg(hsl_to_rgb(hue, sat, light))
+                                    .border(1.0, tokens.border(tokens.accent)),
+                                vec![],
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn preview_controls(state: &UiState, tokens: DesignTokens) -> UxNode {
+    UxNode::boxed(
+        Style::col().gap(8.0),
+        vec![
+            UxNode::boxed(
+                Style::row().gap(8.0).h(Dim::Px(38.0)),
+                vec![
+                    preview_button(DESIGN_MIC_ON_BUTTON, "MIC ON", false, state, tokens),
+                    preview_button(DESIGN_MIC_OFF_BUTTON, "MIC OFF", false, state, tokens),
+                ],
+            ),
+            UxNode::boxed(
+                Style::row().gap(8.0).h(Dim::Px(38.0)),
+                vec![
+                    preview_button(DESIGN_MUTE_TOGGLE, "MUTE", true, state, tokens),
+                    preview_button(DESIGN_RECORD_TOGGLE, "REC", true, state, tokens),
+                ],
+            ),
+        ],
+    )
+}
+
+fn preview_button(
+    id: u32,
+    label: &str,
+    toggle: bool,
+    state: &UiState,
+    tokens: DesignTokens,
+) -> UxNode {
+    let on = toggle && state.toggle_on(id);
+    let active = state.is_hover(id) || state.is_pressed(id) || on;
+    let style = Style::row()
+        .w(Dim::Flex(1.0))
+        .h(Dim::Flex(1.0))
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .radius(tokens.radius_for(10.0, Role::Button, 38.0))
+        .bg(if active {
+            mix_rgba(tokens.accent, tokens.accent_2, 0.34)
+        } else {
+            mix_rgba(tokens.panel, tokens.accent, 0.16)
+        })
+        .border(1.0, tokens.border(tokens.accent));
+    let style = if toggle {
+        style.toggle(id)
+    } else {
+        style.button(id)
+    };
+    UxNode::boxed(style, vec![UxNode::text(label, 12.0, tokens.ink)])
+}
+
+fn select_cycle_len(id: u32) -> usize {
+    match id {
+        DESIGN_TYPOGRAPHY_SELECT => TYPOGRAPHY_OPTIONS.len(),
+        DESIGN_SHAPE_SELECT => SHAPE_OPTIONS.len(),
+        _ => 0,
+    }
+}
+
+fn update_slider_from_x(state: &mut UiState, boxes: &[LaidBox], id: u32, x: f32) {
+    if let Some(b) = boxes.iter().find(|b| b.id == Some(id)) {
+        let w = (b.rect.max.x - b.rect.min.x).max(1.0);
+        state.set_slider(id, (x - b.rect.min.x) / w);
+    }
+}
+
+fn mix_rgba(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba::new(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a + (b.a - a.a) * t,
+    )
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Rgba {
+    let h = h.rem_euclid(1.0);
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h * 6.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = if hp < 1.0 {
+        (c, x, 0.0)
+    } else if hp < 2.0 {
+        (x, c, 0.0)
+    } else if hp < 3.0 {
+        (0.0, c, x)
+    } else if hp < 4.0 {
+        (0.0, x, c)
+    } else if hp < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let m = l - c * 0.5;
+    Rgba::new(r1 + m, g1 + m, b1 + m, 1.0)
 }
 
 /// Solve layout in **logical** units (physical size divided by the DPI scale).
 fn solve_for(build: &dyn Fn(&UiState) -> UxNode, state: &UiState) -> Vec<LaidBox> {
     let s = state.scale.max(0.1);
-    let tree = build(state);
+    let tree = with_design_customizer(build(state), state);
     let vp = Bounds {
         min: Vec2::new(0.0, 0.0),
         max: Vec2::new(state.width as f32 / s, state.height as f32 / s),
@@ -541,6 +1139,11 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
             state.height = h;
         }
         UiEvent::PointerMove(x, y) => {
+            if let Some(id) = state.slider_drag {
+                let boxes = solve_for(build, state);
+                update_slider_from_x(state, &boxes, id, x);
+                return;
+            }
             if let Some(id) = state.drag {
                 let boxes = solve_for(build, state);
                 if let Some(b) = boxes.iter().find(|b| b.id == Some(id)) {
@@ -560,6 +1163,7 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
         UiEvent::PointerDown(x, y) => {
             let boxes = solve_for(build, state);
             state.drag = None;
+            state.slider_drag = None;
             for b in &boxes {
                 let Some(id) = b.id else { continue };
                 if let Some((bar_x, _tt, _th, thumb_y, thumb_h, _max)) =
@@ -581,6 +1185,10 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
                 Some((id, Role::Input)) => Some(id),
                 _ => None,
             };
+            if let Some((id, Role::Slider)) = hit {
+                state.slider_drag = Some(id);
+                update_slider_from_x(state, &boxes, id, x);
+            }
             if state.drag.is_some() {
                 state.pressed = None;
             } else {
@@ -593,6 +1201,12 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
                 state.pressed = None;
                 return;
             }
+            if state.slider_drag.is_some() {
+                state.slider_drag = None;
+                state.pressed = None;
+                state.clicked = None;
+                return;
+            }
             let boxes = solve_for(build, state);
             state.clicked = None;
             if let (Some((up_id, role)), Some(pressed)) =
@@ -603,6 +1217,12 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
                     if role == Role::Toggle {
                         let now = state.toggle_on(up_id);
                         state.toggles.insert(up_id, !now);
+                    } else if role == Role::Select {
+                        let len = select_cycle_len(up_id);
+                        if len > 0 {
+                            let next = (state.select_index(up_id) + 1) % len;
+                            state.set_select_index(up_id, next);
+                        }
                     }
                 }
             }
@@ -639,6 +1259,9 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
         }
         UiEvent::Enter => {
             state.submit = state.focused;
+        }
+        UiEvent::Tick(dt) => {
+            state.animation_time = (state.animation_time + dt.max(0.0)).rem_euclid(3600.0);
         }
     }
 }
@@ -761,5 +1384,83 @@ mod banded_render_tests {
             maxd < 1e-6,
             "lane render diverged from serial at {worst:?}: max diff {maxd}"
         );
+    }
+
+    fn customizer_probe() -> UxNode {
+        UxNode::boxed(
+            Style::col()
+                .w(Dim::Flex(1.0))
+                .h(Dim::Flex(1.0))
+                .gap(10.0)
+                .pad(Edges::all(14.0))
+                .radius(8.0)
+                .bg(Rgba::rgb8(245, 247, 246)),
+            vec![
+                UxNode::text("Dashboard", 22.0, Rgba::rgb8(20, 28, 28)),
+                UxNode::boxed(
+                    Style::row()
+                        .button(42)
+                        .h(Dim::Px(40.0))
+                        .align(Align::Center)
+                        .justify(Justify::Center)
+                        .radius(7.0)
+                        .bg(Rgba::rgb8(0, 132, 142)),
+                    vec![UxNode::text("Run", 13.0, Rgba::rgb8(255, 255, 255))],
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn design_tab_is_auto_injected() {
+        let ui = UiState::new(920, 620);
+        let build = |_: &UiState| customizer_probe();
+        assert!(widget_rect(&build, &ui, DESIGN_TAB_ID).is_some());
+        assert!(widget_rect(&build, &ui, 42).is_some());
+        assert!(widget_rect(&build, &ui, DESIGN_HUE_SLIDER).is_none());
+    }
+
+    #[test]
+    fn design_panel_opens_and_slider_drag_updates_state() {
+        let mut ui = UiState::new(920, 620);
+        let build = |_: &UiState| customizer_probe();
+        let tab = widget_rect(&build, &ui, DESIGN_TAB_ID).unwrap();
+        let tx = (tab.min.x + tab.max.x) * 0.5;
+        let ty = (tab.min.y + tab.max.y) * 0.5;
+        handle_event(&mut ui, &build, UiEvent::PointerDown(tx, ty));
+        handle_event(&mut ui, &build, UiEvent::PointerUp(tx, ty));
+        assert!(ui.toggle_on(DESIGN_TAB_ID));
+
+        let slider = widget_rect(&build, &ui, DESIGN_HUE_SLIDER).unwrap();
+        let y = (slider.min.y + slider.max.y) * 0.5;
+        handle_event(&mut ui, &build, UiEvent::PointerDown(slider.min.x + 1.0, y));
+        handle_event(&mut ui, &build, UiEvent::PointerMove(slider.max.x - 2.0, y));
+        handle_event(&mut ui, &build, UiEvent::PointerUp(slider.max.x - 2.0, y));
+        assert!(ui.slider_value(DESIGN_HUE_SLIDER, 0.0) > 0.90);
+    }
+
+    #[test]
+    fn design_select_cycles_typography() {
+        let mut ui = UiState::new(920, 620);
+        ui.toggles.insert(DESIGN_TAB_ID, true);
+        let build = |_: &UiState| customizer_probe();
+        let select = widget_rect(&build, &ui, DESIGN_TYPOGRAPHY_SELECT).unwrap();
+        let x = (select.min.x + select.max.x) * 0.5;
+        let y = (select.min.y + select.max.y) * 0.5;
+        handle_event(&mut ui, &build, UiEvent::PointerDown(x, y));
+        handle_event(&mut ui, &build, UiEvent::PointerUp(x, y));
+        assert_eq!(ui.select_index(DESIGN_TYPOGRAPHY_SELECT), 1);
+    }
+
+    #[test]
+    fn render_ui_includes_customizer_pixels() {
+        let mut ui = UiState::new(920, 620);
+        ui.toggles.insert(DESIGN_TAB_ID, true);
+        let build = |_: &UiState| customizer_probe();
+        let fb = render_ui(&build, &ui, Rgba::rgb8(8, 8, 10));
+        assert!(fb
+            .pixels()
+            .iter()
+            .any(|p| p.r > 0.10 || p.g > 0.10 || p.b > 0.10));
     }
 }

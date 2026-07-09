@@ -17,6 +17,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
+- The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
 
 ## Product Mission
 
@@ -62,6 +63,8 @@ $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{promp
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
 
 The native Settings tab also exposes `Design Upload` with HTML and CSS path inputs. `Build Design` runs the PMRE design-upload gate, compiles the uploaded design into a native renderer app, and refreshes the side artifact window.
+
+Every generated interactive PMRE app also gets the renderer-owned `Design` rail without app-specific wiring. Open it to tune colors, text scale, typography preset, rounded/square/pill/circle control shape, glass intensity, animation intensity, and preview controls such as mic, mute, and record buttons. The controls are native PMRE widgets, not browser/Electron/Tauri widgets.
 
 Run a real DeepSeek Flash model test that asks the provider to generate a dependency-free Rust toy app, compiles it with `rustc`, runs it, and verifies output:
 

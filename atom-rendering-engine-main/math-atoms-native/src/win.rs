@@ -189,6 +189,7 @@ const SRCCOPY: u32 = 0x00CC_0020;
 const IDC_ARROW: usize = 32512;
 const PROVIDER_TIMER_ID: usize = 77;
 const DESIGN_TIMER_ID: usize = 78;
+const ANIMATION_TIMER_ID: usize = 79;
 
 struct App {
     width: u32,
@@ -279,6 +280,7 @@ pub fn run() {
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE,
             );
         }
+        SetTimer(hwnd, ANIMATION_TIMER_ID, 33, std::ptr::null());
         InvalidateRect(hwnd, std::ptr::null(), 0);
         let mut msg: Msg = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
@@ -424,6 +426,9 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     KillTimer(hwnd, DESIGN_TIMER_ID);
                 }
                 InvalidateRect(hwnd, std::ptr::null(), 0);
+            } else if wp == ANIMATION_TIMER_ID {
+                dispatch(hwnd, UiEvent::Tick(1.0 / 30.0));
+                InvalidateRect(hwnd, std::ptr::null(), 0);
             }
             0
         }
@@ -458,13 +463,27 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
     APP.with(|cell| {
         if let Some(app) = cell.borrow_mut().as_mut() {
             let was_move = matches!(ev, UiEvent::PointerMove(..));
-            let before = (app.ui.hover, app.ui.pressed, app.ui.drag);
+            let was_tick = matches!(ev, UiEvent::Tick(..));
+            let before = (
+                app.ui.hover,
+                app.ui.pressed,
+                app.ui.drag,
+                app.ui.slider_drag,
+            );
             {
                 let build = |state: &UiState| ui::build(&app.model, state);
                 handle_event(&mut app.ui, &build, ev);
             }
-            let mut dirty = !was_move || before != (app.ui.hover, app.ui.pressed, app.ui.drag);
-            if app.ui.drag.is_some() {
+            let mut dirty = was_tick
+                || !was_move
+                || before
+                    != (
+                        app.ui.hover,
+                        app.ui.pressed,
+                        app.ui.drag,
+                        app.ui.slider_drag,
+                    );
+            if app.ui.drag.is_some() || app.ui.slider_drag.is_some() {
                 dirty = true;
             }
             if let Some(id) = app.ui.take_click() {

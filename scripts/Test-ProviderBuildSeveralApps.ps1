@@ -1,6 +1,6 @@
 param(
     [int]$AppsRequired = 3,
-    [int]$MaxAttempts = 3
+    [int]$MaxAttempts = 6
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +21,7 @@ if ($ProviderKind -match "deepseek" -and $ProviderModel -match "pro") {
     throw "Provider app-build gate is configured for a DeepSeek Pro model; expected Flash"
 }
 
-$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You generate small, dependency-free Rust programs. Return exactly one fenced rust code block and no prose. The code must compile with rustc --edition=2021 -D warnings and print the required exact line."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
+$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You generate small, dependency-free Rust programs. Return exactly one fenced rust code block and no prose. The code must compile with rustc --edition=2021 -D warnings and print the required exact line. If you define a field, method, import, variable, enum, or struct, the program must read or call it in executable logic."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
 
 $Specs = @(
     @{
@@ -50,7 +50,10 @@ $Specs = @(
         Expected = "MATH_ATOMS_APP_OK router health=200 atoms=3"
         Requirements = @(
             "route /health to status 200",
-            "route /atoms by returning a collection with exactly three atoms"
+            "define an Atom record with id: u32 and name: &'static str",
+            "route /atoms by returning a collection with exactly three atoms",
+            "compute the atom count through a RouterApp method that iterates the atoms and reads both Atom.id and Atom.name",
+            "do not compute the atom count with atoms.len() alone"
         )
     }
 )
@@ -71,6 +74,7 @@ The generated source must be one file, Rust standard library only, deterministic
 rustc --edition=2021 -D warnings
 Do not use external crates, files, network, stdin, timers, unsafe, or platform APIs.
 No compiler warnings are allowed: every field, method, import, variable, and struct must be used.
+Constructing a struct or deriving Debug is not enough to count as field usage; executable logic must read every field.
 Define a struct named $($Spec.Struct).
 fn main must print exactly:
 $($Spec.Expected)

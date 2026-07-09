@@ -3,7 +3,7 @@
 //! HTML/CSS reduces onto this same vocabulary (a box tree + a property subset).
 //!
 //! Interaction is carried as data too: a box may declare an `id` and a `Role`
-//! (Button / Toggle / Scroll). The kit provides hit-testing and scroll/clip mechanism;
+//! (Button / Toggle / Scroll / Slider / Select). The kit provides hit-testing and scroll/clip mechanism;
 //! all widget *policy* (hover/press visuals, toggle flips, scroll offsets) lives in the
 //! orchestrator and the app's state-driven `build` function.
 
@@ -52,6 +52,8 @@ pub enum Role {
     Toggle,
     Scroll,
     Input,
+    Slider,
+    Select,
 }
 
 /// Per-side lengths (padding / border insets).
@@ -210,6 +212,12 @@ impl Style {
     }
     pub fn input(self, id: u32) -> Self {
         self.interactive(id, Role::Input)
+    }
+    pub fn slider(self, id: u32) -> Self {
+        self.interactive(id, Role::Slider)
+    }
+    pub fn select(self, id: u32) -> Self {
+        self.interactive(id, Role::Select)
     }
 }
 
