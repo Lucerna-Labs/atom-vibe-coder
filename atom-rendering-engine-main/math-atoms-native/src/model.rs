@@ -39,7 +39,7 @@ pub const DESIGN_CSS_PATH_INPUT: u32 = 28;
 pub const BUILD_DESIGN_UPLOAD: u32 = 29;
 
 pub fn default_intent() -> &'static str {
-    "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
+    "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and production app readiness."
 }
 
 #[derive(Clone, Debug)]

@@ -1,15 +1,15 @@
 window.MATH_ATOMS_DATA = {
   defaultIntent: "Build a tiny local app with an atom renderer, a self-correcting proof loop, a recipe-first store, and a live artifact pane.",
   operatorMission: {
-    title: "Ornith 1.0 Parity",
-    body: "Meet or exceed Ornith 1.0 with native atom rendering, Spiderweb Bus routing, wiki graph RAG, provider execution, and proof capture.",
+    title: "Production App Build",
+    body: "Build the requested app with native atom rendering, Spiderweb Bus routing, wiki graph RAG, provider execution when required, and proof capture.",
     recipes: [
       { key: "NATIVE", size: 1, gate: "passing" },
       { key: "BUS", size: 2, gate: "passing" },
       { key: "RAG", size: 3, gate: "passing" },
       { key: "API", size: 4, gate: "blocked" },
       { key: "PROOF", size: 5, gate: "passing" },
-      { key: "O1", size: 6, gate: "pending" }
+      { key: "APP", size: 6, gate: "pending" }
     ]
   },
   atoms: [
@@ -206,12 +206,12 @@ window.MATH_ATOMS_DATA = {
       bonds: 4
     },
     {
-      id: "ornith-parity-runtime",
-      name: "Ornith 1.0 Parity Runtime",
+      id: "production-app-runtime",
+      name: "Production App Runtime",
       level: "L3",
       status: "draft",
       kind: "bench",
-      summary: "Select the smallest gate-passing native recipe that meets or exceeds Ornith 1.0 function.",
+      summary: "Select the smallest gate-passing native recipe that matches the requested app behavior.",
       atoms: ["scan", "compare", "scale", "preserve", "measure", "order"],
       bonds: 5
     }

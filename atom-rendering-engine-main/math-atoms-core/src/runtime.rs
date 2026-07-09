@@ -212,16 +212,16 @@ impl MathAtomsRuntime {
 
         if !evidence
             .iter()
-            .any(|item| item.node_id == "mission:ornith-parity")
+            .any(|item| item.node_id == "mission:production-app-build")
         {
-            blockers.push("Ornith parity evidence was not retrieved".to_string());
+            blockers.push("Production app mission evidence was not retrieved".to_string());
         }
         if !self
             .graph
-            .has_relationship_path(recipe.id, "mission:ornith-parity", 6)
+            .has_relationship_path(recipe.id, "mission:production-app-build", 6)
         {
             blockers.push(format!(
-                "{} is not graph-linked to the Ornith parity mission",
+                "{} is not graph-linked to the production app mission",
                 recipe.id
             ));
         }
@@ -258,13 +258,13 @@ impl MathAtomsRuntime {
             format!(
                 "{} selected for {}; provider execution required before proof can pass",
                 recipe.name,
-                mission().parity_floor
+                mission().readiness_floor
             )
         } else {
             format!(
                 "{} selected for {} with {} evidence nodes",
                 recipe.name,
-                mission().parity_floor,
+                mission().readiness_floor,
                 evidence.len()
             )
         };
@@ -682,10 +682,10 @@ mod tests {
     }
 
     #[test]
-    fn ornith_is_the_product_mission() {
+    fn production_app_build_is_the_product_mission() {
         let m = mission();
-        assert!(m.body.contains("Ornith 1.0"));
-        assert_eq!(m.parity_floor, "Ornith 1.0");
+        assert!(m.body.contains("requested app"));
+        assert_eq!(m.readiness_floor, "requested app behavior");
     }
 
     #[test]

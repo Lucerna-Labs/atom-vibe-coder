@@ -508,7 +508,7 @@ mod tests {
             "wiki-graph",
             "atoms",
         );
-        let evidence = vec!["mission:ornith-parity".to_string()];
+        let evidence = vec!["mission:production-app-build".to_string()];
         let l2 = bus.l2_flow(
             l1,
             BusMessageKind::EvidenceRetrieved,

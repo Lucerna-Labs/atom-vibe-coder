@@ -55,7 +55,7 @@ pub struct Gate {
 pub struct Mission {
     pub title: &'static str,
     pub body: &'static str,
-    pub parity_floor: &'static str,
+    pub readiness_floor: &'static str,
 }
 
 const ATOMS: &[Atom] = &[
@@ -301,12 +301,12 @@ const RECIPES: &[Recipe] = &[
         requires_provider: true,
     },
     Recipe {
-        id: "ornith-parity-runtime",
-        name: "Ornith 1.0 Parity Runtime",
+        id: "production-app-runtime",
+        name: "Production App Runtime",
         level: "L3",
         status: RecipeStatus::Proven,
         kind: "product",
-        summary: "Select the smallest gate-passing native recipe that meets or exceeds Ornith 1.0 function.",
+        summary: "Select the smallest gate-passing native recipe that matches the requested app behavior.",
         atoms: &["scan", "compare", "compose", "measure", "preserve", "order"],
         bonds: 5,
         requires_provider: true,
@@ -335,16 +335,16 @@ const GATES: &[Gate] = &[
         layer: "L3",
     },
     Gate {
-        title: "Ornith parity",
-        body: "The app must meet or exceed Ornith 1.0 capability for the shared function.",
+        title: "App fit",
+        body: "The selected route must match the requested app behavior instead of an unrelated benchmark.",
         layer: "L3",
     },
 ];
 
 const MISSION: Mission = Mission {
-    title: "Ornith 1.0 Parity",
-    body: "Build a native atom-rendered coding workbench that routes intent through Spiderweb Bus, graph evidence, provider calls, and proof artifacts until it meets or exceeds Ornith 1.0 function.",
-    parity_floor: "Ornith 1.0",
+    title: "Production App Build",
+    body: "Build the requested app through native atom rendering, Spiderweb Bus routing, graph evidence, provider calls when required, and proof artifacts that match the actual user request.",
+    readiness_floor: "requested app behavior",
 };
 
 pub fn atoms() -> &'static [Atom] {

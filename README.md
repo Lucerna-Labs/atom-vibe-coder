@@ -18,9 +18,9 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 
-## Operator Mission
+## Product Mission
 
-The product lane must meet or exceed Ornith 1.0 by selecting the smallest gate-passing native recipe from current Spiderweb Bus, wiki graph, provider, and proof evidence.
+The product lane must select the smallest gate-passing native recipe from current Spiderweb Bus, wiki graph, provider, and proof evidence that matches the actual app the user asked to build.
 
 ## Doctrine
 

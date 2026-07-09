@@ -274,7 +274,7 @@ impl ProviderConfig {
             context.push('\n');
         }
         let prompt = format!(
-            "Mission: meet or exceed Ornith 1.0 for Math Atoms Coder.\nSelected recipe: {selected_recipe}\nIntent: {intent}\nGraph evidence:\n{context}\nReturn a concise implementation or proof action. Reject unsupported paths."
+            "Mission: build the requested app through Math Atoms Coder using the selected recipe and current graph evidence.\nSelected recipe: {selected_recipe}\nIntent: {intent}\nGraph evidence:\n{context}\nReturn a concise implementation or proof action for that request. Reject unsupported paths."
         );
         Ok(PreparedProviderCall {
             endpoint: self.endpoint.clone(),
@@ -718,8 +718,8 @@ mod tests {
     fn prepared_body_uses_responses_shape_without_secret() {
         let config = ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "secret")]);
         let evidence = vec![Evidence {
-            node_id: "mission:ornith-parity".to_string(),
-            title: "Ornith 1.0 Parity".to_string(),
+            node_id: "mission:production-app-build".to_string(),
+            title: "Production App Build".to_string(),
             excerpt: "Mission evidence".to_string(),
             score: 100,
         }];

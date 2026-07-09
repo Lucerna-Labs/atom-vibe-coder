@@ -222,7 +222,7 @@ mod tests {
         ));
         let store = ProofStore::new(&path);
         let record = ProofRecord {
-            recipe_id: "ornith-parity-runtime".to_string(),
+            recipe_id: "production-app-runtime".to_string(),
             status: "proven".to_string(),
             atoms: vec!["flow".to_string(), "measure".to_string()],
             evidence_count: 3,
@@ -237,7 +237,7 @@ mod tests {
         store.append(&record).unwrap();
         let text = store.read_to_string().unwrap();
         fs::remove_file(&path).ok();
-        assert!(text.contains("\"recipe_id\":\"ornith-parity-runtime\""));
+        assert!(text.contains("\"recipe_id\":\"production-app-runtime\""));
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
         assert!(text.contains("\"provider_model\":\"gpt-test\""));
         assert!(text.contains("\"provider_output_hash\":\"fnv:0123456789abcdef\""));

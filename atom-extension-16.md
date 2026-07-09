@@ -177,7 +177,7 @@ For each new atom:
 
 - **MM3E scene with rotational symmetry** → test `symmetrize`
 - **Spiderweb bus bandwidth budget** → test `preserve`
-- **Ornith Quant asymmetric codec** → already has implicit `transform`; formalize it
+- **Asymmetric quant codec** → already has implicit `transform`; formalize it
 - **RF repair in quantization** → test if `dual` formalization helps the bench
 - **ds4 telemetry pipeline** → test if `measure` clarifies the cost model
 - **Driver Observatory (planned)** → test `flow` for kernel propagation

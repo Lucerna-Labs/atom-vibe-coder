@@ -46,10 +46,10 @@ impl WikiGraph {
     pub fn seeded() -> Self {
         let mut nodes = vec![
             WikiNode {
-                id: "mission:ornith-parity".to_string(),
+                id: "mission:production-app-build".to_string(),
                 title: mission().title.to_string(),
                 excerpt: mission().body.to_string(),
-                tags: tags(&["ornith", "parity", "mission", "product", "proof"]),
+                tags: tags(&["production", "app", "mission", "product", "proof"]),
             },
             WikiNode {
                 id: "bus:spiderweb".to_string(),
@@ -110,27 +110,27 @@ impl WikiGraph {
 
         let mut edges = static_edges(&[
             StaticEdge {
-                from: "mission:ornith-parity",
-                to: "ornith-parity-runtime",
+                from: "mission:production-app-build",
+                to: "production-app-runtime",
                 weight: 8,
             },
             StaticEdge {
-                from: "mission:ornith-parity",
+                from: "mission:production-app-build",
                 to: "bus:spiderweb",
                 weight: 7,
             },
             StaticEdge {
-                from: "mission:ornith-parity",
+                from: "mission:production-app-build",
                 to: "renderer:pmre-native",
                 weight: 7,
             },
             StaticEdge {
-                from: "mission:ornith-parity",
+                from: "mission:production-app-build",
                 to: "rag:wiki-graph",
                 weight: 7,
             },
             StaticEdge {
-                from: "mission:ornith-parity",
+                from: "mission:production-app-build",
                 to: "provider:openai-responses",
                 weight: 7,
             },
@@ -196,7 +196,7 @@ impl WikiGraph {
         if let Some(idx) = self
             .nodes
             .iter()
-            .position(|node| node.id == "mission:ornith-parity")
+            .position(|node| node.id == "mission:production-app-build")
         {
             scored[idx] += 50;
         }
@@ -528,14 +528,14 @@ fn pin_mission_evidence(evidence: &mut Vec<Evidence>, graph: &WikiGraph, limit: 
     if limit == 0
         || evidence
             .iter()
-            .any(|item| item.node_id == "mission:ornith-parity")
+            .any(|item| item.node_id == "mission:production-app-build")
     {
         return;
     }
     let Some(node) = graph
         .nodes
         .iter()
-        .find(|node| node.id == "mission:ornith-parity")
+        .find(|node| node.id == "mission:production-app-build")
     else {
         return;
     };
@@ -651,12 +651,12 @@ mod tests {
         let graph = WikiGraph::seeded();
         for recipe in recipes() {
             assert!(
-                graph.has_relationship_path(recipe.id, "mission:ornith-parity", 6),
+                graph.has_relationship_path(recipe.id, "mission:production-app-build", 6),
                 "{} is not linked to the mission graph",
                 recipe.id
             );
         }
-        assert!(!graph.has_relationship_path("missing-recipe", "mission:ornith-parity", 6));
+        assert!(!graph.has_relationship_path("missing-recipe", "mission:production-app-build", 6));
     }
 
     #[test]
@@ -708,6 +708,6 @@ mod tests {
         );
         assert!(hits
             .iter()
-            .any(|item| item.node_id == "mission:ornith-parity"));
+            .any(|item| item.node_id == "mission:production-app-build"));
     }
 }

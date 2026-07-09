@@ -1,8 +1,8 @@
 (function () {
   "use strict";
 
-  const parityLadder = ["NATIVE", "BUS", "RAG", "API", "PROOF", "O1"];
-  const missionInvariant = "NATIVE/BUS/RAG/API/PROOF/O1";
+  const capabilityLadder = ["NATIVE", "BUS", "RAG", "API", "PROOF", "APP"];
+  const missionInvariant = "NATIVE/BUS/RAG/API/PROOF/APP";
   const data = window.MATH_ATOMS_DATA;
   const storageKey = "math-atoms-coder-state-v1";
   const verdicts = ["BASELINE", "REAL", "PAINTED", "HURTS"];
@@ -10,7 +10,7 @@
   const ui = {};
 
   window.MATH_ATOMS_APP_INVARIANTS = {
-    qTierLadder: parityLadder,
+    qTierLadder: capabilityLadder,
     missionInvariant: missionInvariant
   };
 
@@ -90,7 +90,7 @@
     const fallback = {
       selectedRecipe: "atom-renderer-bootstrap",
       selectedAtom: "measure",
-      selectedQ: "O1",
+      selectedQ: "APP",
       status: "draft",
       proofCount: 0,
       drift: 0,
@@ -233,20 +233,20 @@
 
   function renderMissionGate() {
     const known = data.operatorMission.recipes.map(function (recipe) { return recipe.key; });
-    const full = parityLadder.every(function (tier) { return known.includes(tier); });
-    const buttons = parityLadder.map(function (tier) {
+    const full = capabilityLadder.every(function (tier) { return known.includes(tier); });
+    const buttons = capabilityLadder.map(function (tier) {
       const active = tier === state.selectedQ ? " active" : "";
       return '<button type="button" class="' + active + '" data-q="' + tier + '" title="Select ' +
         tier + '">' + tier + "</button>";
     }).join("");
     ui.missionGate.innerHTML = "<strong>" + clean(data.operatorMission.title) + "</strong><small>" +
-      clean(data.operatorMission.body) + "</small><small>Parity: " + missionInvariant + " / " +
+      clean(data.operatorMission.body) + "</small><small>Readiness: " + missionInvariant + " / " +
       (full ? "preserved" : "blocked") + '</small><div class="q-grid">' + buttons + "</div>";
     ui.missionGate.querySelectorAll("[data-q]").forEach(function (button) {
       button.addEventListener("click", function () {
         state.selectedQ = button.dataset.q;
-        state.selectedRecipe = "ornith-parity-runtime";
-        addLog("Parity Gate Selected", state.selectedQ + " is the active capability gate until evidence passes or blocks.");
+        state.selectedRecipe = "production-app-runtime";
+        addLog("App Gate Selected", state.selectedQ + " is the active capability gate until evidence passes or blocks.");
         saveState();
         render();
       });

@@ -3,7 +3,7 @@ import path from "node:path";
 import vm from "node:vm";
 
 const root = process.cwd();
-const operatorMission = "meet or exceed ornith 1.0 with native atom rendering, spiderweb bus routing, wiki graph rag, provider execution, and proof capture";
+const operatorMission = "build the requested app with native atom rendering, spiderweb bus routing, wiki graph rag, provider execution when required, and proof capture";
 const files = [
   "README.md",
   "app/index.html",
@@ -66,14 +66,14 @@ if (!data.fabric || data.fabric.layers.length !== 4) {
   throw new Error("Spiderweb fabric must expose four layers");
 }
 
-const expectedLadder = ["NATIVE", "BUS", "RAG", "API", "PROOF", "O1"];
+const expectedLadder = ["NATIVE", "BUS", "RAG", "API", "PROOF", "APP"];
 const dataLadder = data.operatorMission.recipes.map((recipe) => recipe.key).join("/");
 const appLadder = invariants.qTierLadder.join("/");
 if (dataLadder !== expectedLadder.join("/") || appLadder !== expectedLadder.join("/")) {
-  throw new Error("Ornith parity ladder was not preserved");
+  throw new Error("Production app readiness ladder was not preserved");
 }
 if (!data.operatorMission.body.toLowerCase().includes(operatorMission)) {
   throw new Error("Operator mission text was not preserved");
 }
 
-console.log("static doctrine check ok: atom doctrine, Spiderweb layers, Ornith parity ladder, and operator mission validated");
+console.log("static doctrine check ok: atom doctrine, Spiderweb layers, production app readiness ladder, and operator mission validated");

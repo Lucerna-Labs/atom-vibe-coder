@@ -575,7 +575,7 @@ fn right_rail(fb: &mut Framebuffer) {
     status_box(fb, 1265.0, 776.0, "BONDS", "2");
     text_at(
         fb,
-        "Ornith parity: native bus + graph RAG + provider + proof",
+        "Production app route: native bus + graph RAG + provider + proof",
         1001.0,
         900.0,
         11.0,

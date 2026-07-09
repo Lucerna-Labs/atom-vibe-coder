@@ -167,7 +167,7 @@ fn left_panel(ui: &UiState) -> UxNode {
                         mini_card(
                             gate.title,
                             &format!("{} / {}", gate.layer, gate.body),
-                            if gate.title == "Ornith parity" {
+                            if gate.title == "App fit" {
                                 amber()
                             } else {
                                 teal()
