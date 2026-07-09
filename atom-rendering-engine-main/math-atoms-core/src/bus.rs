@@ -39,6 +39,7 @@ pub enum BusMessageKind {
     ProofCaptured,
     ProofBlocked,
     StoreLearned,
+    StoreBlocked,
     DriftFlagged,
 }
 

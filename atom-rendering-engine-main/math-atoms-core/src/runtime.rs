@@ -304,6 +304,27 @@ impl MathAtomsRuntime {
         );
     }
 
+    pub fn mark_store_blocked(&mut self, reason: &str) {
+        self.state.status = RuntimeStatus::Blocked;
+        if !self.state.blockers.iter().any(|item| item == reason) {
+            self.state.blockers.push(reason.to_string());
+        }
+        let evidence_ids: Vec<String> = self
+            .state
+            .evidence
+            .iter()
+            .map(|item| item.node_id.clone())
+            .collect();
+        self.bus.l3_orchestrate(
+            self.state.last_route.last().copied().unwrap_or(0),
+            BusMessageKind::StoreBlocked,
+            "proof-store",
+            "proof-loop",
+            reason,
+            &evidence_ids,
+        );
+    }
+
     pub fn learn_proof_record(&mut self, record: &ProofRecord) {
         self.graph.add_proof_record(record);
         self.bus.l3_orchestrate(
@@ -497,5 +518,24 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderExecuted));
+    }
+
+    #[test]
+    fn store_failure_marks_runtime_blocked() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Build provider api wiki graph rag");
+        runtime.mark_store_blocked("persistent proof store write failed");
+        assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
+        assert!(runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|item| item == "persistent proof store write failed"));
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::StoreBlocked));
     }
 }

@@ -27,6 +27,23 @@ pub struct NativeApp {
     pub provider_running: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StoreOutcome {
+    Memory,
+    Written,
+    Blocked(String),
+}
+
+impl StoreOutcome {
+    fn message(&self) -> String {
+        match self {
+            Self::Memory => "store:memory".to_string(),
+            Self::Written => "store:written".to_string(),
+            Self::Blocked(reason) => format!("store:blocked {reason}"),
+        }
+    }
+}
+
 impl NativeApp {
     pub fn from_process_env() -> Self {
         Self::new_with_store(
@@ -61,16 +78,20 @@ impl NativeApp {
         let intent = current_intent(ui);
         let proof = self.runtime.run_intent(&intent);
         let store_result = self.append_proof_record();
-        self.last_run_summary = if proof.blockers.is_empty() {
+        self.last_run_summary = if self.status() == RuntimeStatus::Proven {
             format!(
                 "{} proven with {} evidence nodes through {} route envelopes. {}",
                 proof.recipe_id,
                 proof.evidence.len(),
                 self.runtime.state().last_route.len(),
-                store_result
+                store_result.message()
             )
         } else {
-            format!("Blocked: {} {}", proof.blockers.join("; "), store_result)
+            format!(
+                "Blocked: {} {}",
+                self.runtime.state().blockers.join("; "),
+                store_result.message()
+            )
         };
     }
 
@@ -88,7 +109,11 @@ impl NativeApp {
             return;
         }
         let store_result = self.append_proof_record();
-        self.last_run_summary = format!("Captured current proof route. {store_result}");
+        self.last_run_summary = if matches!(store_result, StoreOutcome::Blocked(_)) {
+            format!("Capture blocked: {}", store_result.message())
+        } else {
+            format!("Captured current proof route. {}", store_result.message())
+        };
     }
 
     pub fn begin_provider_execution(&mut self) -> Option<Receiver<Result<String, ProviderError>>> {
@@ -159,15 +184,25 @@ impl NativeApp {
         }
     }
 
-    fn append_proof_record(&mut self) -> &'static str {
+    fn append_proof_record(&mut self) -> StoreOutcome {
         let record = self.current_proof_record();
-        self.runtime.learn_proof_record(&record);
         let Some(store) = &self.store else {
-            return "store:memory";
+            self.runtime.learn_proof_record(&record);
+            return StoreOutcome::Memory;
         };
         match store.append(&record) {
-            Ok(()) => "store:written",
-            Err(_) => "store:blocked",
+            Ok(()) => {
+                self.runtime.learn_proof_record(&record);
+                StoreOutcome::Written
+            }
+            Err(error) => {
+                let reason = format!(
+                    "Persistent proof store write failed at {}: {error}",
+                    store.path().display()
+                );
+                self.runtime.mark_store_blocked(&reason);
+                StoreOutcome::Blocked(reason)
+            }
         }
     }
 
@@ -311,6 +346,42 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert!(text.contains("\"status\":\"proven\""));
         assert!(text.contains("\"recipe_id\":"));
+    }
+
+    #[test]
+    fn native_run_blocks_when_persistent_store_fails() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-native-store-dir-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let store = ProofStore::new(&path);
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        std::fs::remove_dir_all(&path).ok();
+        assert_eq!(app.status(), RuntimeStatus::Blocked);
+        assert!(app.last_run_summary.starts_with("Blocked:"));
+        assert!(app
+            .runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|item| item.contains("Persistent proof store write failed")));
+        assert!(app
+            .runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == math_atoms_core::BusMessageKind::StoreBlocked));
     }
 
     #[test]
