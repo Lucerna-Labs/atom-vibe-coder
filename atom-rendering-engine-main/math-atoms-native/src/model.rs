@@ -87,7 +87,11 @@ impl NativeApp {
         self.provider_running = true;
         self.last_provider_output = match execute_call(call) {
             Ok(text) => text,
-            Err(error) => format!("Provider blocked: {error:?}"),
+            Err(error) => {
+                let reason = format!("{error:?}");
+                self.runtime.mark_provider_blocked(&reason);
+                format!("Provider blocked: {reason}")
+            }
         };
         self.provider_running = false;
         let _ = self.append_proof_record();
@@ -109,12 +113,21 @@ impl NativeApp {
         }
     }
 
-    fn append_proof_record(&self) -> &'static str {
+    fn append_proof_record(&mut self) -> &'static str {
+        let record = self.current_proof_record();
+        self.runtime.learn_proof_record(&record);
         let Some(store) = &self.store else {
             return "store:memory";
         };
+        match store.append(&record) {
+            Ok(()) => "store:written",
+            Err(_) => "store:blocked",
+        }
+    }
+
+    fn current_proof_record(&self) -> ProofRecord {
         let state = self.runtime.state();
-        let record = ProofRecord {
+        ProofRecord {
             recipe_id: state.selected_recipe.clone(),
             status: state.status.as_str().to_string(),
             atoms: state.selected_atoms.clone(),
@@ -122,10 +135,6 @@ impl NativeApp {
             blockers: state.blockers.clone(),
             provider_state: self.provider_title_state().to_string(),
             route_len: state.last_route.len(),
-        };
-        match store.append(&record) {
-            Ok(()) => "store:written",
-            Err(_) => "store:blocked",
         }
     }
 }
@@ -225,10 +234,12 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
+        app.runtime.mark_provider_blocked("test");
         app.last_provider_output = "Provider blocked: test".to_string();
         let _ = app.append_proof_record();
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
+        assert!(text.contains("\"status\":\"blocked\""));
         assert!(text.contains("\"provider_state\":\"provider:blocked\""));
     }
 }

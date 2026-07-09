@@ -2,6 +2,7 @@ use crate::bus::{BusMessageKind, EnvelopeId, SpiderwebBus};
 use crate::domain::{atom_by_key, mission, recipes, Recipe};
 use crate::graph::{Evidence, WikiGraph};
 use crate::provider::{PreparedProviderCall, ProviderConfig, ProviderError};
+use crate::store::{ProofRecord, ProofStore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
@@ -56,7 +57,11 @@ pub struct MathAtomsRuntime {
 
 impl MathAtomsRuntime {
     pub fn new(provider: ProviderConfig) -> Self {
-        Self::with_graph(provider, WikiGraph::from_default_dirs())
+        let mut graph = WikiGraph::from_default_dirs();
+        if let Ok(records) = ProofStore::new(ProofStore::default_path()).read_records() {
+            graph.add_proof_records(&records);
+        }
+        Self::with_graph(provider, graph)
     }
 
     pub fn with_graph(provider: ProviderConfig, graph: WikiGraph) -> Self {
@@ -245,6 +250,39 @@ impl MathAtomsRuntime {
             &[],
         );
     }
+
+    pub fn mark_provider_blocked(&mut self, reason: &str) {
+        self.state.status = RuntimeStatus::Blocked;
+        if !self.state.blockers.iter().any(|item| item == reason) {
+            self.state.blockers.push(reason.to_string());
+        }
+        let evidence_ids: Vec<String> = self
+            .state
+            .evidence
+            .iter()
+            .map(|item| item.node_id.clone())
+            .collect();
+        self.bus.l3_orchestrate(
+            self.state.last_route.last().copied().unwrap_or(0),
+            BusMessageKind::ProviderBlocked,
+            "provider-adapter",
+            "proof-loop",
+            reason,
+            &evidence_ids,
+        );
+    }
+
+    pub fn learn_proof_record(&mut self, record: &ProofRecord) {
+        self.graph.add_proof_record(record);
+        self.bus.l3_orchestrate(
+            self.state.last_route.last().copied().unwrap_or(0),
+            BusMessageKind::StoreLearned,
+            "proof-store",
+            "wiki-graph",
+            "stored proof record loaded into graph evidence",
+            &[],
+        );
+    }
 }
 
 fn classify_intent(intent: &str) -> Vec<String> {
@@ -364,5 +402,49 @@ mod tests {
         let m = mission();
         assert!(m.body.contains("Ornith 1.0"));
         assert_eq!(m.parity_floor, "Ornith 1.0");
+    }
+
+    #[test]
+    fn learned_proof_records_feed_next_retrieval() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.learn_proof_record(&ProofRecord {
+            recipe_id: "wiki-graph-rag".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["scan".to_string(), "hash".to_string()],
+            evidence_count: 4,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            route_len: 4,
+        });
+        let run = runtime.run_intent("Use stored proof for wiki graph rag");
+        assert!(run
+            .evidence
+            .iter()
+            .any(|item| item.node_id.starts_with("proof:")));
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::StoreLearned));
+    }
+
+    #[test]
+    fn provider_execution_failure_marks_runtime_blocked() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Run provider api with wiki graph rag");
+        runtime.mark_provider_blocked("provider returned 401");
+        assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
+        assert!(runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|item| item == "provider returned 401"));
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProviderBlocked));
     }
 }

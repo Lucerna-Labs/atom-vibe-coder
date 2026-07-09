@@ -1,5 +1,8 @@
 use crate::domain::{atoms, gates, mission, recipes};
+use crate::store::ProofRecord;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -227,6 +230,56 @@ impl WikiGraph {
         evidence
     }
 
+    pub fn add_proof_record(&mut self, record: &ProofRecord) {
+        let id = proof_node_id(record);
+        if self.nodes.iter().any(|node| node.id == id) {
+            return;
+        }
+        let mut node_tags = vec![
+            "proof".to_string(),
+            "store".to_string(),
+            record.status.to_ascii_lowercase(),
+            record.provider_state.to_ascii_lowercase(),
+        ];
+        node_tags.extend(record.atoms.iter().map(|atom| atom.to_ascii_lowercase()));
+        self.nodes.push(WikiNode {
+            id: id.clone(),
+            title: format!("Proof: {}", record.recipe_id),
+            excerpt: format!(
+                "{} proof for {} with {} evidence nodes, {} route envelopes, and {} blockers.",
+                record.status,
+                record.recipe_id,
+                record.evidence_count,
+                record.route_len,
+                record.blockers.len()
+            ),
+            tags: node_tags,
+        });
+        self.edges.push(WikiEdge {
+            from: id.clone(),
+            to: record.recipe_id.clone(),
+            weight: 8,
+        });
+        self.edges.push(WikiEdge {
+            from: record.recipe_id.clone(),
+            to: id.clone(),
+            weight: 5,
+        });
+        for atom in &record.atoms {
+            self.edges.push(WikiEdge {
+                from: atom.clone(),
+                to: id.clone(),
+                weight: 4,
+            });
+        }
+    }
+
+    pub fn add_proof_records(&mut self, records: &[ProofRecord]) {
+        for record in records {
+            self.add_proof_record(record);
+        }
+    }
+
     fn load_markdown_dir(&mut self, dir: &Path) -> io::Result<()> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -375,6 +428,18 @@ fn wiki_links(text: &str) -> Vec<String> {
     links
 }
 
+fn proof_node_id(record: &ProofRecord) -> String {
+    let mut hasher = DefaultHasher::new();
+    record.recipe_id.hash(&mut hasher);
+    record.status.hash(&mut hasher);
+    record.atoms.hash(&mut hasher);
+    record.evidence_count.hash(&mut hasher);
+    record.blockers.hash(&mut hasher);
+    record.provider_state.hash(&mut hasher);
+    record.route_len.hash(&mut hasher);
+    format!("proof:{:016x}", hasher.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +466,21 @@ mod tests {
         assert!(hits
             .iter()
             .any(|item| item.node_id == "wiki:provider-proof"));
+    }
+
+    #[test]
+    fn proof_records_become_retrievable_evidence() {
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "wiki-graph-rag".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["scan".to_string(), "hash".to_string()],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            route_len: 6,
+        });
+        let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
+        assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
     }
 }
