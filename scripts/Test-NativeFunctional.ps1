@@ -85,6 +85,13 @@ function Get-ProofRecordCount() {
 }
 
 try {
+    Invoke-NativeCommand $proc.MainWindowHandle 12
+    Start-Sleep -Seconds 1
+    $proc = Get-Process -Id $proc.Id
+    if ($proc.MainWindowTitle -notmatch "provider:(idle|blocked)") {
+        throw "Apply Provider control did not update provider setup state. Title: $($proc.MainWindowTitle)"
+    }
+
     Clear-Intent $proc.MainWindowHandle
     Send-Text $proc.MainWindowHandle "native renderer artifact only"
     Send-WmChar $proc.MainWindowHandle 13

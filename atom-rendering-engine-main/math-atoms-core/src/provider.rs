@@ -9,6 +9,15 @@ pub enum ProviderKind {
     OllamaCloudChat,
 }
 
+impl ProviderKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai",
+            Self::OllamaCloudChat => "ollama",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderConfig {
     pub kind: ProviderKind,
@@ -85,6 +94,25 @@ impl ProviderConfig {
         let api_key_env = lookup("MATH_ATOMS_PROVIDER_KEY_ENV")
             .unwrap_or_else(|| default_key_env(kind).to_string());
         let api_key_present = lookup(&api_key_env)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        Self {
+            kind,
+            endpoint,
+            model,
+            api_key_env,
+            api_key_present,
+        }
+    }
+
+    pub fn from_values(kind_raw: &str, model: &str, endpoint: &str, api_key_env: &str) -> Self {
+        let kind = provider_kind_from(kind_raw);
+        let model = non_empty_value(model).unwrap_or_else(|| default_model(kind).to_string());
+        let endpoint =
+            non_empty_value(endpoint).unwrap_or_else(|| default_endpoint(kind).to_string());
+        let api_key_env =
+            non_empty_value(api_key_env).unwrap_or_else(|| default_key_env(kind).to_string());
+        let api_key_present = std::env::var(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
@@ -259,6 +287,15 @@ fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+fn non_empty_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn split_http_status(stdout: &str) -> (String, Option<u16>) {
@@ -469,6 +506,20 @@ mod tests {
         assert_eq!(config.model, "gpt-5.5");
         assert_eq!(config.endpoint, "https://api.openai.com/v1/responses");
         assert_eq!(config.api_key_env, "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn ui_provider_values_apply_defaults_and_key_presence() {
+        let key = format!("MATH_ATOMS_UI_TEST_KEY_{}", std::process::id());
+        std::env::set_var(&key, "secret");
+        let config = ProviderConfig::from_values("ollama-cloud", "", "", &key);
+        std::env::remove_var(&key);
+        assert_eq!(config.kind, ProviderKind::OllamaCloudChat);
+        assert_eq!(config.kind.as_str(), "ollama");
+        assert_eq!(config.model, "gpt-oss:120b");
+        assert_eq!(config.endpoint, "https://ollama.com/api/chat");
+        assert_eq!(config.api_key_env, key);
+        assert!(config.api_key_present);
     }
 
     #[test]

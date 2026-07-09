@@ -43,6 +43,8 @@ $env:MATH_ATOMS_PROVIDER_KIND="openai" # OPENAI_API_KEY, Responses API
 $env:MATH_ATOMS_PROVIDER_KIND="ollama" # OLLAMA_API_KEY, Ollama Cloud API
 ```
 
+The native PMRE app also exposes provider kind, model, endpoint, and key-env controls. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
+
 Generate the native artifact:
 
 ```powershell

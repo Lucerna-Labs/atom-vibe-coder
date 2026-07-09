@@ -1,6 +1,7 @@
 use crate::model::{
-    NativeApp, BUS_SCROLL, CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, MARK_DRIFT,
-    RUN_LOOP,
+    NativeApp, APPLY_PROVIDER, BUS_SCROLL, CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER,
+    INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
+    PROVIDER_MODEL_INPUT, PROVIDER_URL_INPUT, RUN_LOOP,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
@@ -93,7 +94,7 @@ fn header(app: &NativeApp) -> UxNode {
 
 fn left_panel(app: &NativeApp, ui: &UiState) -> UxNode {
     UxNode::boxed(
-        card_style().w(Dim::Pct(28.0)).gap(12.0),
+        card_style().w(Dim::Pct(28.0)).gap(12.0).scroll(LEFT_SCROLL),
         vec![
             label("Intent"),
             input_box(ui),
@@ -136,24 +137,8 @@ fn left_panel(app: &NativeApp, ui: &UiState) -> UxNode {
                     })
                     .collect(),
             ),
-            label("Provider"),
-            mini_card(
-                if app.runtime.provider().is_ready() {
-                    "configured"
-                } else {
-                    "blocked"
-                },
-                &format!(
-                    "{} via {}",
-                    app.runtime.provider().model,
-                    app.runtime.provider().api_key_env
-                ),
-                if app.runtime.provider().is_ready() {
-                    teal()
-                } else {
-                    red()
-                },
-            ),
+            label("Provider Setup"),
+            provider_setup(app, ui),
         ],
     )
 }
@@ -319,6 +304,61 @@ fn input_box(ui: &UiState) -> UxNode {
                 },
             ),
         vec![UxNode::text(text, 13.0, ink())],
+    )
+}
+
+fn provider_setup(app: &NativeApp, ui: &UiState) -> UxNode {
+    UxNode::boxed(
+        Style::col().gap(7.0),
+        vec![
+            mini_card(
+                if app.runtime.provider().is_ready() {
+                    "configured"
+                } else {
+                    "blocked"
+                },
+                &format!(
+                    "{} via {}",
+                    app.runtime.provider().model,
+                    app.runtime.provider().api_key_env
+                ),
+                if app.runtime.provider().is_ready() {
+                    teal()
+                } else {
+                    red()
+                },
+            ),
+            provider_input(ui, PROVIDER_KIND_INPUT, "kind"),
+            provider_input(ui, PROVIDER_MODEL_INPUT, "model"),
+            provider_input(ui, PROVIDER_URL_INPUT, "endpoint"),
+            provider_input(ui, PROVIDER_KEY_ENV_INPUT, "key env"),
+            button(
+                ui,
+                APPLY_PROVIDER,
+                "Apply Provider",
+                teal(),
+                Rgba::rgb8(255, 255, 255),
+            ),
+        ],
+    )
+}
+
+fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
+    UxNode::boxed(
+        Style::col().gap(3.0),
+        vec![
+            UxNode::text(label_text.to_ascii_uppercase(), 9.0, muted()),
+            UxNode::boxed(
+                Style::col()
+                    .input(id)
+                    .h(Dim::Px(34.0))
+                    .pad(Edges::xy(8.0, 7.0))
+                    .radius(6.0)
+                    .bg(Rgba::rgb8(250, 252, 250))
+                    .border(1.2, if ui.is_focused(id) { teal() } else { line() }),
+                vec![UxNode::text(ui.input_text(id), 11.0, ink())],
+            ),
+        ],
     )
 }
 

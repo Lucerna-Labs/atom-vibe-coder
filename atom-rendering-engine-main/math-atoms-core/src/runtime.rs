@@ -103,6 +103,19 @@ impl MathAtomsRuntime {
         &self.provider
     }
 
+    pub fn set_provider(&mut self, provider: ProviderConfig) {
+        self.provider = provider;
+        self.state.status = RuntimeStatus::Draft;
+        self.state.selected_recipe = "native-atom-renderer".to_string();
+        self.state.selected_atoms.clear();
+        self.state.evidence.clear();
+        self.state.blockers.clear();
+        self.state.last_provider_call = None;
+        self.state.last_provider_output_hash.clear();
+        self.state.last_provider_output_len = 0;
+        self.state.last_route.clear();
+    }
+
     pub fn run_intent(&mut self, intent: &str) -> ProofRun {
         let l0 = self.bus.l0_transport(
             BusMessageKind::IntentIngress,
@@ -457,6 +470,24 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderBlocked));
+    }
+
+    #[test]
+    fn provider_config_apply_clears_stale_proof_state() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Run provider api with wiki graph rag");
+        assert_eq!(runtime.state().status, RuntimeStatus::Proven);
+        runtime.set_provider(ProviderConfig::from_values(
+            "ollama",
+            "gpt-oss:120b",
+            "https://ollama.com/api/chat",
+            "OLLAMA_API_KEY",
+        ));
+        assert_eq!(runtime.provider().kind.as_str(), "ollama");
+        assert_eq!(runtime.state().status, RuntimeStatus::Draft);
+        assert!(runtime.state().last_provider_call.is_none());
+        assert!(runtime.state().last_route.is_empty());
     }
 
     #[test]

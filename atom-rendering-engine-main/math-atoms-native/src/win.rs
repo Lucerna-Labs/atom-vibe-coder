@@ -1,4 +1,4 @@
-use crate::model::{NativeApp, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, RUN_LOOP};
+use crate::model::{NativeApp, APPLY_PROVIDER, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, RUN_LOOP};
 use crate::ui;
 use core::ffi::c_void;
 use pmre_kit::ux::UxNode;
@@ -490,6 +490,7 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
         }
         CAPTURE_PROOF => app.model.capture_current_proof(),
         MARK_DRIFT => app.model.mark_drift(),
+        APPLY_PROVIDER => app.model.apply_provider_config(&app.ui),
         _ => {}
     }
 }

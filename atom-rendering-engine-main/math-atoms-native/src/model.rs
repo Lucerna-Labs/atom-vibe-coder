@@ -13,6 +13,12 @@ pub const CAPTURE_PROOF: u32 = 4;
 pub const MARK_DRIFT: u32 = 5;
 pub const EVIDENCE_SCROLL: u32 = 6;
 pub const BUS_SCROLL: u32 = 7;
+pub const PROVIDER_KIND_INPUT: u32 = 8;
+pub const PROVIDER_MODEL_INPUT: u32 = 9;
+pub const PROVIDER_URL_INPUT: u32 = 10;
+pub const PROVIDER_KEY_ENV_INPUT: u32 = 11;
+pub const APPLY_PROVIDER: u32 = 12;
+pub const LEFT_SCROLL: u32 = 13;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -71,6 +77,7 @@ impl NativeApp {
         ui.inputs
             .entry(INTENT_INPUT)
             .or_insert_with(|| default_intent().to_string());
+        seed_provider_inputs(self.runtime.provider(), ui);
         ui.focused = Some(INTENT_INPUT);
     }
 
@@ -100,6 +107,34 @@ impl NativeApp {
             .mark_drift("Operator flagged drift from the native PMRE shell.");
         self.last_run_summary =
             "Drift flagged; next proof run must re-establish evidence.".to_string();
+    }
+
+    pub fn apply_provider_config(&mut self, ui: &UiState) {
+        let config = ProviderConfig::from_values(
+            ui.input_text(PROVIDER_KIND_INPUT),
+            ui.input_text(PROVIDER_MODEL_INPUT),
+            ui.input_text(PROVIDER_URL_INPUT),
+            ui.input_text(PROVIDER_KEY_ENV_INPUT),
+        );
+        let ready = config.is_ready();
+        let summary = format!(
+            "Provider config applied: {} {} via {} ({})",
+            config.kind.as_str(),
+            config.model,
+            config.endpoint,
+            if ready { "key present" } else { "key missing" }
+        );
+        self.runtime.set_provider(config);
+        self.last_provider_output = if ready {
+            "Provider has not been executed.".to_string()
+        } else {
+            format!(
+                "Provider blocked: Missing credential in {}",
+                self.runtime.provider().api_key_env
+            )
+        };
+        self.provider_running = false;
+        self.last_run_summary = summary;
     }
 
     pub fn capture_current_proof(&mut self) {
@@ -236,6 +271,21 @@ impl NativeApp {
     }
 }
 
+fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
+    ui.inputs
+        .entry(PROVIDER_KIND_INPUT)
+        .or_insert_with(|| provider.kind.as_str().to_string());
+    ui.inputs
+        .entry(PROVIDER_MODEL_INPUT)
+        .or_insert_with(|| provider.model.clone());
+    ui.inputs
+        .entry(PROVIDER_URL_INPUT)
+        .or_insert_with(|| provider.endpoint.clone());
+    ui.inputs
+        .entry(PROVIDER_KEY_ENV_INPUT)
+        .or_insert_with(|| provider.api_key_env.clone());
+}
+
 fn current_intent(ui: &UiState) -> String {
     let text = ui.input_text(INTENT_INPUT).trim();
     if text.is_empty() {
@@ -322,6 +372,32 @@ mod tests {
         app.complete_provider_execution(Err(ProviderError::Io("provider failed".to_string())));
         assert_eq!(app.status(), RuntimeStatus::Blocked);
         assert_eq!(app.provider_title_state(), "provider:blocked");
+    }
+
+    #[test]
+    fn provider_setup_inputs_apply_to_runtime() {
+        let key = format!("MATH_ATOMS_NATIVE_UI_KEY_{}", std::process::id());
+        std::env::set_var(&key, "secret");
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        ui.inputs
+            .insert(PROVIDER_KIND_INPUT, "ollama-cloud".to_string());
+        ui.inputs
+            .insert(PROVIDER_MODEL_INPUT, "gpt-oss:120b".to_string());
+        ui.inputs.insert(
+            PROVIDER_URL_INPUT,
+            "https://ollama.com/api/chat".to_string(),
+        );
+        ui.inputs.insert(PROVIDER_KEY_ENV_INPUT, key.clone());
+        app.apply_provider_config(&ui);
+        std::env::remove_var(&key);
+        assert_eq!(app.runtime.provider().kind.as_str(), "ollama");
+        assert_eq!(app.runtime.provider().model, "gpt-oss:120b");
+        assert!(app.runtime.provider().api_key_present);
+        assert_eq!(app.status(), RuntimeStatus::Draft);
+        assert_eq!(app.provider_title_state(), "provider:idle");
+        assert!(app.last_run_summary.contains("Provider config applied"));
     }
 
     #[test]
