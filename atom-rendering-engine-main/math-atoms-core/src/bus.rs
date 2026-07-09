@@ -92,8 +92,19 @@ impl SpiderwebBus {
         target: &str,
         body: &str,
     ) -> EnvelopeId {
+        self.l0_transport_from(None, kind, source, target, body)
+    }
+
+    pub fn l0_transport_from(
+        &mut self,
+        parent: Option<EnvelopeId>,
+        kind: BusMessageKind,
+        source: &str,
+        target: &str,
+        body: &str,
+    ) -> EnvelopeId {
         self.emit(EnvelopeDraft {
-            parent: None,
+            parent,
             layer: BusLayer::L0Transport,
             ramp: Ramp::Ingress,
             kind,

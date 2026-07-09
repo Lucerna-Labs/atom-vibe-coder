@@ -325,7 +325,9 @@ impl MathAtomsRuntime {
             return None;
         }
         let evidence_ids = self.provider_evidence_ids();
-        let l0 = self.bus.l0_transport(
+        let parent = self.state.last_route.last().copied();
+        let l0 = self.bus.l0_transport_from(
+            parent,
             BusMessageKind::ProviderExecutionRequested,
             "proof-loop",
             "provider-adapter",
@@ -374,7 +376,9 @@ impl MathAtomsRuntime {
             .map(|call| call.model.as_str())
             .unwrap_or("provider");
         let body = format!("{model} executed output {output_hash} ({output_len} bytes)");
-        let l0 = self.bus.l0_transport(
+        let parent = self.state.last_route.last().copied();
+        let l0 = self.bus.l0_transport_from(
+            parent,
             BusMessageKind::ProviderExecuted,
             "model-worker",
             "provider-adapter",
@@ -420,7 +424,9 @@ impl MathAtomsRuntime {
             self.state.blockers.push(reason.to_string());
         }
         let evidence_ids = self.provider_evidence_ids();
-        let l0 = self.bus.l0_transport(
+        let parent = self.state.last_route.last().copied();
+        let l0 = self.bus.l0_transport_from(
+            parent,
             BusMessageKind::ProviderBlocked,
             "model-worker",
             "provider-adapter",
@@ -736,8 +742,10 @@ mod tests {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
+        let pending_route = runtime.state().last_route.clone();
         let task = runtime.schedule_provider_execution().unwrap();
         assert!(!task.route.is_empty());
+        assert!(task.route.starts_with(&pending_route));
         assert_eq!(task.call.model, "gpt-5.5");
         runtime.mark_provider_executed("fnv:abc", 17);
         assert_eq!(runtime.state().status, RuntimeStatus::Proven);
