@@ -13,15 +13,6 @@ $Artifact = Join-Path $Engine "math_atoms_coder.bmp"
 
 Push-Location $Root
 try {
-    node --check app\app-data.js
-    if ($LASTEXITCODE -ne 0) { throw "node --check app\app-data.js failed with exit code $LASTEXITCODE" }
-    node --check app\app.js
-    if ($LASTEXITCODE -ne 0) { throw "node --check app\app.js failed with exit code $LASTEXITCODE" }
-    node --check scripts\doctrine-check.mjs
-    if ($LASTEXITCODE -ne 0) { throw "node --check scripts\doctrine-check.mjs failed with exit code $LASTEXITCODE" }
-    node scripts\doctrine-check.mjs
-    if ($LASTEXITCODE -ne 0) { throw "node scripts\doctrine-check.mjs failed with exit code $LASTEXITCODE" }
-
     Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
     Push-Location $Engine
@@ -62,12 +53,12 @@ try {
 
     if ($AllowProviderBlock) {
         Write-Warning "provider execution gate skipped by -AllowProviderBlock; this is not a production-ready verification"
-        Write-Host "structural verification ok: doctrine check, Rust tests, clippy, native app build, and native artifact"
+        Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, and native artifact"
     }
     else {
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
-        Write-Host "production verification ok: doctrine check, Rust tests, clippy, native app build, native artifact, and provider execution gate"
+        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, and provider execution gate"
     }
 }
 finally {

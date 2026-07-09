@@ -6,11 +6,11 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 
 - `atom-rendering-engine-main/math-atoms-core` owns the Spiderweb Bus, wiki graph RAG, provider adapters, recipes, and proof state.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
-- `app/` is a legacy static doctrine mirror for quick inspection only.
-- `scripts/doctrine-check.mjs` validates legacy doctrine data; it is not a functional readiness test.
+- `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
+- `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
 - `scripts/Test-NativeFunctional.ps1` launches the real native window and exercises Run, Provider, and Drift.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
-- `scripts/verify-production.ps1` is strict by default: doctrine check, warning-fatal Rust tests, clippy, native build/artifact, and provider execution must all pass.
+- `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 
 ## Operator Mission
 
@@ -52,9 +52,6 @@ cargo run -p pmre-examples --example math_atoms_coder --release
 ## Verify
 
 ```powershell
-node --check app\app-data.js
-node --check app\app.js
-node scripts\doctrine-check.mjs
 .\scripts\verify-production.ps1
 .\scripts\Test-NativeFunctional.ps1
 ```

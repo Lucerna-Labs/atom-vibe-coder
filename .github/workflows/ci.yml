@@ -15,23 +15,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
-      - name: Static app checks
-        shell: pwsh
-        run: |
-          node --check app\app-data.js
-          node --check app\app.js
-          node --check scripts\doctrine-check.mjs
-          node scripts\doctrine-check.mjs
 
       - name: Rust format
         working-directory: atom-rendering-engine-main
