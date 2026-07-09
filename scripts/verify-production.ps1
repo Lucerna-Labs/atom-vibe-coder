@@ -1,3 +1,7 @@
+param(
+    [switch]$AllowProviderBlock
+)
+
 $ErrorActionPreference = "Stop"
 if ($PSVersionTable.PSVersion.Major -ge 7) {
     $PSNativeCommandUseErrorActionPreference = $true
@@ -56,7 +60,15 @@ try {
         throw "Unexpected native artifact dimensions: ${width}x${height}"
     }
 
-    Write-Host "baseline verification ok: doctrine check, Rust tests, clippy, native app build, and native artifact"
+    if ($AllowProviderBlock) {
+        Write-Warning "provider execution gate skipped by -AllowProviderBlock; this is not a production-ready verification"
+        Write-Host "structural verification ok: doctrine check, Rust tests, clippy, native app build, and native artifact"
+    }
+    else {
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
+        Write-Host "production verification ok: doctrine check, Rust tests, clippy, native app build, native artifact, and provider execution gate"
+    }
 }
 finally {
     Pop-Location

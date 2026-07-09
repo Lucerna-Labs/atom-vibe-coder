@@ -30,8 +30,8 @@ jobs:
         run: |
           node --check app\app-data.js
           node --check app\app.js
-          node --check scripts\smoke.mjs
-          node scripts\smoke.mjs
+          node --check scripts\doctrine-check.mjs
+          node scripts\doctrine-check.mjs
 
       - name: Rust format
         working-directory: atom-rendering-engine-main
@@ -78,3 +78,14 @@ jobs:
           if ($width -ne 1440 -or $height -ne 960) {
             throw "Unexpected native artifact dimensions: ${width}x${height}"
           }
+
+      - name: Provider execution gate
+        shell: pwsh
+        run: .\scripts\Test-ProviderExecution.ps1
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          MATH_ATOMS_PROVIDER_KIND: ${{ vars.MATH_ATOMS_PROVIDER_KIND || 'openai' }}
+          MATH_ATOMS_PROVIDER_MODEL: ${{ vars.MATH_ATOMS_PROVIDER_MODEL }}
+          MATH_ATOMS_PROVIDER_URL: ${{ vars.MATH_ATOMS_PROVIDER_URL }}
+          MATH_ATOMS_PROVIDER_KEY_ENV: ${{ vars.MATH_ATOMS_PROVIDER_KEY_ENV }}

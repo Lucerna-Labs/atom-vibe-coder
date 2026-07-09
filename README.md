@@ -8,7 +8,9 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `app/` is a legacy static doctrine mirror for quick inspection only.
 - `scripts/doctrine-check.mjs` validates legacy doctrine data; it is not a functional readiness test.
-- `scripts/verify-production.ps1` runs the current static and Rust baseline gate, builds the native shell, and regenerates `math_atoms_coder.bmp`.
+- `scripts/Test-NativeFunctional.ps1` launches the real native window and exercises Run, Provider, and Drift.
+- `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
+- `scripts/verify-production.ps1` is strict by default: doctrine check, warning-fatal Rust tests, clippy, native build/artifact, and provider execution must all pass.
 
 ## Operator Mission
 
@@ -54,4 +56,7 @@ node --check app\app-data.js
 node --check app\app.js
 node scripts\doctrine-check.mjs
 .\scripts\verify-production.ps1
+.\scripts\Test-NativeFunctional.ps1
 ```
+
+For local structural debugging only, `.\scripts\verify-production.ps1 -AllowProviderBlock` skips the live provider gate and is not a production-ready result.

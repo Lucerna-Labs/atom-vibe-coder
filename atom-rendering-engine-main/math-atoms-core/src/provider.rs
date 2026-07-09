@@ -28,26 +28,31 @@ pub struct PreparedProviderCall {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProviderError {
-    MissingApiKey { env: String },
+    MissingApiKey {
+        env: String,
+    },
     EmptyPrompt,
     Io(String),
-    CurlFailed { code: Option<i32>, stderr: String },
+    CurlFailed {
+        code: Option<i32>,
+        http_status: Option<u16>,
+        stderr: String,
+        body: String,
+    },
     ResponseTextMissing,
 }
 
 impl ProviderConfig {
     pub fn from_process_env() -> Self {
-        let kind = provider_kind_from(
-            std::env::var("MATH_ATOMS_PROVIDER_KIND")
-                .unwrap_or_else(|_| "openai".to_string())
-                .as_str(),
-        );
-        let model = std::env::var("MATH_ATOMS_PROVIDER_MODEL")
-            .unwrap_or_else(|_| default_model(kind).to_string());
-        let endpoint = std::env::var("MATH_ATOMS_PROVIDER_URL")
-            .unwrap_or_else(|_| default_endpoint(kind).to_string());
-        let api_key_env = std::env::var("MATH_ATOMS_PROVIDER_KEY_ENV")
-            .unwrap_or_else(|_| default_key_env(kind).to_string());
+        let kind_raw =
+            non_empty_env("MATH_ATOMS_PROVIDER_KIND").unwrap_or_else(|| "openai".to_string());
+        let kind = provider_kind_from(&kind_raw);
+        let model = non_empty_env("MATH_ATOMS_PROVIDER_MODEL")
+            .unwrap_or_else(|| default_model(kind).to_string());
+        let endpoint = non_empty_env("MATH_ATOMS_PROVIDER_URL")
+            .unwrap_or_else(|| default_endpoint(kind).to_string());
+        let api_key_env = non_empty_env("MATH_ATOMS_PROVIDER_KEY_ENV")
+            .unwrap_or_else(|| default_key_env(kind).to_string());
         let api_key_present = std::env::var(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
@@ -65,6 +70,7 @@ impl ProviderConfig {
             pairs
                 .iter()
                 .find(|(name, _)| *name == key)
+                .filter(|(_, value)| !value.trim().is_empty())
                 .map(|(_, value)| (*value).to_string())
         };
         let kind = provider_kind_from(
@@ -156,6 +162,12 @@ impl PreparedProviderCall {
             .arg("--silent")
             .arg("--show-error")
             .arg("--fail-with-body")
+            .arg("--connect-timeout")
+            .arg("10")
+            .arg("--max-time")
+            .arg("45")
+            .arg("--write-out")
+            .arg("\n__MATH_ATOMS_HTTP_STATUS__:%{http_code}")
             .arg("--config")
             .arg(&config_path)
             .arg("--data-binary")
@@ -166,6 +178,12 @@ impl PreparedProviderCall {
                     .arg("--silent")
                     .arg("--show-error")
                     .arg("--fail-with-body")
+                    .arg("--connect-timeout")
+                    .arg("10")
+                    .arg("--max-time")
+                    .arg("45")
+                    .arg("--write-out")
+                    .arg("\n__MATH_ATOMS_HTTP_STATUS__:%{http_code}")
                     .arg("--config")
                     .arg(&config_path)
                     .arg("--data-binary")
@@ -179,13 +197,16 @@ impl PreparedProviderCall {
             )));
         }
         let output = output?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let (body, http_status) = split_http_status(&stdout);
         if !output.status.success() {
             return Err(ProviderError::CurlFailed {
                 code: output.status.code(),
+                http_status,
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                body: truncate_for_log(&redact_provider_body(&body, &api_key)),
             });
         }
-        let body = String::from_utf8_lossy(&output.stdout).to_string();
         parse_responses_text(&body)
     }
 }
@@ -231,6 +252,52 @@ fn unique_suffix() -> u128 {
 
 fn curl_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn split_http_status(stdout: &str) -> (String, Option<u16>) {
+    let marker = "\n__MATH_ATOMS_HTTP_STATUS__:";
+    if let Some(pos) = stdout.rfind(marker) {
+        let body = stdout[..pos].to_string();
+        let status = stdout[pos + marker.len()..].trim().parse::<u16>().ok();
+        return (body, status);
+    }
+    (stdout.to_string(), None)
+}
+
+fn truncate_for_log(body: &str) -> String {
+    const MAX: usize = 700;
+    if body.len() <= MAX {
+        body.to_string()
+    } else {
+        format!("{}...", &body[..MAX])
+    }
+}
+
+fn redact_provider_body(body: &str, api_key: &str) -> String {
+    let mut text = if api_key.is_empty() {
+        body.to_string()
+    } else {
+        body.replace(api_key, "[redacted]")
+    };
+    let marker = "Incorrect API key provided: ";
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find(marker) {
+        let start = cursor + offset;
+        let value_start = start + marker.len();
+        let Some(end_offset) = text[value_start..].find(". You can") else {
+            break;
+        };
+        let value_end = value_start + end_offset;
+        text.replace_range(value_start..value_end, "[redacted]");
+        cursor = value_start + "[redacted]".len();
+    }
+    text
 }
 
 fn provider_kind_from(value: &str) -> ProviderKind {
@@ -389,5 +456,35 @@ mod tests {
             parse_responses_text(r#"{"message":{"role":"assistant","content":"provider-ok"}}"#)
                 .unwrap();
         assert_eq!(text, "provider-ok");
+    }
+
+    #[test]
+    fn empty_pair_values_do_not_override_provider_defaults() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_MODEL", ""),
+            ("MATH_ATOMS_PROVIDER_URL", ""),
+            ("MATH_ATOMS_PROVIDER_KEY_ENV", ""),
+        ]);
+        assert_eq!(config.model, "gpt-5.5");
+        assert_eq!(config.endpoint, "https://api.openai.com/v1/responses");
+        assert_eq!(config.api_key_env, "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn http_status_marker_is_split_from_body() {
+        let (body, status) =
+            split_http_status("{\"error\":\"quota\"}\n__MATH_ATOMS_HTTP_STATUS__:429");
+        assert_eq!(body, "{\"error\":\"quota\"}");
+        assert_eq!(status, Some(429));
+    }
+
+    #[test]
+    fn provider_error_body_redacts_key_material() {
+        let body = "Incorrect API key provided: aa0bfd1f********gc8-. You can find your API key.";
+        let redacted = redact_provider_body(body, "real-secret");
+        assert_eq!(
+            redacted,
+            "Incorrect API key provided: [redacted]. You can find your API key."
+        );
     }
 }
