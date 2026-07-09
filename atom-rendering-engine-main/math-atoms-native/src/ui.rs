@@ -159,7 +159,10 @@ fn center_panel(app: &NativeApp) -> UxNode {
         .map(|env| {
             mini_card(
                 env.layer.label(),
-                &format!("{:?} {} -> {}", env.kind, env.source, env.target),
+                &format!(
+                    "T{} {:?} {} -> {}",
+                    env.thread_id, env.kind, env.source, env.target
+                ),
                 match env.layer {
                     math_atoms_core::BusLayer::L0Transport => teal(),
                     math_atoms_core::BusLayer::L1Message => red(),
@@ -188,6 +191,32 @@ fn center_panel(app: &NativeApp) -> UxNode {
                     layer_pill("L1", red()),
                     layer_pill("L2", amber()),
                     layer_pill("L3", blue()),
+                ],
+            ),
+            label("Fabric"),
+            UxNode::boxed(
+                Style::row().gap(8.0),
+                vec![
+                    metric(
+                        "threads",
+                        app.runtime.bus().threads().len().to_string(),
+                        teal(),
+                    ),
+                    metric(
+                        "intersections",
+                        app.runtime.bus().intersections().len().to_string(),
+                        amber(),
+                    ),
+                    metric(
+                        "preloads",
+                        app.runtime.bus().preloads().len().to_string(),
+                        blue(),
+                    ),
+                    metric(
+                        "pressure",
+                        app.runtime.bus().backpressure().len().to_string(),
+                        red(),
+                    ),
                 ],
             ),
             UxNode::boxed(

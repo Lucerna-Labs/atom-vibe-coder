@@ -7,5 +7,7 @@ The layer invariant is route-specific. A proof decision passes only when the act
 
 Provider execution is a continuing thread, not a side channel. A prepared provider call must be lifted through a parented L0 on-ramp from the pending proof route, scheduled through L1/L2/L3, and then return success or failure through the same route family before proof capture or blocking is allowed.
 
+Fabric state is runtime data. Threads form as envelopes flow, shared nodes become intersections, L2/L3 evidence produces preload plans, and blocked provider/store/proof messages emit backpressure vibrations that the native surface displays.
+
 [[bus:spiderweb]]
 [[spiderweb-proof-loop]]

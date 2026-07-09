@@ -11,7 +11,10 @@ pub mod provider;
 pub mod runtime;
 pub mod store;
 
-pub use bus::{BusLayer, BusMessageKind, Envelope, EnvelopeId, Ramp, SpiderwebBus};
+pub use bus::{
+    BackpressureSignal, BusLayer, BusMessageKind, Envelope, EnvelopeId, FabricSnapshot,
+    FabricThread, Intersection, PreloadPlan, Ramp, SpiderwebBus, ThreadId, TransferPolicy,
+};
 pub use domain::{
     atom_by_key, atoms, gates, mission, recipes, Atom, AtomLayer, Gate, Mission, Recipe,
     RecipeStatus,
