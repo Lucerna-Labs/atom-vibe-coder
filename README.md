@@ -18,6 +18,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 - The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
+- Atom stack order is a production gate. Recipes are scored by canonical stack order, proof state records the selected stack, and provider app-build gates reject shuffled or missing stacks.
 
 ## Product Mission
 

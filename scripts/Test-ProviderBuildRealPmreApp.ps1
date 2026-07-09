@@ -32,7 +32,7 @@ if ($MaxAttempts -lt 1) {
     throw "MaxAttempts must be at least 1"
 }
 
-$Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 bmp=pmre-task-board.bmp"
+$Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 stack=canonical bmp=pmre-task-board.bmp"
 $DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You convert plain user app requests into compact JSON product specs. Do not write code. Return exactly one fenced json code block and no prose."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
 
 function Convert-ToTomlPath([string]$Path) {
@@ -256,6 +256,25 @@ enum Filter {
     Open,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AtomStage {
+    Scan,
+    Project,
+    Compose,
+    Measure,
+    Preserve,
+    Order,
+}
+
+const ATOM_STACK: [AtomStage; 6] = [
+    AtomStage::Scan,
+    AtomStage::Project,
+    AtomStage::Compose,
+    AtomStage::Measure,
+    AtomStage::Preserve,
+    AtomStage::Order,
+];
+
 #[derive(Debug)]
 struct PmreTaskBoard {
     title: String,
@@ -295,6 +314,36 @@ impl PmreTaskBoard {
             .filter(|(_, task)| self.filter == Filter::All || !task.done)
             .collect()
     }
+}
+
+fn stack_is_canonical(stack: &[AtomStage]) -> bool {
+    stack
+        == [
+            AtomStage::Scan,
+            AtomStage::Project,
+            AtomStage::Compose,
+            AtomStage::Measure,
+            AtomStage::Preserve,
+            AtomStage::Order,
+        ]
+}
+
+fn stack_performance_score(stack: &[AtomStage]) -> usize {
+    stack
+        .iter()
+        .enumerate()
+        .map(|(index, stage)| {
+            let weight = match stage {
+                AtomStage::Scan => 7,
+                AtomStage::Project => 11,
+                AtomStage::Compose => 17,
+                AtomStage::Measure => 19,
+                AtomStage::Preserve => 23,
+                AtomStage::Order => 29,
+            };
+            (index + 1) * weight
+        })
+        .sum()
 }
 
 fn accent() -> Rgba {
@@ -439,6 +488,9 @@ fn type_text(app: &PmreTaskBoard, ui: &mut UiState, text: &str) {
 }
 
 fn main() {
+    assert!(stack_is_canonical(&ATOM_STACK));
+    assert!(stack_performance_score(&ATOM_STACK) >= 350);
+
     let mut app = PmreTaskBoard::from_spec();
     let mut ui = UiState::new(760, 520);
 
@@ -483,7 +535,7 @@ fn main() {
         std::fs::write(&bmp_path, frame.to_bmp(BG)).expect("write bmp");
     }
 
-    println!("MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 bmp=pmre-task-board.bmp");
+    println!("MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 stack=canonical bmp=pmre-task-board.bmp");
 }
 "@
 }

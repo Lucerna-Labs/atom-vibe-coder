@@ -27,7 +27,7 @@ $Specs = @(
     @{
         Name = "counter"
         Struct = "CounterApp"
-        Expected = "MATH_ATOMS_APP_OK counter total=4"
+        Expected = "MATH_ATOMS_APP_OK counter total=4 stack=canonical"
         Requirements = @(
             "store a vector of exactly four atom names",
             "compute the total through a method on CounterApp"
@@ -36,7 +36,7 @@ $Specs = @(
     @{
         Name = "todo"
         Struct = "TodoApp"
-        Expected = "MATH_ATOMS_APP_OK todo open=2 done=1"
+        Expected = "MATH_ATOMS_APP_OK todo open=2 done=1 stack=canonical"
         Requirements = @(
             "store three task records with done flags",
             "the task record must contain only one field named done with type bool",
@@ -47,7 +47,7 @@ $Specs = @(
     @{
         Name = "router"
         Struct = "RouterApp"
-        Expected = "MATH_ATOMS_APP_OK router health=200 atoms=3"
+        Expected = "MATH_ATOMS_APP_OK router health=200 atoms=3 stack=canonical"
         Requirements = @(
             "route /health to status 200",
             "define an Atom record with id: u32 and name: &'static str",
@@ -76,6 +76,8 @@ Do not use external crates, files, network, stdin, timers, unsafe, or platform A
 No compiler warnings are allowed: every field, method, import, variable, and struct must be used.
 Constructing a struct or deriving Debug is not enough to count as field usage; executable logic must read every field.
 Define a struct named $($Spec.Struct).
+Define a const ATOM_STACK with this exact ordered stack: scan -> project -> compose -> measure -> preserve -> order.
+Before printing, validate the stack in executable logic; a shuffled or missing atom stack must not pass.
 fn main must print exactly:
 $($Spec.Expected)
 Implementation requirements:
@@ -129,6 +131,25 @@ function Get-RustCode($ProviderText) {
     return $matches[$matches.Count - 1].Groups["code"].Value.Trim()
 }
 
+function Assert-CanonicalStackCode([string]$Code, [string]$Name) {
+    $stackStart = $Code.IndexOf("ATOM_STACK", [System.StringComparison]::OrdinalIgnoreCase)
+    if ($stackStart -lt 0) {
+        throw "$Name app is missing ATOM_STACK"
+    }
+    $required = @("scan", "project", "compose", "measure", "preserve", "order")
+    $last = $stackStart
+    foreach ($atom in $required) {
+        $idx = $Code.IndexOf($atom, $stackStart, [System.StringComparison]::OrdinalIgnoreCase)
+        if ($idx -lt 0) {
+            throw "$Name app ATOM_STACK is missing $atom"
+        }
+        if ($idx -le $last) {
+            throw "$Name app ATOM_STACK is not canonical order"
+        }
+        $last = $idx
+    }
+}
+
 function Invoke-Rustc($Source, $Exe, $AppDir) {
     $oldErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -173,6 +194,7 @@ try {
                 if ($code -notmatch [regex]::Escape($spec.Struct)) {
                     throw "$($spec.Name) app is missing $($spec.Struct)"
                 }
+                Assert-CanonicalStackCode $code $spec.Name
                 [System.IO.File]::WriteAllText($source, $code)
 
                 Push-Location $appDir

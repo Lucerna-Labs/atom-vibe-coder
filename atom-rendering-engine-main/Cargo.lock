@@ -463,6 +463,13 @@ dependencies = [
 [[package]]
 name = "math-atoms-core"
 version = "0.1.0"
+dependencies = [
+ "math-atoms-doctrine",
+]
+
+[[package]]
+name = "math-atoms-doctrine"
+version = "0.1.0"
 
 [[package]]
 name = "math-atoms-native"

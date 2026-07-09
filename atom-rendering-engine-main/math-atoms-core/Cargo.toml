@@ -6,3 +6,4 @@ license = "MIT"
 description = "Native Math Atoms Coder runtime: Spiderweb Bus, graph retrieval, provider setup, and proof state."
 
 [dependencies]
+math-atoms-doctrine = { path = "../math-atoms-doctrine" }

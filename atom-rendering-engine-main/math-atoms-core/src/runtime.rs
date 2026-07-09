@@ -144,8 +144,8 @@ impl MathAtomsRuntime {
             "math-atoms-runtime",
             intent,
         );
-        let atoms = classify_intent(intent);
-        let atom_body = atoms.join(",");
+        let intent_atoms = classify_intent(intent);
+        let atom_body = intent_atoms.join(",");
         let l1 = self.bus.l1_message(
             l0,
             BusMessageKind::IntentClassified,
@@ -153,7 +153,7 @@ impl MathAtomsRuntime {
             "wiki-graph",
             &atom_body,
         );
-        let evidence = self.graph.retrieve(intent, &atoms, 8);
+        let evidence = self.graph.retrieve(intent, &intent_atoms, 8);
         let evidence_ids: Vec<String> = evidence.iter().map(|item| item.node_id.clone()).collect();
         let l2 = self.bus.l2_flow(
             l1,
@@ -163,7 +163,8 @@ impl MathAtomsRuntime {
             "graph evidence ranked from atom and recipe relationships",
             &evidence_ids,
         );
-        let recipe = select_recipe(&atoms, &evidence, self.provider.is_ready());
+        let recipe = select_recipe(intent, &intent_atoms, &evidence, self.provider.is_ready());
+        let atom_stack = recipe_stack(recipe);
         let provider_result = if recipe.requires_provider || provider_requested(intent) {
             self.provider.prepare_call(intent, recipe.id, &evidence)
         } else {
@@ -225,6 +226,9 @@ impl MathAtomsRuntime {
                 recipe.id
             ));
         }
+        if stack_quality(&atom_stack, recipe.atoms) < 0 {
+            blockers.push(format!("{} has an invalid canonical atom stack", recipe.id));
+        }
 
         let l3 = self.bus.l3_orchestrate(
             l2,
@@ -278,7 +282,7 @@ impl MathAtomsRuntime {
         );
 
         self.state.selected_recipe = recipe.id.to_string();
-        self.state.selected_atoms = atoms.clone();
+        self.state.selected_atoms = atom_stack.clone();
         self.state.status = status;
         self.state.evidence = evidence.clone();
         self.state.blockers = blockers.clone();
@@ -292,7 +296,7 @@ impl MathAtomsRuntime {
 
         ProofRun {
             recipe_id: recipe.id.to_string(),
-            atom_keys: atoms,
+            atom_keys: atom_stack,
             evidence,
             provider_call,
             blockers,
@@ -596,7 +600,12 @@ fn provider_requested(intent: &str) -> bool {
         .any(|term| lower.contains(term))
 }
 
-fn select_recipe(atoms: &[String], evidence: &[Evidence], provider_ready: bool) -> &'static Recipe {
+fn select_recipe(
+    intent: &str,
+    atoms: &[String],
+    evidence: &[Evidence],
+    provider_ready: bool,
+) -> &'static Recipe {
     let mut candidates: Vec<(&Recipe, i32)> = recipes()
         .iter()
         .map(|recipe| {
@@ -616,7 +625,11 @@ fn select_recipe(atoms: &[String], evidence: &[Evidence], provider_ready: bool) 
             } else {
                 0
             };
-            let score = atom_overlap * 8 + evidence_score + provider_penalty - recipe.bonds as i32;
+            let stack_score = stack_quality(atoms, recipe.atoms);
+            let fit_bonus = intent_fit_bonus(intent, recipe);
+            let score =
+                atom_overlap * 8 + stack_score + evidence_score + fit_bonus + provider_penalty
+                    - recipe.bonds as i32;
             (recipe, score)
         })
         .collect();
@@ -627,6 +640,77 @@ fn select_recipe(atoms: &[String], evidence: &[Evidence], provider_ready: bool) 
             .then_with(|| a_recipe.id.cmp(b_recipe.id))
     });
     candidates[0].0
+}
+
+fn intent_fit_bonus(intent: &str, recipe: &Recipe) -> i32 {
+    let lower = intent.to_ascii_lowercase();
+    let renderer_terms = [
+        "renderer", "render", "artifact", "native", "pmre", "surface",
+    ]
+    .iter()
+    .any(|term| lower.contains(term));
+    match recipe.kind {
+        "renderer" if renderer_terms && lower.contains("only") => 95,
+        "renderer" if renderer_terms => 42,
+        "provider" if provider_requested(intent) => 35,
+        "retrieval"
+            if ["wiki", "graph", "rag"]
+                .iter()
+                .any(|term| lower.contains(term)) =>
+        {
+            14
+        }
+        "fabric"
+            if ["spiderweb", "bus", "route", "fabric"]
+                .iter()
+                .any(|term| lower.contains(term)) =>
+        {
+            14
+        }
+        "product" if renderer_terms && lower.contains("only") => -40,
+        "product"
+            if ["app", "build", "production", "dashboard", "usable"]
+                .iter()
+                .any(|term| lower.contains(term)) =>
+        {
+            16
+        }
+        _ => 0,
+    }
+}
+
+fn recipe_stack(recipe: &Recipe) -> Vec<String> {
+    recipe
+        .atoms
+        .iter()
+        .map(|atom| (*atom).to_string())
+        .collect()
+}
+
+fn stack_quality(observed: &[String], canonical: &[&str]) -> i32 {
+    if canonical.is_empty() {
+        return -100;
+    }
+    let mut score = canonical.len() as i32;
+    let mut last_pos: Option<usize> = None;
+    for atom in canonical {
+        if let Some(pos) = observed.iter().position(|seen| seen == atom) {
+            if let Some(last) = last_pos {
+                if pos > last {
+                    score += 6;
+                    if pos == last + 1 {
+                        score += 4;
+                    }
+                } else {
+                    score -= 8;
+                }
+            } else {
+                score += 3;
+            }
+            last_pos = Some(pos);
+        }
+    }
+    score
 }
 
 #[cfg(test)]
@@ -685,7 +769,40 @@ mod tests {
     fn production_app_build_is_the_product_mission() {
         let m = mission();
         assert!(m.body.contains("requested app"));
+        assert!(m.body.contains("canonical atom stacks"));
         assert_eq!(m.readiness_floor, "requested app behavior");
+    }
+
+    #[test]
+    fn stack_quality_rewards_canonical_order_over_same_atom_bag() {
+        let recipe = recipes()
+            .iter()
+            .find(|recipe| recipe.id == "production-app-runtime")
+            .unwrap();
+        let canonical = recipe_stack(recipe);
+        let mut reversed = canonical.clone();
+        reversed.reverse();
+        assert!(stack_quality(&canonical, recipe.atoms) > stack_quality(&reversed, recipe.atoms));
+    }
+
+    #[test]
+    fn renderer_only_intent_prefers_renderer_despite_product_stack_overlap() {
+        let atoms = classify_intent("native renderer artifact only");
+        let evidence = WikiGraph::seeded().retrieve("native renderer artifact only", &atoms, 8);
+        let recipe = select_recipe("native renderer artifact only", &atoms, &evidence, true);
+        assert_eq!(recipe.id, "native-atom-renderer");
+    }
+
+    #[test]
+    fn proof_state_records_selected_recipe_stack() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Build a provider api app with graph evidence and proof");
+        let recipe = recipes()
+            .iter()
+            .find(|recipe| recipe.id == runtime.state().selected_recipe)
+            .unwrap();
+        assert_eq!(runtime.state().selected_atoms, recipe_stack(recipe));
     }
 
     #[test]
