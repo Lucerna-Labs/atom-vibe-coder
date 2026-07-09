@@ -9,6 +9,7 @@ pub mod domain;
 pub mod graph;
 pub mod provider;
 pub mod runtime;
+pub mod store;
 
 pub use bus::{BusLayer, BusMessageKind, Envelope, EnvelopeId, Ramp, SpiderwebBus};
 pub use domain::{
@@ -18,3 +19,4 @@ pub use domain::{
 pub use graph::{Evidence, WikiGraph};
 pub use provider::{PreparedProviderCall, ProviderConfig, ProviderError, ProviderKind};
 pub use runtime::{MathAtomsRuntime, ProofRun, RuntimeState, RuntimeStatus};
+pub use store::{ProofRecord, ProofStore};

@@ -1,4 +1,6 @@
-use math_atoms_core::{MathAtomsRuntime, PreparedProviderCall, ProviderConfig, RuntimeStatus};
+use math_atoms_core::{
+    MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, RuntimeStatus,
+};
 use pmre_orchestrator::UiState;
 
 pub const INTENT_INPUT: u32 = 1;
@@ -15,6 +17,7 @@ pub fn default_intent() -> &'static str {
 #[derive(Clone, Debug)]
 pub struct NativeApp {
     pub runtime: MathAtomsRuntime,
+    pub store: Option<ProofStore>,
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
@@ -22,12 +25,21 @@ pub struct NativeApp {
 
 impl NativeApp {
     pub fn from_process_env() -> Self {
-        Self::new(ProviderConfig::from_process_env())
+        Self::new_with_store(
+            ProviderConfig::from_process_env(),
+            Some(ProofStore::new(ProofStore::default_path())),
+        )
     }
 
+    #[cfg(test)]
     pub fn new(provider: ProviderConfig) -> Self {
+        Self::new_with_store(provider, None)
+    }
+
+    pub fn new_with_store(provider: ProviderConfig, store: Option<ProofStore>) -> Self {
         Self {
             runtime: MathAtomsRuntime::new(provider),
+            store,
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output: "Provider has not been executed.".to_string(),
             provider_running: false,
@@ -44,15 +56,17 @@ impl NativeApp {
     pub fn run_current_intent(&mut self, ui: &UiState) {
         let intent = current_intent(ui);
         let proof = self.runtime.run_intent(&intent);
+        let store_result = self.append_proof_record();
         self.last_run_summary = if proof.blockers.is_empty() {
             format!(
-                "{} proven with {} evidence nodes through {} route envelopes.",
+                "{} proven with {} evidence nodes through {} route envelopes. {}",
                 proof.recipe_id,
                 proof.evidence.len(),
-                self.runtime.state().last_route.len()
+                self.runtime.state().last_route.len(),
+                store_result
             )
         } else {
-            format!("Blocked: {}", proof.blockers.join("; "))
+            format!("Blocked: {} {}", proof.blockers.join("; "), store_result)
         };
     }
 
@@ -76,6 +90,7 @@ impl NativeApp {
             Err(error) => format!("Provider blocked: {error:?}"),
         };
         self.provider_running = false;
+        let _ = self.append_proof_record();
     }
 
     pub fn status(&self) -> RuntimeStatus {
@@ -91,6 +106,26 @@ impl NativeApp {
             "provider:idle"
         } else {
             "provider:ran"
+        }
+    }
+
+    fn append_proof_record(&self) -> &'static str {
+        let Some(store) = &self.store else {
+            return "store:memory";
+        };
+        let state = self.runtime.state();
+        let record = ProofRecord {
+            recipe_id: state.selected_recipe.clone(),
+            status: state.status.as_str().to_string(),
+            atoms: state.selected_atoms.clone(),
+            evidence_count: state.evidence.len(),
+            blockers: state.blockers.clone(),
+            provider_state: self.provider_title_state().to_string(),
+            route_len: state.last_route.len(),
+        };
+        match store.append(&record) {
+            Ok(()) => "store:written",
+            Err(_) => "store:blocked",
         }
     }
 }
@@ -146,5 +181,54 @@ mod tests {
         assert_eq!(app.provider_title_state(), "provider:blocked");
         app.last_provider_output = "model response".to_string();
         assert_eq!(app.provider_title_state(), "provider:ran");
+    }
+
+    #[test]
+    fn native_run_writes_store_when_configured() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-native-store-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store.clone()),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        let text = store.read_to_string().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(text.contains("\"status\":\"proven\""));
+        assert!(text.contains("\"recipe_id\":"));
+    }
+
+    #[test]
+    fn provider_execution_state_is_persisted() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-provider-store-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store.clone()),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        app.last_provider_output = "Provider blocked: test".to_string();
+        let _ = app.append_proof_record();
+        let text = store.read_to_string().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(text.contains("\"provider_state\":\"provider:blocked\""));
     }
 }
