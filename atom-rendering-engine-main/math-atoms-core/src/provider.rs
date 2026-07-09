@@ -8,6 +8,7 @@ pub enum ProviderKind {
     OpenAiResponses,
     OllamaCloudChat,
     MistralChat,
+    DeepSeekChat,
     Custom,
 }
 
@@ -17,6 +18,7 @@ impl ProviderKind {
             Self::OpenAiResponses => "openai",
             Self::OllamaCloudChat => "ollama",
             Self::MistralChat => "mistral",
+            Self::DeepSeekChat => "deepseek",
             Self::Custom => "custom",
         }
     }
@@ -520,6 +522,9 @@ fn provider_kind_from(value: &str) -> ProviderKind {
         "mistral" | "mistral-ai" | "mistral_ai" | "vibe" | "mistral-vibe" => {
             ProviderKind::MistralChat
         }
+        "deepseek" | "deepseek-flash" | "deepseek_flash" | "deepseek-v4-flash" => {
+            ProviderKind::DeepSeekChat
+        }
         "custom" | "generic" | "compatible" | "openai-compatible" | "openai_chat"
         | "openai-chat" => ProviderKind::Custom,
         _ => ProviderKind::OpenAiResponses,
@@ -540,7 +545,9 @@ fn default_wire_format(kind: ProviderKind) -> ProviderWireFormat {
     match kind {
         ProviderKind::OpenAiResponses => ProviderWireFormat::OpenAiResponses,
         ProviderKind::OllamaCloudChat => ProviderWireFormat::OllamaChat,
-        ProviderKind::MistralChat | ProviderKind::Custom => ProviderWireFormat::ChatCompletions,
+        ProviderKind::MistralChat | ProviderKind::DeepSeekChat | ProviderKind::Custom => {
+            ProviderWireFormat::ChatCompletions
+        }
     }
 }
 
@@ -549,6 +556,7 @@ fn default_model(kind: ProviderKind) -> &'static str {
         ProviderKind::OpenAiResponses => "gpt-5.5",
         ProviderKind::OllamaCloudChat => "gpt-oss:120b",
         ProviderKind::MistralChat => "mistral-large-latest",
+        ProviderKind::DeepSeekChat => "deepseek-v4-flash",
         ProviderKind::Custom => "",
     }
 }
@@ -558,6 +566,7 @@ fn default_endpoint(kind: ProviderKind) -> &'static str {
         ProviderKind::OpenAiResponses => "https://api.openai.com/v1/responses",
         ProviderKind::OllamaCloudChat => "https://ollama.com/api/chat",
         ProviderKind::MistralChat => "https://api.mistral.ai/v1/chat/completions",
+        ProviderKind::DeepSeekChat => "https://api.deepseek.com/chat/completions",
         ProviderKind::Custom => "",
     }
 }
@@ -567,6 +576,7 @@ fn default_key_env(kind: ProviderKind) -> &'static str {
         ProviderKind::OpenAiResponses => "OPENAI_API_KEY",
         ProviderKind::OllamaCloudChat => "OLLAMA_API_KEY",
         ProviderKind::MistralChat => "MISTRAL_API_KEY",
+        ProviderKind::DeepSeekChat => "DEEPSEEK_API_KEY",
         ProviderKind::Custom => "MATH_ATOMS_PROVIDER_API_KEY",
     }
 }
@@ -784,6 +794,25 @@ mod tests {
         assert_eq!(call.endpoint, "https://api.mistral.ai/v1/chat/completions");
         assert!(call.body.contains("\"messages\""));
         assert!(call.body.contains("\"role\":\"user\""));
+        assert!(!call.body.contains("secret"));
+    }
+
+    #[test]
+    fn deepseek_provider_uses_flash_chat_profile() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "deepseek"),
+            ("DEEPSEEK_API_KEY", "secret"),
+        ]);
+        let call = config
+            .prepare_call("build a toy app", "provider-model-loop", &[])
+            .unwrap();
+        assert_eq!(config.kind, ProviderKind::DeepSeekChat);
+        assert_eq!(config.wire_format, ProviderWireFormat::ChatCompletions);
+        assert_eq!(config.model, "deepseek-v4-flash");
+        assert_eq!(call.endpoint, "https://api.deepseek.com/chat/completions");
+        assert!(call.body.contains("\"model\":\"deepseek-v4-flash\""));
+        assert!(call.body.contains("\"stream\":false"));
+        assert!(!call.body.contains("deepseek-v4-pro"));
         assert!(!call.body.contains("secret"));
     }
 

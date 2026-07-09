@@ -42,6 +42,7 @@ Provider selection:
 $env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
 $env:MATH_ATOMS_PROVIDER_KIND="ollama"  # OLLAMA_API_KEY, Ollama Cloud chat API
 $env:MATH_ATOMS_PROVIDER_KIND="mistral" # MISTRAL_API_KEY, Mistral chat completions API
+$env:MATH_ATOMS_PROVIDER_KIND="deepseek" # DEEPSEEK_API_KEY, DeepSeek V4 Flash chat API
 
 # Any OpenAI-compatible/custom provider:
 $env:MATH_ATOMS_PROVIDER_KIND="custom"
@@ -56,6 +57,12 @@ $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{promp
 ```
 
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
+
+Run a real DeepSeek Flash model test that asks the provider to generate a dependency-free Rust toy app, compiles it with `rustc`, runs it, and verifies output:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-DeepSeekToyApp.ps1
+```
 
 Generate the native artifact:
 
