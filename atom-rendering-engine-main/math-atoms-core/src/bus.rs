@@ -181,6 +181,18 @@ impl SpiderwebBus {
         .all(|layer| self.contains_layer(layer))
     }
 
+    pub fn route_contains_all_layers(&self, id: EnvelopeId) -> bool {
+        let route = self.route_for(id);
+        [
+            BusLayer::L0Transport,
+            BusLayer::L1Message,
+            BusLayer::L2Flow,
+            BusLayer::L3Orchestration,
+        ]
+        .into_iter()
+        .all(|layer| route.iter().any(|env| env.layer == layer))
+    }
+
     pub fn route_for(&self, id: EnvelopeId) -> Vec<&Envelope> {
         let mut route = Vec::new();
         let mut cursor = Some(id);
@@ -211,5 +223,32 @@ impl SpiderwebBus {
             evidence_ids: draft.evidence_ids.to_vec(),
         });
         id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layer_check_is_route_specific_not_historical() {
+        let mut bus = SpiderwebBus::new();
+        let l0 = bus.l0_transport(BusMessageKind::IntentIngress, "a", "b", "intent");
+        let l1 = bus.l1_message(l0, BusMessageKind::IntentClassified, "b", "c", "atoms");
+        let l2 = bus.l2_flow(
+            l1,
+            BusMessageKind::EvidenceRetrieved,
+            "c",
+            "d",
+            "evidence",
+            &[],
+        );
+        let l3 = bus.l3_orchestrate(l2, BusMessageKind::RecipeSelected, "d", "e", "recipe", &[]);
+        let orphan_l3 =
+            bus.l3_orchestrate(0, BusMessageKind::ProofBlocked, "x", "y", "orphan", &[]);
+
+        assert!(bus.contains_all_layers());
+        assert!(bus.route_contains_all_layers(l3));
+        assert!(!bus.route_contains_all_layers(orphan_l3));
     }
 }

@@ -188,7 +188,7 @@ impl MathAtomsRuntime {
             recipe.id,
             &evidence_ids,
         );
-        if !self.bus.contains_all_layers() {
+        if !self.bus.route_contains_all_layers(l3) {
             blockers.push("Spiderweb Bus route did not touch all L0-L3 layers".to_string());
         }
         let status = if blockers.is_empty() {
