@@ -311,6 +311,23 @@ fn provider_output_hash(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pmre_orchestrator::{handle_event, widget_rect, UiEvent};
+
+    fn click_control(app: &NativeApp, ui: &mut UiState, id: u32) {
+        let rect = {
+            let build = |state: &UiState| crate::ui::build(app, state);
+            widget_rect(&build, ui, id).expect("control should have a solved rectangle")
+        };
+        let x = (rect.min.x + rect.max.x) * 0.5;
+        let y = (rect.min.y + rect.max.y) * 0.5;
+        {
+            let build = |state: &UiState| crate::ui::build(app, state);
+            handle_event(ui, &build, UiEvent::PointerMove(x, y));
+            handle_event(ui, &build, UiEvent::PointerDown(x, y));
+            handle_event(ui, &build, UiEvent::PointerUp(x, y));
+        }
+        assert_eq!(ui.take_click(), Some(id));
+    }
 
     #[test]
     fn native_run_uses_core_bus_and_provider_readiness() {
@@ -398,6 +415,41 @@ mod tests {
         assert_eq!(app.status(), RuntimeStatus::Draft);
         assert_eq!(app.provider_title_state(), "provider:idle");
         assert!(app.last_run_summary.contains("Provider config applied"));
+    }
+
+    #[test]
+    fn visible_controls_hit_test_and_dispatch() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let mut ui = UiState::new(1600, 1000);
+        app.seed_input(&mut ui);
+        ui.inputs.insert(
+            PROVIDER_KEY_ENV_INPUT,
+            format!("MATH_ATOMS_MISSING_TEST_KEY_{}", std::process::id()),
+        );
+
+        ui.scrolls.insert(LEFT_SCROLL, 500.0);
+        click_control(&app, &mut ui, APPLY_PROVIDER);
+        app.apply_provider_config(&ui);
+        assert_eq!(app.status(), RuntimeStatus::Draft);
+
+        ui.scrolls.insert(LEFT_SCROLL, 0.0);
+        click_control(&app, &mut ui, RUN_LOOP);
+        app.run_current_intent(&ui);
+        assert!(!app.runtime.state().last_route.is_empty());
+
+        click_control(&app, &mut ui, CAPTURE_PROOF);
+        app.capture_current_proof();
+        assert!(app
+            .last_run_summary
+            .contains("Captured current proof route"));
+
+        click_control(&app, &mut ui, EXEC_PROVIDER);
+        assert!(app.begin_provider_execution().is_none());
+        assert_eq!(app.provider_title_state(), "provider:blocked");
+
+        click_control(&app, &mut ui, MARK_DRIFT);
+        app.mark_drift();
+        assert_eq!(app.status(), RuntimeStatus::DriftFlagged);
     }
 
     #[test]
