@@ -701,13 +701,11 @@ mod tests {
         assert_eq!(ui.take_click(), Some(id));
     }
 
-    fn tree_contains_text(node: &UxNode, needle: &str) -> bool {
+    fn tree_joined_text(node: &UxNode) -> String {
         match node {
-            UxNode::Box { children, .. } => children
-                .iter()
-                .any(|child| tree_contains_text(child, needle)),
-            UxNode::Text { content, .. } => content.contains(needle),
-            UxNode::Rich { spans, .. } => spans.iter().any(|span| span.text.contains(needle)),
+            UxNode::Box { children, .. } => children.iter().map(tree_joined_text).collect(),
+            UxNode::Text { content, .. } => content.clone(),
+            UxNode::Rich { spans, .. } => spans.iter().map(|span| span.text.as_str()).collect(),
         }
     }
 
@@ -894,14 +892,15 @@ mod tests {
         app.seed_input(&mut ui);
         ui.inputs.insert(INTENT_INPUT, "abc".to_string());
         ui.focused = Some(INTENT_INPUT);
+        ui.input_carets.insert(INTENT_INPUT, 1);
         ui.animation_time = 0.0;
 
         let tree = crate::ui::build(&app, &ui);
-        assert!(tree_contains_text(&tree, "abc|"));
+        assert!(tree_joined_text(&tree).contains("a|bc"));
 
         ui.focused = None;
         let tree = crate::ui::build(&app, &ui);
-        assert!(!tree_contains_text(&tree, "abc|"));
+        assert!(!tree_joined_text(&tree).contains("a|bc"));
     }
 
     #[test]

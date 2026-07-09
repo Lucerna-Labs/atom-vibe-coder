@@ -543,6 +543,7 @@ fn make_span(text: &str, inh: Inherited) -> Span {
         text: text.to_string(),
         size: inh.font_size,
         color: inh.color.with_alpha(inh.color.a * inh.opacity),
+        background: None,
         bold: inh.bold,
         underline: inh.underline,
     }

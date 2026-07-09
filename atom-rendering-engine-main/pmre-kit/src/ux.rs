@@ -228,6 +228,7 @@ pub struct Span {
     pub text: String,
     pub size: f32,
     pub color: Rgba,
+    pub background: Option<Rgba>,
     pub bold: bool,
     pub underline: bool,
 }
@@ -238,9 +239,14 @@ impl Span {
             text: text.into(),
             size,
             color,
+            background: None,
             bold: false,
             underline: false,
         }
+    }
+    pub fn background(mut self, color: Rgba) -> Span {
+        self.background = Some(color);
+        self
     }
     pub fn bold(mut self) -> Span {
         self.bold = true;

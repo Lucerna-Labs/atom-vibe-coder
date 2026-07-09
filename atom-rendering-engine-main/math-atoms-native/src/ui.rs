@@ -9,7 +9,7 @@ use crate::model::{
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
-    ux::{Align, Dim, Edges, Justify, Style, UxNode},
+    ux::{Align, Dim, Edges, Justify, Span, Style, UxNode},
     Rgba,
 };
 use pmre_orchestrator::UiState;
@@ -825,7 +825,6 @@ fn provider_output_preview(app: &NativeApp) -> UxNode {
 }
 
 fn input_box(ui: &UiState) -> UxNode {
-    let text = focused_input_text(ui, INTENT_INPUT);
     UxNode::boxed(
         Style::col()
             .input(INTENT_INPUT)
@@ -841,12 +840,11 @@ fn input_box(ui: &UiState) -> UxNode {
                     line()
                 },
             ),
-        vec![UxNode::text(text, 14.0, ink())],
+        vec![focused_input_node(ui, INTENT_INPUT, 14.0)],
     )
 }
 
 fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
-    let text = focused_input_text(ui, id);
     UxNode::boxed(
         Style::col().gap(4.0),
         vec![
@@ -866,18 +864,69 @@ fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
                             line()
                         },
                     ),
-                vec![UxNode::text(text, 11.0, ink())],
+                vec![focused_input_node(ui, id, 11.0)],
             ),
         ],
     )
 }
 
-fn focused_input_text(ui: &UiState, id: u32) -> String {
-    let mut text = ui.input_text(id).to_string();
-    if ui.is_focused(id) && caret_visible(ui) {
-        text.push('|');
+fn focused_input_node(ui: &UiState, id: u32, size: f32) -> UxNode {
+    let text = ui.input_text(id);
+    if !ui.is_focused(id) {
+        return UxNode::text(text, size, ink());
     }
-    text
+
+    let mut spans = Vec::new();
+    if let Some((start, end)) = ui.input_selection(id) {
+        push_span(&mut spans, slice_chars(text, 0, start), size, ink());
+        spans.push(
+            Span::new(slice_chars(text, start, end), size, Rgba::rgb8(10, 14, 18))
+                .background(Rgba::new(0.98, 0.76, 0.28, 0.74)),
+        );
+        push_span(
+            &mut spans,
+            slice_chars(text, end, char_len(text)),
+            size,
+            ink(),
+        );
+        return UxNode::rich(spans);
+    }
+
+    let caret = ui.input_caret(id);
+    push_span(&mut spans, slice_chars(text, 0, caret), size, ink());
+    if caret_visible(ui) {
+        spans.push(Span::new("|", size, lamp()).bold());
+    }
+    push_span(
+        &mut spans,
+        slice_chars(text, caret, char_len(text)),
+        size,
+        ink(),
+    );
+    UxNode::rich(spans)
+}
+
+fn push_span(spans: &mut Vec<Span>, text: &str, size: f32, color: Rgba) {
+    if !text.is_empty() {
+        spans.push(Span::new(text, size, color));
+    }
+}
+
+fn char_len(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn char_to_byte(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .nth(char_idx)
+        .unwrap_or(text.len())
+}
+
+fn slice_chars(text: &str, start: usize, end: usize) -> &str {
+    let a = char_to_byte(text, start);
+    let b = char_to_byte(text, end.max(start));
+    &text[a..b]
 }
 
 fn caret_visible(ui: &UiState) -> bool {

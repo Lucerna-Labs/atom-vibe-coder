@@ -133,6 +133,9 @@ fn paint_one_box<S: Surface>(surf: &mut S, laid: &LaidBox) {
                 let (asc_l, desc_l) = text::v_metrics(max_size);
                 let baseline = y + (line_h - (asc_l + desc_l)) * 0.5 + asc_l;
                 for p in &line.pieces {
+                    if let Some(bg) = p.background {
+                        fill_rect(surf, x0 + p.x, y, p.width, line_h, bg, 2.0);
+                    }
                     let (asc_p, _) = text::v_metrics_styled(p.size, p.bold);
                     let origin = Vec2::new(x0 + p.x, baseline - asc_p);
                     text::draw_styled(
@@ -530,6 +533,14 @@ pub struct UiState {
     pub focused: Option<u32>,
     /// Text contents per input field id.
     pub inputs: HashMap<u32, String>,
+    /// Caret position per input field id, measured in Unicode scalar positions.
+    pub input_carets: HashMap<u32, usize>,
+    /// Selection anchor/focus per input field id, measured in Unicode scalar positions.
+    pub input_selections: HashMap<u32, (usize, usize)>,
+    /// Input selection currently being extended by pointer drag.
+    pub input_drag_anchor: Option<(u32, usize)>,
+    /// Text copied or cut by the UI since it was last bridged to the host clipboard.
+    pub clipboard_out: Option<String>,
     /// Input field that received Enter since it was last polled.
     pub submit: Option<u32>,
     /// Monotonic animation clock in seconds for renderer-owned visual effects.
@@ -554,6 +565,10 @@ impl Default for UiState {
             drag_grab: 0.0,
             focused: None,
             inputs: HashMap::new(),
+            input_carets: HashMap::new(),
+            input_selections: HashMap::new(),
+            input_drag_anchor: None,
+            clipboard_out: None,
             submit: None,
             animation_time: 0.0,
         }
@@ -606,8 +621,32 @@ impl UiState {
     pub fn input_text(&self, id: u32) -> &str {
         self.inputs.get(&id).map(String::as_str).unwrap_or("")
     }
+    pub fn input_caret(&self, id: u32) -> usize {
+        self.input_carets
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| char_len(self.input_text(id)))
+            .min(char_len(self.input_text(id)))
+    }
+    pub fn input_selection(&self, id: u32) -> Option<(usize, usize)> {
+        let len = char_len(self.input_text(id));
+        let (a, b) = self.input_selections.get(&id).copied()?;
+        let start = a.min(b).min(len);
+        let end = a.max(b).min(len);
+        (start < end).then_some((start, end))
+    }
+    pub fn selected_text(&self) -> Option<String> {
+        let id = self.focused?;
+        let (start, end) = self.input_selection(id)?;
+        Some(slice_chars(self.input_text(id), start, end).to_string())
+    }
+    pub fn take_clipboard_out(&mut self) -> Option<String> {
+        self.clipboard_out.take()
+    }
     pub fn clear_input(&mut self, id: u32) {
         self.inputs.remove(&id);
+        self.input_carets.remove(&id);
+        self.input_selections.remove(&id);
     }
     /// The input field that received Enter since the last poll.
     pub fn take_submit(&mut self) -> Option<u32> {
@@ -627,10 +666,195 @@ pub enum UiEvent {
     Char(char),
     /// Delete the last character of the focused input.
     Backspace,
+    /// Delete the selected range or the character after the caret.
+    Delete,
+    /// Move the focused input caret one character left.
+    MoveLeft {
+        shift: bool,
+    },
+    /// Move the focused input caret one character right.
+    MoveRight {
+        shift: bool,
+    },
+    /// Select all text in the focused input.
+    SelectAll,
+    /// Copy the selected text from the focused input.
+    Copy,
+    /// Cut the selected text from the focused input.
+    Cut,
+    /// Paste host clipboard text into the focused input.
+    Paste(String),
     /// Enter pressed; marks the focused input as submitted.
     Enter,
     /// Advance renderer-owned animation time by this many seconds.
     Tick(f32),
+}
+
+fn char_len(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn char_to_byte(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .nth(char_idx)
+        .unwrap_or(text.len())
+}
+
+fn slice_chars(text: &str, start: usize, end: usize) -> &str {
+    let a = char_to_byte(text, start);
+    let b = char_to_byte(text, end.max(start));
+    &text[a..b]
+}
+
+fn sanitize_input_text(text: &str) -> String {
+    text.chars()
+        .filter_map(|ch| match ch {
+            '\0' => None,
+            '\r' => Some('\n'),
+            '\n' | '\t' => Some(ch),
+            _ if ch.is_control() => None,
+            _ => Some(ch),
+        })
+        .collect()
+}
+
+fn clamp_input_caret(state: &UiState, id: u32, caret: usize) -> usize {
+    caret.min(char_len(state.input_text(id)))
+}
+
+fn set_input_caret(state: &mut UiState, id: u32, caret: usize, keep_selection: bool) {
+    let caret = clamp_input_caret(state, id, caret);
+    state.input_carets.insert(id, caret);
+    if !keep_selection {
+        state.input_selections.remove(&id);
+    }
+}
+
+fn set_input_selection(state: &mut UiState, id: u32, anchor: usize, focus: usize) {
+    let anchor = clamp_input_caret(state, id, anchor);
+    let focus = clamp_input_caret(state, id, focus);
+    state.input_carets.insert(id, focus);
+    if anchor == focus {
+        state.input_selections.remove(&id);
+    } else {
+        state.input_selections.insert(id, (anchor, focus));
+    }
+}
+
+fn delete_input_selection(state: &mut UiState, id: u32) -> bool {
+    let Some((start, end)) = state.input_selection(id) else {
+        return false;
+    };
+    let text = state.inputs.entry(id).or_default();
+    let a = char_to_byte(text, start);
+    let b = char_to_byte(text, end);
+    text.replace_range(a..b, "");
+    state.input_carets.insert(id, start);
+    state.input_selections.remove(&id);
+    true
+}
+
+fn insert_input_text(state: &mut UiState, id: u32, incoming: &str) {
+    let incoming = sanitize_input_text(incoming);
+    if incoming.is_empty() {
+        return;
+    }
+    delete_input_selection(state, id);
+    let caret = clamp_input_caret(state, id, state.input_caret(id));
+    let text = state.inputs.entry(id).or_default();
+    let at = char_to_byte(text, caret);
+    text.insert_str(at, &incoming);
+    state.input_carets.insert(id, caret + char_len(&incoming));
+}
+
+fn backspace_input(state: &mut UiState, id: u32) {
+    if delete_input_selection(state, id) {
+        return;
+    }
+    let caret = state.input_caret(id);
+    if caret == 0 {
+        return;
+    }
+    let text = state.inputs.entry(id).or_default();
+    let a = char_to_byte(text, caret - 1);
+    let b = char_to_byte(text, caret);
+    text.replace_range(a..b, "");
+    state.input_carets.insert(id, caret - 1);
+}
+
+fn delete_forward_input(state: &mut UiState, id: u32) {
+    if delete_input_selection(state, id) {
+        return;
+    }
+    let caret = state.input_caret(id);
+    let len = char_len(state.input_text(id));
+    if caret >= len {
+        return;
+    }
+    let text = state.inputs.entry(id).or_default();
+    let a = char_to_byte(text, caret);
+    let b = char_to_byte(text, caret + 1);
+    text.replace_range(a..b, "");
+    state.input_carets.insert(id, caret);
+}
+
+fn move_input_caret(state: &mut UiState, id: u32, right: bool, shift: bool) {
+    if !shift {
+        if let Some((start, end)) = state.input_selection(id) {
+            set_input_caret(state, id, if right { end } else { start }, false);
+            return;
+        }
+    }
+    let current = state.input_caret(id);
+    let len = char_len(state.input_text(id));
+    let next = if right {
+        (current + 1).min(len)
+    } else {
+        current.saturating_sub(1)
+    };
+    if shift {
+        let anchor = state
+            .input_selections
+            .get(&id)
+            .map(|(anchor, _)| *anchor)
+            .unwrap_or(current);
+        set_input_selection(state, id, anchor, next);
+    } else {
+        set_input_caret(state, id, next, false);
+    }
+}
+
+fn select_all_input(state: &mut UiState, id: u32) {
+    set_input_selection(state, id, 0, char_len(state.input_text(id)));
+}
+
+fn selected_input_text(state: &UiState, id: u32) -> Option<String> {
+    let (start, end) = state.input_selection(id)?;
+    Some(slice_chars(state.input_text(id), start, end).to_string())
+}
+
+fn input_caret_from_pointer(state: &UiState, boxes: &[LaidBox], id: u32, x: f32) -> usize {
+    let Some(b) = boxes.iter().find(|b| b.id == Some(id)) else {
+        return state.input_caret(id);
+    };
+    let text = state.input_text(id);
+    let len = char_len(text);
+    if len == 0 {
+        return 0;
+    }
+    let target = (x - b.rect.min.x - 10.0).max(0.0);
+    let mut best = 0usize;
+    let mut best_dist = f32::INFINITY;
+    for idx in 0..=len {
+        let prefix = slice_chars(text, 0, idx);
+        let dist = (text::advance(prefix, 14.0) - target).abs();
+        if dist < best_dist {
+            best = idx;
+            best_dist = dist;
+        }
+    }
+    best
 }
 
 fn with_design_customizer(root: UxNode, state: &UiState) -> UxNode {
@@ -1158,12 +1382,19 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
                 return;
             }
             let boxes = solve_for(build, state);
+            if let Some((id, anchor)) = state.input_drag_anchor {
+                let focus = input_caret_from_pointer(state, &boxes, id, x);
+                set_input_selection(state, id, anchor, focus);
+                state.hover = layout::hit_test(&boxes, x, y).map(|(id, _)| id);
+                return;
+            }
             state.hover = layout::hit_test(&boxes, x, y).map(|(id, _)| id);
         }
         UiEvent::PointerDown(x, y) => {
             let boxes = solve_for(build, state);
             state.drag = None;
             state.slider_drag = None;
+            state.input_drag_anchor = None;
             for b in &boxes {
                 let Some(id) = b.id else { continue };
                 if let Some((bar_x, _tt, _th, thumb_y, thumb_h, _max)) =
@@ -1185,6 +1416,11 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
                 Some((id, Role::Input)) => Some(id),
                 _ => None,
             };
+            if let Some((id, Role::Input)) = hit {
+                let caret = input_caret_from_pointer(state, &boxes, id, x);
+                set_input_caret(state, id, caret, false);
+                state.input_drag_anchor = Some((id, caret));
+            }
             if let Some((id, Role::Slider)) = hit {
                 state.slider_drag = Some(id);
                 update_slider_from_x(state, &boxes, id, x);
@@ -1196,6 +1432,7 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
             }
         }
         UiEvent::PointerUp(x, y) => {
+            state.input_drag_anchor = None;
             if state.drag.is_some() {
                 state.drag = None;
                 state.pressed = None;
@@ -1248,13 +1485,49 @@ pub fn handle_event(state: &mut UiState, build: &dyn Fn(&UiState) -> UxNode, ev:
         UiEvent::Char(c) => {
             if let Some(id) = state.focused {
                 if !c.is_control() {
-                    state.inputs.entry(id).or_default().push(c);
+                    insert_input_text(state, id, &c.to_string());
                 }
             }
         }
         UiEvent::Backspace => {
             if let Some(id) = state.focused {
-                state.inputs.entry(id).or_default().pop();
+                backspace_input(state, id);
+            }
+        }
+        UiEvent::Delete => {
+            if let Some(id) = state.focused {
+                delete_forward_input(state, id);
+            }
+        }
+        UiEvent::MoveLeft { shift } => {
+            if let Some(id) = state.focused {
+                move_input_caret(state, id, false, shift);
+            }
+        }
+        UiEvent::MoveRight { shift } => {
+            if let Some(id) = state.focused {
+                move_input_caret(state, id, true, shift);
+            }
+        }
+        UiEvent::SelectAll => {
+            if let Some(id) = state.focused {
+                select_all_input(state, id);
+            }
+        }
+        UiEvent::Copy => {
+            if let Some(id) = state.focused {
+                state.clipboard_out = selected_input_text(state, id);
+            }
+        }
+        UiEvent::Cut => {
+            if let Some(id) = state.focused {
+                state.clipboard_out = selected_input_text(state, id);
+                delete_input_selection(state, id);
+            }
+        }
+        UiEvent::Paste(text) => {
+            if let Some(id) = state.focused {
+                insert_input_text(state, id, &text);
             }
         }
         UiEvent::Enter => {
@@ -1304,7 +1577,7 @@ fn draw_scrollbars(fb: &mut Framebuffer, boxes: &[LaidBox], state: &UiState, s: 
     }
 }
 
-fn fill_rect(fb: &mut Framebuffer, x: f32, y: f32, w: f32, h: f32, color: Rgba, radius: f32) {
+fn fill_rect<S: Surface>(fb: &mut S, x: f32, y: f32, w: f32, h: f32, color: Rgba, radius: f32) {
     let cmd = DrawCmd::new(
         Shape::RoundedRect {
             half: Vec2::new(w / 2.0, h / 2.0),
@@ -1462,5 +1735,47 @@ mod banded_render_tests {
             .pixels()
             .iter()
             .any(|p| p.r > 0.10 || p.g > 0.10 || p.b > 0.10));
+    }
+
+    #[test]
+    fn input_editor_supports_caret_selection_delete_and_clipboard() {
+        const INPUT_ID: u32 = 7;
+        let build = |_: &UiState| {
+            UxNode::boxed(
+                Style::col()
+                    .input(INPUT_ID)
+                    .w(Dim::Px(240.0))
+                    .h(Dim::Px(38.0)),
+                vec![UxNode::text("field", 14.0, Rgba::rgb8(240, 240, 240))],
+            )
+        };
+        let mut ui = UiState::new(320, 80);
+        ui.focused = Some(INPUT_ID);
+        ui.inputs.insert(INPUT_ID, "abcd".to_string());
+        ui.input_carets.insert(INPUT_ID, 2);
+
+        handle_event(&mut ui, &build, UiEvent::Char('X'));
+        assert_eq!(ui.input_text(INPUT_ID), "abXcd");
+        assert_eq!(ui.input_caret(INPUT_ID), 3);
+
+        handle_event(&mut ui, &build, UiEvent::SelectAll);
+        assert_eq!(ui.input_selection(INPUT_ID), Some((0, 5)));
+        handle_event(&mut ui, &build, UiEvent::Copy);
+        assert_eq!(ui.take_clipboard_out().as_deref(), Some("abXcd"));
+
+        handle_event(&mut ui, &build, UiEvent::Cut);
+        assert_eq!(ui.take_clipboard_out().as_deref(), Some("abXcd"));
+        assert_eq!(ui.input_text(INPUT_ID), "");
+        assert_eq!(ui.input_caret(INPUT_ID), 0);
+
+        handle_event(&mut ui, &build, UiEvent::Paste("xy".to_string()));
+        assert_eq!(ui.input_text(INPUT_ID), "xy");
+        handle_event(&mut ui, &build, UiEvent::MoveLeft { shift: false });
+        handle_event(&mut ui, &build, UiEvent::Char('Z'));
+        assert_eq!(ui.input_text(INPUT_ID), "xZy");
+        handle_event(&mut ui, &build, UiEvent::Backspace);
+        assert_eq!(ui.input_text(INPUT_ID), "xy");
+        handle_event(&mut ui, &build, UiEvent::Delete);
+        assert_eq!(ui.input_text(INPUT_ID), "x");
     }
 }

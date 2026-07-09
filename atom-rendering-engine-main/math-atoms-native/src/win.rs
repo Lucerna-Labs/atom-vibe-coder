@@ -104,6 +104,12 @@ extern "system" {
     fn SetWindowTextW(hwnd: Hwnd, text: *const u16) -> i32;
     fn SetProcessDpiAwarenessContext(ctx: isize) -> i32;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
+    fn GetKeyState(key: i32) -> i16;
+    fn OpenClipboard(hwnd: Hwnd) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn GetClipboardData(format: u32) -> *mut c_void;
+    fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
     fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
     fn SetCapture(hwnd: Hwnd) -> Hwnd;
     fn ReleaseCapture() -> i32;
@@ -158,6 +164,10 @@ extern "system" {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(name: *const u16) -> Hinstance;
+    fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+    fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+    fn GlobalUnlock(mem: *mut c_void) -> i32;
+    fn GlobalFree(mem: *mut c_void) -> *mut c_void;
 }
 
 const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
@@ -190,6 +200,17 @@ const IDC_ARROW: usize = 32512;
 const PROVIDER_TIMER_ID: usize = 77;
 const DESIGN_TIMER_ID: usize = 78;
 const ANIMATION_TIMER_ID: usize = 79;
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 0x0002;
+const VK_CONTROL: i32 = 0x11;
+const VK_SHIFT: i32 = 0x10;
+const VK_DELETE: usize = 0x2E;
+const VK_LEFT: usize = 0x25;
+const VK_RIGHT: usize = 0x27;
+const VK_A: usize = 0x41;
+const VK_C: usize = 0x43;
+const VK_V: usize = 0x56;
+const VK_X: usize = 0x58;
 
 struct App {
     width: u32,
@@ -201,6 +222,7 @@ struct App {
     tracking_leave: bool,
     provider_rx: Option<Receiver<Result<String, math_atoms_core::ProviderError>>>,
     design_rx: Option<Receiver<Result<String, String>>>,
+    suppress_ctrl_char: Option<u32>,
 }
 
 thread_local! {
@@ -241,6 +263,7 @@ pub fn run() {
                 tracking_leave: false,
                 provider_rx: None,
                 design_rx: None,
+                suppress_ctrl_char: None,
             });
         });
 
@@ -395,9 +418,26 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
         }
         WM_CHAR => {
             let code = wp as u32;
+            let suppressed = APP.with(|cell| {
+                if let Some(app) = cell.borrow_mut().as_mut() {
+                    if app.suppress_ctrl_char == Some(code) {
+                        app.suppress_ctrl_char = None;
+                        return true;
+                    }
+                }
+                false
+            });
+            if suppressed {
+                return 0;
+            }
             let ev = match code {
+                1 => Some(UiEvent::SelectAll),
+                3 => Some(UiEvent::Copy),
                 8 => Some(UiEvent::Backspace),
                 13 => Some(UiEvent::Enter),
+                22 => clipboard_text(hwnd).map(UiEvent::Paste),
+                24 => Some(UiEvent::Cut),
+                127 => Some(UiEvent::Delete),
                 _ => char::from_u32(code)
                     .filter(|ch| !ch.is_control())
                     .map(UiEvent::Char),
@@ -436,6 +476,12 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
             APP.with(|cell| {
                 if let Some(app) = cell.borrow_mut().as_mut() {
                     if app.ui.focused.is_some() {
+                        if let Some(ev) = focused_key_event(hwnd, wp) {
+                            app.suppress_ctrl_char = ctrl_char_for_key(wp);
+                            let build = |state: &UiState| ui::build(&app.model, state);
+                            handle_event(&mut app.ui, &build, ev);
+                            flush_clipboard(hwnd, &mut app.ui);
+                        }
                         return;
                     }
                     app.quality = match wp {
@@ -459,6 +505,100 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
     }
 }
 
+fn focused_key_event(hwnd: Hwnd, wp: Wparam) -> Option<UiEvent> {
+    let ctrl = key_down(VK_CONTROL);
+    let shift = key_down(VK_SHIFT);
+    match wp {
+        VK_DELETE => Some(UiEvent::Delete),
+        VK_LEFT => Some(UiEvent::MoveLeft { shift }),
+        VK_RIGHT => Some(UiEvent::MoveRight { shift }),
+        VK_A if ctrl => Some(UiEvent::SelectAll),
+        VK_C if ctrl => Some(UiEvent::Copy),
+        VK_X if ctrl => Some(UiEvent::Cut),
+        VK_V if ctrl => clipboard_text(hwnd).map(UiEvent::Paste),
+        _ => None,
+    }
+}
+
+fn ctrl_char_for_key(wp: Wparam) -> Option<u32> {
+    if !key_down(VK_CONTROL) {
+        return None;
+    }
+    match wp {
+        VK_A => Some(1),
+        VK_C => Some(3),
+        VK_V => Some(22),
+        VK_X => Some(24),
+        _ => None,
+    }
+}
+
+fn key_down(vk: i32) -> bool {
+    unsafe { (GetKeyState(vk) as u16 & 0x8000) != 0 }
+}
+
+fn flush_clipboard(hwnd: Hwnd, ui: &mut UiState) {
+    if let Some(text) = ui.take_clipboard_out() {
+        set_clipboard_text(hwnd, &text);
+    }
+}
+
+fn clipboard_text(hwnd: Hwnd) -> Option<String> {
+    unsafe {
+        if OpenClipboard(hwnd) == 0 {
+            return None;
+        }
+        let handle = GetClipboardData(CF_UNICODETEXT);
+        if handle.is_null() {
+            CloseClipboard();
+            return None;
+        }
+        let ptr = GlobalLock(handle) as *const u16;
+        if ptr.is_null() {
+            CloseClipboard();
+            return None;
+        }
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 {
+            len += 1;
+        }
+        let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+        GlobalUnlock(handle);
+        CloseClipboard();
+        Some(text)
+    }
+}
+
+fn set_clipboard_text(hwnd: Hwnd, text: &str) -> bool {
+    unsafe {
+        if OpenClipboard(hwnd) == 0 {
+            return false;
+        }
+        EmptyClipboard();
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let bytes = wide.len() * std::mem::size_of::<u16>();
+        let mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if mem.is_null() {
+            CloseClipboard();
+            return false;
+        }
+        let dst = GlobalLock(mem) as *mut u16;
+        if dst.is_null() {
+            GlobalFree(mem);
+            CloseClipboard();
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
+        GlobalUnlock(mem);
+        let ok = !SetClipboardData(CF_UNICODETEXT, mem).is_null();
+        if !ok {
+            GlobalFree(mem);
+        }
+        CloseClipboard();
+        ok
+    }
+}
+
 fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
     APP.with(|cell| {
         if let Some(app) = cell.borrow_mut().as_mut() {
@@ -474,6 +614,7 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
                 let build = |state: &UiState| ui::build(&app.model, state);
                 handle_event(&mut app.ui, &build, ev);
             }
+            flush_clipboard(hwnd, &mut app.ui);
             let mut dirty = was_tick
                 || !was_move
                 || before
