@@ -1,0 +1,24 @@
+﻿name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (libraries + tests, warnings = errors)
+        run: cargo clippy --workspace --lib --tests -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --lib
+# The window example (raw Win32 FFI) and the other render examples are built and run
+# locally during development; CI focuses on the dependency-free library crates so it stays
+# fast and green without OS windowing libraries.

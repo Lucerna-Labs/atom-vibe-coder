@@ -1,0 +1,8 @@
+[package]
+name = "pmre-kit"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "The single primitive kit: all dumb rendering mechanism, wired from the 8 root atoms."
+
+[dependencies]
