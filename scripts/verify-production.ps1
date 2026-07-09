@@ -15,6 +15,9 @@ Push-Location $Root
 try {
     Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
+    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-RustCrateLineCaps.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Rust crate line cap gate failed with exit code $LASTEXITCODE" }
+
     Push-Location $Engine
     try {
         $env:RUSTFLAGS = "-D warnings"

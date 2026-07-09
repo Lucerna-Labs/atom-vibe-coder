@@ -24,6 +24,10 @@ jobs:
         working-directory: atom-rendering-engine-main
         run: cargo fmt --check
 
+      - name: Rust crate line caps
+        shell: pwsh
+        run: .\scripts\Test-RustCrateLineCaps.ps1
+
       - name: Rust tests
         working-directory: atom-rendering-engine-main
         run: cargo test --workspace

@@ -10,6 +10,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
 - `scripts/Test-NativeFunctional.ps1` launches the real native window and exercises Run, Provider, and Drift.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
+- `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 
 ## Operator Mission
