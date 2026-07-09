@@ -3,6 +3,7 @@ use math_atoms_core::{
     ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus,
 };
 use pmre_orchestrator::UiState;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -30,6 +31,7 @@ pub const WORKSPACE_TAB: u32 = 21;
 pub const SETTINGS_TAB: u32 = 22;
 pub const PROVIDER_CONNECTIONS_TAB: u32 = 23;
 pub const RUNTIME_SETTINGS_TAB: u32 = 24;
+pub const ARTIFACT_SCROLL: u32 = 25;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -44,6 +46,16 @@ pub struct NativeApp {
     pub provider_running: bool,
     pub active_main_tab: MainTab,
     pub active_settings_tab: SettingsTab,
+    pub side_artifacts: Vec<SideArtifact>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SideArtifact {
+    pub name: String,
+    pub status: String,
+    pub output: String,
+    pub source_path: String,
+    pub exe_path: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +110,7 @@ impl NativeApp {
             provider_running: false,
             active_main_tab: MainTab::Workspace,
             active_settings_tab: SettingsTab::ProviderConnections,
+            side_artifacts: load_side_artifacts(),
         }
     }
 
@@ -302,6 +315,10 @@ impl NativeApp {
         }
     }
 
+    pub fn artifact_title_state(&self) -> String {
+        format!("artifacts:{}", self.side_artifacts.len())
+    }
+
     fn append_proof_record(&mut self) -> StoreOutcome {
         let record = self.current_proof_record();
         let Some(store) = &self.store else {
@@ -416,6 +433,61 @@ fn current_intent(ui: &UiState) -> String {
 
 fn execute_call(call: PreparedProviderCall) -> Result<String, math_atoms_core::ProviderError> {
     call.execute_with_curl()
+}
+
+fn load_side_artifacts() -> Vec<SideArtifact> {
+    for path in artifact_manifest_candidates() {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let artifacts = parse_artifact_manifest(&text);
+            if !artifacts.is_empty() {
+                return artifacts;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn artifact_manifest_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(path) = std::env::var("MATH_ATOMS_ARTIFACT_MANIFEST") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            paths.push(PathBuf::from(trimmed));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        paths.push(cwd.join("target/provider-built-apps/artifact-window.tsv"));
+        paths.push(
+            cwd.join("atom-rendering-engine-main/target/provider-built-apps/artifact-window.tsv"),
+        );
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(release_dir) = exe.parent() {
+            if let Some(target_dir) = release_dir.parent() {
+                paths.push(target_dir.join("provider-built-apps/artifact-window.tsv"));
+            }
+        }
+    }
+    paths
+}
+
+fn parse_artifact_manifest(text: &str) -> Vec<SideArtifact> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 5 || parts[0].trim().is_empty() {
+                return None;
+            }
+            Some(SideArtifact {
+                name: parts[0].trim().to_string(),
+                status: parts[1].trim().to_string(),
+                output: parts[2].trim().to_string(),
+                source_path: parts[3].trim().to_string(),
+                exe_path: parts[4].trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -576,6 +648,46 @@ mod tests {
 
         assert!(ui.scroll_of(APP_SCROLL) > 0.0);
         assert!(widget_rect(&build, &ui, SETTINGS_TAB).is_some());
+    }
+
+    #[test]
+    fn side_artifact_manifest_loads_generated_apps() {
+        let manifest = "name\tstatus\toutput\tsource\texe\ncounter\tcompiled\tMATH_ATOMS_APP_OK counter total=4\tC:\\src\\counter.rs\tC:\\bin\\counter.exe\nrouter\tcompiled\tMATH_ATOMS_APP_OK router health=200 atoms=3\tC:\\src\\router.rs\tC:\\bin\\router.exe\n";
+        let artifacts = parse_artifact_manifest(manifest);
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].name, "counter");
+        assert_eq!(artifacts[0].status, "compiled");
+        assert_eq!(
+            artifacts[1].output,
+            "MATH_ATOMS_APP_OK router health=200 atoms=3"
+        );
+    }
+
+    #[test]
+    fn side_artifact_window_is_visible_from_manifest() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-artifact-window-{}-{}.tsv",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "name\tstatus\toutput\tsource\texe\ncounter\tcompiled\tMATH_ATOMS_APP_OK counter total=4\tC:\\src\\counter.rs\tC:\\bin\\counter.exe\n",
+        )
+        .unwrap();
+        std::env::set_var("MATH_ATOMS_ARTIFACT_MANIFEST", &path);
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        std::env::remove_var("MATH_ATOMS_ARTIFACT_MANIFEST");
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(app.side_artifacts.len(), 1);
+        assert_eq!(app.artifact_title_state(), "artifacts:1");
+        let ui = UiState::new(1200, 800);
+        let build = |state: &UiState| crate::ui::build(&app, state);
+        assert!(widget_rect(&build, &ui, ARTIFACT_SCROLL).is_some());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::model::{
-    MainTab, NativeApp, SettingsTab, APPLY_PROVIDER, APP_SCROLL, BUS_SCROLL, CAPTURE_PROOF,
-    EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT,
+    MainTab, NativeApp, SettingsTab, APPLY_PROVIDER, APP_SCROLL, ARTIFACT_SCROLL, BUS_SCROLL,
+    CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT,
     PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT, PROVIDER_BODY_TEMPLATE_INPUT,
     PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
     PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT, RUNTIME_SETTINGS_TAB,
@@ -466,11 +466,13 @@ fn right_panel(app: &NativeApp) -> UxNode {
     UxNode::boxed(
         card_style().w(Dim::Pct(30.0)).gap(12.0),
         vec![
+            label("Side Artifact Window"),
+            artifact_window(app),
             label("Wiki Graph RAG"),
             UxNode::boxed(
                 Style::col()
                     .scroll(EVIDENCE_SCROLL)
-                    .h(Dim::Px(260.0))
+                    .h(Dim::Px(170.0))
                     .gap(7.0)
                     .pad(Edges::all(8.0))
                     .radius(7.0)
@@ -505,6 +507,38 @@ fn right_panel(app: &NativeApp) -> UxNode {
                 ],
             ),
         ],
+    )
+}
+
+fn artifact_window(app: &NativeApp) -> UxNode {
+    let mut rows: Vec<UxNode> = app
+        .side_artifacts
+        .iter()
+        .map(|artifact| {
+            mini_card(
+                &format!("{} / {}", artifact.name, artifact.status),
+                &format!("{} | {}", artifact.output, artifact.source_path),
+                teal(),
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(mini_card(
+            "No app artifacts",
+            "Run the provider multi-app build gate to populate this side window.",
+            muted(),
+        ));
+    }
+    UxNode::boxed(
+        Style::col()
+            .scroll(ARTIFACT_SCROLL)
+            .h(Dim::Px(185.0))
+            .gap(7.0)
+            .pad(Edges::all(8.0))
+            .radius(7.0)
+            .bg(Rgba::rgb8(238, 246, 244))
+            .border(1.0, line()),
+        rows,
     )
 }
 

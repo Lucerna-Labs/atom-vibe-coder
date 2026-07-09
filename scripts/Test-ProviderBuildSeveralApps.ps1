@@ -11,6 +11,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
 $OutDir = Join-Path $Engine "target\provider-built-apps"
+$Manifest = Join-Path $OutDir "artifact-window.tsv"
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 
@@ -150,6 +151,7 @@ try {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
     $passed = @()
+    $manifestRows = @("name`tstatus`toutput`tsource`texe")
     foreach ($spec in $Specs | Select-Object -First $AppsRequired) {
         $lastFailure = ""
         $passedApp = $false
@@ -181,6 +183,7 @@ try {
                     throw "output mismatch. Expected '$($spec.Expected)' but got '$actual'"
                 }
                 $passed += "$($spec.Name)=$actual"
+                $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe"
                 $passedApp = $true
                 break
             }
@@ -196,6 +199,7 @@ try {
         }
     }
 
+    [System.IO.File]::WriteAllLines($Manifest, $manifestRows)
     Write-Host "provider multi-app build ok: $($passed -join '; ')"
 }
 finally {

@@ -54,13 +54,12 @@ try {
         throw "Unexpected native artifact dimensions: ${width}x${height}"
     }
 
-    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
-    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
-    if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
-
     if ($AllowProviderBlock) {
         Write-Warning "provider execution gate skipped by -AllowProviderBlock; this is not a production-ready verification"
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
         Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, and native provider responsiveness gate"
     }
     else {
@@ -68,6 +67,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildSeveralApps.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider multi-app build gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
         Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native provider responsiveness gate, provider execution gate, and provider multi-app build gate"
     }
 }

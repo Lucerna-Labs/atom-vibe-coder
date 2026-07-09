@@ -10,6 +10,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
 $Exe = Join-Path $Engine "target\release\math-atoms-native.exe"
+$ArtifactManifest = Join-Path $Engine "target\provider-built-apps\artifact-window.tsv"
 $OriginalStoreDir = $env:MATH_ATOMS_STORE_DIR
 $OriginalKind = $env:MATH_ATOMS_PROVIDER_KIND
 $OriginalUrl = $env:MATH_ATOMS_PROVIDER_URL
@@ -118,6 +119,13 @@ function Get-ProofRecordCount() {
     return @([System.IO.File]::ReadLines($path)).Count
 }
 
+function Get-ExpectedArtifactCount() {
+    if (-not (Test-Path -LiteralPath $ArtifactManifest)) {
+        return 0
+    }
+    return [Math]::Max(0, @([System.IO.File]::ReadLines($ArtifactManifest)).Count - 1)
+}
+
 function Refresh-NativeProcess([string]$Stage) {
     try {
         $refreshed = Get-Process -Id $script:NativePid -ErrorAction Stop
@@ -135,6 +143,15 @@ function Refresh-NativeProcess([string]$Stage) {
 }
 
 try {
+    $expectedArtifactCount = Get-ExpectedArtifactCount
+    if ($expectedArtifactCount -gt 0) {
+        Start-Sleep -Seconds 1
+        $proc = Refresh-NativeProcess "side artifact window load"
+        if ($proc.MainWindowTitle -notmatch "artifacts:$expectedArtifactCount") {
+            throw "Side artifact window did not load $expectedArtifactCount generated app artifacts. Title: $($proc.MainWindowTitle)"
+        }
+    }
+
     Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Settings tab command"
