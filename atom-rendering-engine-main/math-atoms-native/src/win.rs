@@ -494,10 +494,11 @@ fn paint(hwnd: Hwnd) {
                     SRCCOPY,
                 );
                 let title = format!(
-                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {}]",
+                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {}]",
                     ms,
                     app.model.status().as_str(),
-                    app.model.provider_title_state()
+                    app.model.provider_title_state(),
+                    app.model.runtime.state().selected_recipe
                 );
                 SetWindowTextW(hwnd, wide(&title).as_ptr());
             }

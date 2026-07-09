@@ -53,6 +53,22 @@ function Click-NativeControl([IntPtr]$Handle, [int]$X, [int]$Y) {
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0202, [UIntPtr]::Zero, $lp) | Out-Null
 }
 
+function Send-WmChar([IntPtr]$Handle, [int]$Code) {
+    [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0102, [UIntPtr]::new($Code), [IntPtr]::Zero) | Out-Null
+}
+
+function Clear-Intent([IntPtr]$Handle) {
+    for ($i = 0; $i -lt 260; $i++) {
+        Send-WmChar $Handle 8
+    }
+}
+
+function Send-Text([IntPtr]$Handle, [string]$Text) {
+    foreach ($ch in $Text.ToCharArray()) {
+        Send-WmChar $Handle ([int][char]$ch)
+    }
+}
+
 function Get-ProofRecordCount() {
     $path = Join-Path $env:LOCALAPPDATA "MathAtomsCoder\proofs.jsonl"
     if (-not (Test-Path -LiteralPath $path)) {
@@ -62,11 +78,25 @@ function Get-ProofRecordCount() {
 }
 
 try {
+    Clear-Intent $proc.MainWindowHandle
+    Send-Text $proc.MainWindowHandle "native renderer artifact only"
+    Send-WmChar $proc.MainWindowHandle 13
+    Start-Sleep -Seconds 2
+    $proc = Get-Process -Id $proc.Id
+    if ($proc.MainWindowTitle -notmatch "native-atom-renderer") {
+        throw "Typed native intent did not select native-atom-renderer. Title: $($proc.MainWindowTitle)"
+    }
+
+    Clear-Intent $proc.MainWindowHandle
+    Send-Text $proc.MainWindowHandle "provider model wiki graph rag from typed input"
     Click-NativeControl $proc.MainWindowHandle 66 290
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "proven") {
         throw "Run button did not reach proven state. Title: $($proc.MainWindowTitle)"
+    }
+    if ($proc.MainWindowTitle -notmatch "provider-model-loop") {
+        throw "Typed provider intent did not select provider-model-loop. Title: $($proc.MainWindowTitle)"
     }
 
     $beforeCapture = Get-ProofRecordCount

@@ -90,9 +90,10 @@ impl NativeApp {
 
     pub fn execute_provider(&mut self) {
         let Some(call) = self.runtime.state().last_provider_call.clone() else {
-            self.last_provider_output =
-                "No prepared provider call. Run an intent that requests provider/model work first."
-                    .to_string();
+            let reason =
+                "No prepared provider call. Run an intent that requests provider/model work first.";
+            self.runtime.mark_provider_blocked(reason);
+            self.last_provider_output = format!("Provider blocked: {reason}");
             return;
         };
         self.provider_running = true;
@@ -201,6 +202,20 @@ mod tests {
         assert_eq!(app.provider_title_state(), "provider:blocked");
         app.last_provider_output = "model response".to_string();
         assert_eq!(app.provider_title_state(), "provider:ran");
+    }
+
+    #[test]
+    fn provider_button_without_prepared_call_fails_closed() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        app.execute_provider();
+        assert_eq!(app.provider_title_state(), "provider:blocked");
+        assert_eq!(app.status(), RuntimeStatus::Blocked);
+        assert!(app
+            .runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|item| item.contains("No prepared provider call")));
     }
 
     #[test]
