@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Verify Math Atoms Coder
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Static app checks
+        shell: pwsh
+        run: |
+          node --check app\app-data.js
+          node --check app\app.js
+          node --check scripts\smoke.mjs
+          node scripts\smoke.mjs
+
+      - name: Rust format
+        working-directory: atom-rendering-engine-main
+        run: cargo fmt --check
+
+      - name: Rust tests
+        working-directory: atom-rendering-engine-main
+        run: cargo test --workspace
+
+      - name: Rust clippy
+        working-directory: atom-rendering-engine-main
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Native artifact render
+        working-directory: atom-rendering-engine-main
+        run: cargo run -p pmre-orchestrator --example math_atoms_coder --release
+
+      - name: Validate native artifact
+        shell: pwsh
+        run: |
+          $Artifact = "atom-rendering-engine-main\math_atoms_coder.bmp"
+          if (-not (Test-Path -LiteralPath $Artifact)) {
+            throw "Missing native artifact: $Artifact"
+          }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $Artifact).Path)
+          if ($bytes.Length -lt 54) {
+            throw "Native artifact is too small to be a valid BMP: $Artifact"
+          }
+          if ($bytes[0] -ne 0x42 -or $bytes[1] -ne 0x4D) {
+            throw "Native artifact does not have a BMP header: $Artifact"
+          }
+          $width = [BitConverter]::ToInt32($bytes, 18)
+          $height = [BitConverter]::ToInt32($bytes, 22)
+          if ($width -ne 1440 -or $height -ne 960) {
+            throw "Unexpected native artifact dimensions: ${width}x${height}"
+          }
