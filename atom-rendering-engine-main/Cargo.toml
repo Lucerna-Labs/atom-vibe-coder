@@ -3,4 +3,11 @@
 # the kit/orchestrator ownership boundary.
 [workspace]
 resolver = "2"
-members = ["pmre-font", "pmre-html", "pmre-kit", "pmre-orchestrator", "pmre-examples"]
+members = [
+    "math-atoms-core",
+    "pmre-font",
+    "pmre-html",
+    "pmre-kit",
+    "pmre-orchestrator",
+    "pmre-examples",
+]
