@@ -271,7 +271,7 @@ impl WikiGraph {
     }
 
     pub fn add_proof_record(&mut self, record: &ProofRecord) {
-        if record.status != "proven" {
+        if !proof_record_is_positive_evidence(record) {
             return;
         }
         let id = proof_node_id(record);
@@ -494,6 +494,36 @@ fn proof_node_id(record: &ProofRecord) -> String {
     format!("proof:{:016x}", hasher.finish())
 }
 
+fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
+    if record.status != "proven"
+        || !record.blockers.is_empty()
+        || record.evidence_count == 0
+        || record.route_len < 4
+    {
+        return false;
+    }
+    let Some(recipe) = recipes()
+        .iter()
+        .find(|recipe| recipe.id == record.recipe_id)
+    else {
+        return false;
+    };
+    if !recipe.requires_provider {
+        return true;
+    }
+    record.provider_state == "provider:ran"
+        && !record.provider_model.trim().is_empty()
+        && !record.provider_endpoint.trim().is_empty()
+        && record.provider_output_hash.starts_with("fnv:")
+        && record.provider_output_hash.len() == "fnv:0000000000000000".len()
+        && record
+            .provider_output_hash
+            .chars()
+            .skip(4)
+            .all(|ch| ch.is_ascii_hexdigit())
+        && record.provider_output_len > 0
+}
+
 fn pin_mission_evidence(evidence: &mut Vec<Evidence>, graph: &WikiGraph, limit: usize) {
     if limit == 0
         || evidence
@@ -565,6 +595,54 @@ mod tests {
             route_len: 6,
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
+        assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
+    fn provider_proof_records_need_execution_audit_before_rag_promotion() {
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["measure".to_string(), "flow".to_string()],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:idle".to_string(),
+            provider_model: String::new(),
+            provider_endpoint: String::new(),
+            provider_output_hash: String::new(),
+            provider_output_len: 0,
+            route_len: 6,
+        });
+        let hits = graph.retrieve(
+            "tampered provider proof stored proof",
+            &["flow".to_string()],
+            12,
+        );
+        assert!(!hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
+    fn audited_provider_proof_records_become_rag_evidence() {
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["measure".to_string(), "flow".to_string()],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_hash: "fnv:1234567890abcdef".to_string(),
+            provider_output_len: 14,
+            route_len: 8,
+        });
+        let hits = graph.retrieve(
+            "audited provider proof stored proof",
+            &["flow".to_string()],
+            12,
+        );
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
     }
 
