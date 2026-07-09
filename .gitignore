@@ -1,0 +1,14 @@
+# Local Git scaffolding that existed at project root before this MVP scaffold.
+/HEAD
+/config
+/description
+/hooks/
+/info/
+/objects/
+/refs/
+/.agents/
+
+# Runtime/editor noise.
+.DS_Store
+Thumbs.db
+*.log

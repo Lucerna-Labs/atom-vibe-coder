@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Math Atoms Coder</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div>
+            <h1>Math Atoms Coder</h1>
+            <p>Recipe store. Loop harness. Artifact proof.</p>
+          </div>
+        </div>
+        <section class="metric-strip" aria-label="Project counters">
+          <article><strong id="atomCount">16</strong><span>Atoms</span></article>
+          <article><strong id="proofCount">0</strong><span>Proofs</span></article>
+          <article><strong id="driftCount">0</strong><span>Drift</span></article>
+        </section>
+      </header>
+
+      <section class="workspace" aria-label="Math Atoms Coder workspace">
+        <aside class="left-rail" aria-label="Command and recipe controls">
+          <section class="panel">
+            <div class="panel-title">
+              <span>Intent</span>
+              <button class="icon-button" id="resetIntent" type="button" title="Reset intent" aria-label="Reset intent">R</button>
+            </div>
+            <label class="sr-only" for="intentInput">Build command</label>
+            <textarea id="intentInput" spellcheck="false">Build a tiny local app with an atom renderer, a self-correcting proof loop, a recipe-first store, and a live artifact pane.</textarea>
+            <div class="button-row">
+              <button class="primary-button" id="runLoop" type="button" title="Run proof loop">Run Loop</button>
+              <button class="secondary-button" id="captureRecipe" type="button" title="Capture proven route">Capture</button>
+            </div>
+          </section>
+
+          <section class="panel flat">
+            <div class="panel-title">
+              <span>Hooks</span>
+              <button class="icon-button warn" id="markDrift" type="button" title="Flag drift" aria-label="Flag drift">!</button>
+            </div>
+            <h2>Anti Drift Gate</h2>
+            <div id="gateList" class="gate-list"></div>
+          </section>
+
+          <section class="panel flat">
+            <div class="panel-title">
+              <span>Store</span>
+              <button class="icon-button" id="clearSearch" type="button" title="Clear search" aria-label="Clear search">X</button>
+            </div>
+            <h2>Proven Recipes</h2>
+            <label class="sr-only" for="recipeSearch">Search recipes</label>
+            <input id="recipeSearch" type="search" placeholder="Search atoms">
+            <div id="recipeList" class="recipe-list" role="listbox" aria-label="Recipes"></div>
+          </section>
+        </aside>
+
+        <section class="center-stage" aria-label="Fabric and proof loop">
+          <section class="panel fabric-panel">
+            <div class="fabric-head">
+              <div>
+                <span class="eyebrow">Fabric</span>
+                <h2>Spiderweb Build Layer</h2>
+              </div>
+              <div class="layer-toggle" role="group" aria-label="Layer filter">
+                <button type="button" data-layer="L0" class="active" title="Show transport layer">L0</button>
+                <button type="button" data-layer="L1" class="active" title="Show message layer">L1</button>
+                <button type="button" data-layer="L2" class="active" title="Show flow layer">L2</button>
+                <button type="button" data-layer="L3" class="active" title="Show orchestration layer">L3</button>
+              </div>
+            </div>
+            <div class="fabric-canvas" id="fabricCanvas" aria-label="Spiderweb build fabric"></div>
+            <div class="step-grid" id="stepGrid" aria-label="Proof loop steps"></div>
+          </section>
+
+          <section class="panel bench-panel">
+            <div class="bench-head">
+              <div>
+                <span class="eyebrow">Bench</span>
+                <h2>Extended Atom Verdicts</h2>
+              </div>
+              <button class="secondary-button compact" id="benchSelected" type="button" title="Bench selected atom">Bench</button>
+            </div>
+            <div id="missionGate" class="mission-gate"></div>
+            <div id="benchTable" class="bench-table" aria-label="Extended atom verdict table"></div>
+          </section>
+        </section>
+
+        <aside class="right-rail" aria-label="Artifact output">
+          <section class="panel artifact-panel">
+            <nav class="tabbar" aria-label="Output tabs">
+              <button type="button" class="active" data-tab="artifact" title="Artifact output">Artifact</button>
+              <button type="button" data-tab="atom" title="Atom map">Atom</button>
+              <button type="button" data-tab="recipe" title="Recipe proof">Recipe</button>
+            </nav>
+
+            <section id="artifactTab" class="tab-panel active">
+              <h2 id="artifactTitle">Atom Renderer Bootstrap</h2>
+              <p id="artifactSummary">Tiny visual surface every generated app can mount.</p>
+              <div class="atom-renderer" aria-label="Atom renderer preview">
+                <svg id="atomSvg" viewBox="0 0 420 420" role="img" aria-label="Atom renderer"></svg>
+              </div>
+              <div class="status-grid">
+                <article><span>Status</span><strong id="statusValue">draft</strong></article>
+                <article><span>Proofs</span><strong id="artifactProofs">0</strong></article>
+                <article><span>Bonds</span><strong id="bondCount">0</strong></article>
+              </div>
+            </section>
+
+            <section id="atomTab" class="tab-panel">
+              <h2>Atom Map</h2>
+              <div id="atomMap" class="atom-map"></div>
+            </section>
+
+            <section id="recipeTab" class="tab-panel">
+              <h2>Recipe Proof</h2>
+              <div id="proofLog" class="proof-log"></div>
+            </section>
+          </section>
+        </aside>
+      </section>
+    </main>
+    <script src="app-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
