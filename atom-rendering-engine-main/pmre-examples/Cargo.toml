@@ -1,0 +1,10 @@
+[package]
+name = "pmre-examples"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "PMRE examples and artifact renderers kept outside runtime crates."
+
+[dependencies]
+pmre-kit = { path = "../pmre-kit" }
+pmre-orchestrator = { path = "../pmre-orchestrator" }

@@ -24,12 +24,13 @@ pub mod gpu_bloom {
     }
 }
 
+use pmre_html as html;
+
 use pmre_kit::{
     atoms,
     bloom_sweep::{bloom_with, Arith, Dispatch, Strategy, Structure},
     framebuffer::{BandView, Framebuffer, Surface},
     geom::{Affine, Vec2},
-    html,
     layout::{self, LaidBox, Painted},
     paint::{Bounds, Paint, Rgba, Shape},
     post, raster, text,

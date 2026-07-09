@@ -6,3 +6,4 @@ license = "MIT"
 description = "The single primitive kit: all dumb rendering mechanism, wired from the 8 root atoms."
 
 [dependencies]
+pmre-font = { path = "../pmre-font" }

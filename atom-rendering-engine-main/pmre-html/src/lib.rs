@@ -1,5 +1,5 @@
 //! Reduced HTML/CSS front-end. Parses an HTML subset with inline `style` attributes into
-//! the shared UXI box tree (`crate::ux`), which then flows through the same layout +
+//! the shared UXI box tree (`pmre_kit::ux`), which then flows through the same layout +
 //! raster path as native UXI. This is the "reduce": the load-bearing core is the box
 //! model, block/flex layout, inline text flow, and a CSS property subset; selectors,
 //! external stylesheets, and the full cascade are the expansion, not the foundation.
@@ -15,8 +15,8 @@
 //! font-weight, text-align, text-decoration, align-items, justify-content, opacity.
 //! Colors: #rgb/#rrggbb/#rrggbbaa, rgb()/rgba(), hsl(), ~40 named colors.
 
-use crate::paint::Rgba;
-use crate::ux::{Align, Dim, Dir, Edges, Justify, Shadow, Span, Style, UxNode};
+use pmre_kit::paint::Rgba;
+use pmre_kit::ux::{Align, Dim, Dir, Edges, Justify, Shadow, Span, Style, UxNode};
 
 // ─── DOM ─────────────────────────────────────────────────────────────────────
 
@@ -973,7 +973,7 @@ fn named_color(s: &str) -> Option<Rgba> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ux::UxNode;
+    use pmre_kit::ux::UxNode;
 
     fn count_rich(node: &UxNode) -> usize {
         match node {
@@ -989,7 +989,7 @@ mod tests {
         let root = parse(doc);
         assert_eq!(count_rich(&root), 1, "one paragraph = one rich flow");
         // find the flow and check the span styles
-        fn find(node: &UxNode) -> Option<&Vec<crate::ux::Span>> {
+        fn find(node: &UxNode) -> Option<&Vec<pmre_kit::ux::Span>> {
             match node {
                 UxNode::Rich { spans, .. } => Some(spans),
                 UxNode::Box { children, .. } => children.iter().find_map(find),

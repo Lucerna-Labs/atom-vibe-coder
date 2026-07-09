@@ -40,6 +40,8 @@ jobs:
       - name: Rust tests
         working-directory: atom-rendering-engine-main
         run: cargo test --workspace
+        env:
+          RUSTFLAGS: "-D warnings"
 
       - name: Rust clippy
         working-directory: atom-rendering-engine-main
@@ -47,7 +49,9 @@ jobs:
 
       - name: Native artifact render
         working-directory: atom-rendering-engine-main
-        run: cargo run -p pmre-orchestrator --example math_atoms_coder --release
+        run: cargo run -p pmre-examples --example math_atoms_coder --release
+        env:
+          RUSTFLAGS: "-D warnings"
 
       - name: Validate native artifact
         shell: pwsh

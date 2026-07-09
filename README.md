@@ -7,9 +7,9 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `app/index.html` opens the app directly in a browser.
 - `app/app-data.js` contains the 16 atom definitions, starter recipes, gates, and Spiderweb fabric nodes.
 - `app/app.js` runs the proof loop, recipe capture, atom filtering, and bench verdict updates.
-- `scripts/smoke.mjs` validates that the static app files and doctrine data are present.
+- `scripts/smoke.mjs` validates that the static app files and doctrine data are present; it is not a functional readiness test.
 - `atom-rendering-engine-main` contains the Rust PMRE engine and the native `math_atoms_coder` artifact renderer.
-- `scripts/verify-production.ps1` runs the full static and Rust verification gate and regenerates `math_atoms_coder.bmp`.
+- `scripts/verify-production.ps1` runs the current static and Rust baseline gate and regenerates `math_atoms_coder.bmp`.
 
 ## Operator Mission
 
@@ -33,7 +33,8 @@ Generate the native artifact:
 
 ```powershell
 cd "C:\Projects\Atoms Coder by Lucerna Labs\atom-rendering-engine-main"
-cargo run -p pmre-orchestrator --example math_atoms_coder --release
+$env:RUSTFLAGS="-D warnings"
+cargo run -p pmre-examples --example math_atoms_coder --release
 ```
 
 ## Verify

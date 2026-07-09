@@ -562,13 +562,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
+name = "pmre-examples"
+version = "0.3.0"
+dependencies = [
+ "pmre-kit",
+ "pmre-orchestrator",
+]
+
+[[package]]
+name = "pmre-font"
+version = "0.3.0"
+
+[[package]]
+name = "pmre-html"
+version = "0.3.0"
+dependencies = [
+ "pmre-kit",
+]
+
+[[package]]
 name = "pmre-kit"
 version = "0.3.0"
+dependencies = [
+ "pmre-font",
+]
 
 [[package]]
 name = "pmre-orchestrator"
 version = "0.3.0"
 dependencies = [
+ "pmre-html",
  "pmre-kit",
  "pollster",
  "wgpu",

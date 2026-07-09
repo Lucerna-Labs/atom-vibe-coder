@@ -9,10 +9,11 @@
 
 pub mod bloom_sweep;
 pub mod fair_queue;
-pub mod font;
+pub mod font {
+    pub use pmre_font::*;
+}
 pub mod framebuffer;
 pub mod geom;
-pub mod html;
 pub mod layout;
 pub mod paint;
 pub mod path;

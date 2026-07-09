@@ -1,5 +1,6 @@
 # Atom Rendering Engine — a self-renderer from pure math primitives.
-# Two members only, per the Composition doctrine: one kit + one orchestrator.
+# Focused members keep each Rust crate below the global source-line cap while preserving
+# the kit/orchestrator ownership boundary.
 [workspace]
 resolver = "2"
-members = ["pmre-kit", "pmre-orchestrator"]
+members = ["pmre-font", "pmre-html", "pmre-kit", "pmre-orchestrator", "pmre-examples"]

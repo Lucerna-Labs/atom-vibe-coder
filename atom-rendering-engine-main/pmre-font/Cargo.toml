@@ -1,0 +1,8 @@
+[package]
+name = "pmre-font"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-free font parsing and glyph rasterization for PMRE."
+
+[dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "pmre-html"
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+description = "Reduced HTML/CSS to PMRE UXI conversion."
+
+[dependencies]
+pmre-kit = { path = "../pmre-kit" }

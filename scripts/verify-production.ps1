@@ -13,10 +13,11 @@ try {
 
     Push-Location $Engine
     try {
+        $env:RUSTFLAGS = "-D warnings"
         cargo fmt --check
         cargo test --workspace
         cargo clippy --workspace --all-targets -- -D warnings
-        cargo run -p pmre-orchestrator --example math_atoms_coder --release
+        cargo run -p pmre-examples --example math_atoms_coder --release
     }
     finally {
         Pop-Location
@@ -40,7 +41,7 @@ try {
         throw "Unexpected native artifact dimensions: ${width}x${height}"
     }
 
-    Write-Host "production verification ok: static app, Rust tests, clippy, and native artifact"
+    Write-Host "baseline verification ok: static app checks, Rust tests, clippy, and native artifact"
 }
 finally {
     Pop-Location
