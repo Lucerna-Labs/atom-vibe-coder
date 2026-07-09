@@ -8,7 +8,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
 - `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
-- `scripts/Test-NativeFunctional.ps1` launches the real native window and exercises typed intent routing, Run, Capture, Provider, and Drift.
+- `scripts/Test-NativeFunctional.ps1` launches the real native window against an isolated temp proof store and exercises typed intent routing, Run, Capture, Provider, and Drift.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.

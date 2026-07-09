@@ -70,6 +70,10 @@ jobs:
             throw "Unexpected native artifact dimensions: ${width}x${height}"
           }
 
+      - name: Native functional gate
+        shell: pwsh
+        run: .\scripts\Test-NativeFunctional.ps1
+
       - name: Provider execution gate
         shell: pwsh
         run: .\scripts\Test-ProviderExecution.ps1

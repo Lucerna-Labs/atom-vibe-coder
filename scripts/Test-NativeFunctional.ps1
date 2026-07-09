@@ -10,6 +10,9 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
 $Exe = Join-Path $Engine "target\release\math-atoms-native.exe"
+$OriginalStoreDir = $env:MATH_ATOMS_STORE_DIR
+$TestStoreDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-native-functional-" + [Guid]::NewGuid().ToString("N"))
+$env:MATH_ATOMS_STORE_DIR = $TestStoreDir
 
 Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
@@ -53,6 +56,10 @@ function Click-NativeControl([IntPtr]$Handle, [int]$X, [int]$Y) {
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0202, [UIntPtr]::Zero, $lp) | Out-Null
 }
 
+function Invoke-NativeCommand([IntPtr]$Handle, [int]$Command) {
+    [MathAtomsNativeFunctional]::PostMessage($Handle, 0x804A, [UIntPtr]::new($Command), [IntPtr]::Zero) | Out-Null
+}
+
 function Send-WmChar([IntPtr]$Handle, [int]$Code) {
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0102, [UIntPtr]::new($Code), [IntPtr]::Zero) | Out-Null
 }
@@ -70,7 +77,7 @@ function Send-Text([IntPtr]$Handle, [string]$Text) {
 }
 
 function Get-ProofRecordCount() {
-    $path = Join-Path $env:LOCALAPPDATA "MathAtomsCoder\proofs.jsonl"
+    $path = Join-Path $TestStoreDir "MathAtomsCoder\proofs.jsonl"
     if (-not (Test-Path -LiteralPath $path)) {
         return 0
     }
@@ -89,7 +96,7 @@ try {
 
     Clear-Intent $proc.MainWindowHandle
     Send-Text $proc.MainWindowHandle "provider model wiki graph rag from typed input"
-    Click-NativeControl $proc.MainWindowHandle 66 290
+    Invoke-NativeCommand $proc.MainWindowHandle 2
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "proven") {
@@ -100,14 +107,14 @@ try {
     }
 
     $beforeCapture = Get-ProofRecordCount
-    Click-NativeControl $proc.MainWindowHandle 224 290
+    Invoke-NativeCommand $proc.MainWindowHandle 4
     Start-Sleep -Seconds 2
     $afterCapture = Get-ProofRecordCount
     if ($afterCapture -le $beforeCapture) {
         throw "Capture button did not append a proof record. Before: $beforeCapture After: $afterCapture"
     }
 
-    Click-NativeControl $proc.MainWindowHandle 145 290
+    Invoke-NativeCommand $proc.MainWindowHandle 3
     Start-Sleep -Seconds 15
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "provider:(ran|blocked)") {
@@ -117,7 +124,7 @@ try {
         throw "Native app stopped responding after provider action"
     }
 
-    Click-NativeControl $proc.MainWindowHandle 303 290
+    Invoke-NativeCommand $proc.MainWindowHandle 5
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "drift flagged") {
@@ -132,5 +139,7 @@ try {
 finally {
     if (-not $LeaveRunning) {
         Get-Process -Id $proc.Id -ErrorAction SilentlyContinue | Stop-Process -Force
+        Remove-Item -LiteralPath $TestStoreDir -Recurse -Force -ErrorAction SilentlyContinue
     }
+    $env:MATH_ATOMS_STORE_DIR = $OriginalStoreDir
 }

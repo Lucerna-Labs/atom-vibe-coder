@@ -169,6 +169,7 @@ const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_CHAR: u32 = 0x0102;
 const WM_DPICHANGED: u32 = 0x02E0;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_MATH_ATOMS_COMMAND: u32 = 0x804A;
 const TME_LEAVE: u32 = 0x0000_0002;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
@@ -388,6 +389,11 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
             }
             0
         }
+        WM_MATH_ATOMS_COMMAND => {
+            dispatch_command(wp as u32);
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+            0
+        }
         WM_KEYDOWN => {
             APP.with(|cell| {
                 if let Some(app) = cell.borrow_mut().as_mut() {
@@ -429,13 +435,7 @@ fn dispatch(ev: UiEvent) -> bool {
                 dirty = true;
             }
             if let Some(id) = app.ui.take_click() {
-                match id {
-                    RUN_LOOP => app.model.run_current_intent(&app.ui),
-                    EXEC_PROVIDER => app.model.execute_provider(),
-                    CAPTURE_PROOF => app.model.capture_current_proof(),
-                    MARK_DRIFT => app.model.mark_drift(),
-                    _ => {}
-                }
+                dispatch_model_command(app, id);
                 dirty = true;
             }
             if app.ui.take_submit().is_some() {
@@ -447,6 +447,24 @@ fn dispatch(ev: UiEvent) -> bool {
             false
         }
     })
+}
+
+fn dispatch_command(id: u32) {
+    APP.with(|cell| {
+        if let Some(app) = cell.borrow_mut().as_mut() {
+            dispatch_model_command(app, id);
+        }
+    });
+}
+
+fn dispatch_model_command(app: &mut App, id: u32) {
+    match id {
+        RUN_LOOP => app.model.run_current_intent(&app.ui),
+        EXEC_PROVIDER => app.model.execute_provider(),
+        CAPTURE_PROOF => app.model.capture_current_proof(),
+        MARK_DRIFT => app.model.mark_drift(),
+        _ => {}
+    }
 }
 
 fn paint(hwnd: Hwnd) {

@@ -54,14 +54,17 @@ try {
         throw "Unexpected native artifact dimensions: ${width}x${height}"
     }
 
+    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
+
     if ($AllowProviderBlock) {
         Write-Warning "provider execution gate skipped by -AllowProviderBlock; this is not a production-ready verification"
-        Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, and native artifact"
+        Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, native artifact, and native functional gate"
     }
     else {
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
-        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, and provider execution gate"
+        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, and provider execution gate"
     }
 }
 finally {
