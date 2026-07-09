@@ -1,6 +1,6 @@
 # Math Atoms Coder
 
-Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest atom doctrine. The current workspace started as a doctrine note and UI reference; this scaffold turns that intent into a runnable static MVP.
+Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest atom doctrine. The current workspace combines a runnable static operator surface with a recovered PMRE native renderer that can generate the diagram as a proof artifact.
 
 ## Current Surface
 
@@ -8,6 +8,8 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `app/app-data.js` contains the 16 atom definitions, starter recipes, gates, and Spiderweb fabric nodes.
 - `app/app.js` runs the proof loop, recipe capture, atom filtering, and bench verdict updates.
 - `scripts/smoke.mjs` validates that the static app files and doctrine data are present.
+- `atom-rendering-engine-main` contains the Rust PMRE engine and the native `math_atoms_coder` artifact renderer.
+- `scripts/verify-production.ps1` runs the full static and Rust verification gate and regenerates `math_atoms_coder.bmp`.
 
 ## Operator Mission
 
@@ -27,10 +29,18 @@ Open `C:\Projects\Atoms Coder by Lucerna Labs\app\index.html`.
 
 No package install is required for the MVP.
 
+Generate the native artifact:
+
+```powershell
+cd "C:\Projects\Atoms Coder by Lucerna Labs\atom-rendering-engine-main"
+cargo run -p pmre-orchestrator --example math_atoms_coder --release
+```
+
 ## Verify
 
 ```powershell
 node --check app\app-data.js
 node --check app\app.js
 node scripts\smoke.mjs
+.\scripts\verify-production.ps1
 ```

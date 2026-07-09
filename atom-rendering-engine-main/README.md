@@ -105,6 +105,7 @@ cargo run -p pmre-orchestrator --example uxi         # a UXI dashboard
 cargo run -p pmre-orchestrator --example html        # HTML/CSS reduced to primitives
 cargo run -p pmre-orchestrator --example calc        # a working calculator (real app)
 cargo run -p pmre-orchestrator --example todo        # a todo app: type, add, check, delete (real app)
+cargo run -p pmre-orchestrator --example math_atoms_coder # Math Atoms Coder proof artifact
 
 # Interaction, driven headlessly to image frames
 cargo run -p pmre-orchestrator --example ui
