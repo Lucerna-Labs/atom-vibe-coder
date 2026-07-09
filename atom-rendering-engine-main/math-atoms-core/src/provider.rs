@@ -1,7 +1,7 @@
 use crate::graph::Evidence;
 use std::fs;
-use std::io;
-use std::process::Command;
+use std::io::{self, Write};
+use std::process::{Command, Output, Stdio};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKind {
@@ -182,45 +182,12 @@ impl PreparedProviderCall {
             unique_suffix()
         );
         let body_path = dir.join(format!("{stem}.json"));
-        let config_path = dir.join(format!("{stem}.curl"));
         fs::write(&body_path, &self.body)?;
-        fs::write(&config_path, curl_config(&self.endpoint, &api_key))?;
         let body_arg = format!("@{}", body_path.to_string_lossy());
-        let output = Command::new("curl.exe")
-            .arg("--silent")
-            .arg("--show-error")
-            .arg("--fail-with-body")
-            .arg("--connect-timeout")
-            .arg("10")
-            .arg("--max-time")
-            .arg("45")
-            .arg("--write-out")
-            .arg("\n__MATH_ATOMS_HTTP_STATUS__:%{http_code}")
-            .arg("--config")
-            .arg(&config_path)
-            .arg("--data-binary")
-            .arg(&body_arg)
-            .output()
-            .or_else(|_| {
-                Command::new("curl")
-                    .arg("--silent")
-                    .arg("--show-error")
-                    .arg("--fail-with-body")
-                    .arg("--connect-timeout")
-                    .arg("10")
-                    .arg("--max-time")
-                    .arg("45")
-                    .arg("--write-out")
-                    .arg("\n__MATH_ATOMS_HTTP_STATUS__:%{http_code}")
-                    .arg("--config")
-                    .arg(&config_path)
-                    .arg("--data-binary")
-                    .arg(&body_arg)
-                    .output()
-            });
-        let body_cleanup = fs::remove_file(&body_path);
-        let config_cleanup = fs::remove_file(&config_path);
-        if let Err(error) = body_cleanup.and(config_cleanup) {
+        let config = curl_config(&self.endpoint, &api_key);
+        let output = run_curl_with_stdin_config("curl.exe", &body_arg, &config)
+            .or_else(|_| run_curl_with_stdin_config("curl", &body_arg, &config));
+        if let Err(error) = fs::remove_file(&body_path) {
             return Err(ProviderError::Io(format!(
                 "provider temp cleanup failed: {error}"
             )));
@@ -270,6 +237,45 @@ fn curl_config(endpoint: &str, api_key: &str) -> String {
         curl_escape(endpoint),
         curl_escape(api_key)
     )
+}
+
+fn curl_args(body_arg: &str) -> Vec<String> {
+    [
+        "--silent",
+        "--show-error",
+        "--fail-with-body",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "45",
+        "--write-out",
+        "\n__MATH_ATOMS_HTTP_STATUS__:%{http_code}",
+        "--config",
+        "-",
+        "--data-binary",
+        body_arg,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn run_curl_with_stdin_config(program: &str, body_arg: &str, config: &str) -> io::Result<Output> {
+    let mut child = Command::new(program)
+        .args(curl_args(body_arg))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "curl stdin was not available",
+        ));
+    };
+    stdin.write_all(config.as_bytes())?;
+    drop(stdin);
+    child.wait_with_output()
 }
 
 fn unique_suffix() -> u128 {
@@ -538,5 +544,16 @@ mod tests {
             redacted,
             "Incorrect API key provided: [redacted]. You can find your API key."
         );
+    }
+
+    #[test]
+    fn curl_command_config_comes_from_stdin_not_temp_file_or_args() {
+        let secret = "sk-test-secret";
+        let args = curl_args("@payload.json");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--config" && pair[1] == "-"));
+        assert!(!args.iter().any(|arg| arg.contains(secret)));
+        assert!(!args.iter().any(|arg| arg.ends_with(".curl")));
     }
 }
