@@ -1,9 +1,10 @@
 use crate::model::{
-    NativeApp, APPLY_PROVIDER, BUS_SCROLL, CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER,
-    INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT, PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT,
-    PROVIDER_BODY_TEMPLATE_INPUT, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT,
-    PROVIDER_KIND_INPUT, PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT,
-    RUN_LOOP,
+    MainTab, NativeApp, SettingsTab, APPLY_PROVIDER, APP_SCROLL, BUS_SCROLL, CAPTURE_PROOF,
+    EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT,
+    PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT, PROVIDER_BODY_TEMPLATE_INPUT,
+    PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
+    PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT, RUNTIME_SETTINGS_TAB,
+    RUN_LOOP, SETTINGS_SCROLL, SETTINGS_TAB, WORKSPACE_TAB,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
@@ -49,14 +50,49 @@ pub fn build(app: &NativeApp, ui: &UiState) -> UxNode {
             .h(Dim::Flex(1.0))
             .pad(Edges::all(18.0))
             .gap(14.0)
-            .bg(surface()),
+            .bg(surface())
+            .scroll(APP_SCROLL),
         vec![
             header(app),
-            UxNode::boxed(
-                Style::row().gap(14.0).h(Dim::Flex(1.0)),
-                vec![left_panel(app, ui), center_panel(app), right_panel(app)],
+            top_tabs(app, ui),
+            match app.active_main_tab {
+                MainTab::Workspace => workspace_body(ui, app),
+                MainTab::Settings => settings_body(app, ui),
+            },
+        ],
+    )
+}
+
+fn top_tabs(app: &NativeApp, ui: &UiState) -> UxNode {
+    UxNode::boxed(
+        Style::row()
+            .h(Dim::Px(44.0))
+            .gap(8.0)
+            .pad(Edges::all(4.0))
+            .radius(8.0)
+            .bg(panel())
+            .border(1.0, line()),
+        vec![
+            tab_button(
+                ui,
+                WORKSPACE_TAB,
+                "Workspace",
+                app.active_main_tab == MainTab::Workspace,
+            ),
+            tab_button(
+                ui,
+                SETTINGS_TAB,
+                "Settings",
+                app.active_main_tab == MainTab::Settings,
             ),
         ],
+    )
+}
+
+fn workspace_body(ui: &UiState, app: &NativeApp) -> UxNode {
+    UxNode::boxed(
+        Style::row().gap(14.0).h(Dim::Px(690.0)),
+        vec![left_panel(ui), center_panel(app), right_panel(app)],
     )
 }
 
@@ -94,7 +130,7 @@ fn header(app: &NativeApp) -> UxNode {
     )
 }
 
-fn left_panel(app: &NativeApp, ui: &UiState) -> UxNode {
+fn left_panel(ui: &UiState) -> UxNode {
     UxNode::boxed(
         card_style().w(Dim::Pct(28.0)).gap(12.0).scroll(LEFT_SCROLL),
         vec![
@@ -139,10 +175,165 @@ fn left_panel(app: &NativeApp, ui: &UiState) -> UxNode {
                     })
                     .collect(),
             ),
-            label("Provider Setup"),
-            provider_setup(app, ui),
         ],
     )
+}
+
+fn settings_body(app: &NativeApp, ui: &UiState) -> UxNode {
+    UxNode::boxed(
+        Style::row().gap(14.0).h(Dim::Px(760.0)),
+        vec![settings_nav(app, ui), settings_panel(app, ui)],
+    )
+}
+
+fn settings_nav(app: &NativeApp, ui: &UiState) -> UxNode {
+    UxNode::boxed(
+        card_style().w(Dim::Pct(24.0)).gap(10.0),
+        vec![
+            label("Settings"),
+            tab_button(
+                ui,
+                PROVIDER_CONNECTIONS_TAB,
+                "Provider Connections",
+                app.active_settings_tab == SettingsTab::ProviderConnections,
+            ),
+            tab_button(
+                ui,
+                RUNTIME_SETTINGS_TAB,
+                "Runtime",
+                app.active_settings_tab == SettingsTab::Runtime,
+            ),
+            label("Connection Status"),
+            mini_card(
+                if app.runtime.provider().is_ready() {
+                    "provider ready"
+                } else {
+                    "provider blocked"
+                },
+                &format!(
+                    "{} {} via {}",
+                    app.runtime.provider().kind.as_str(),
+                    app.runtime.provider().model,
+                    app.runtime.provider().api_key_env
+                ),
+                if app.runtime.provider().is_ready() {
+                    teal()
+                } else {
+                    red()
+                },
+            ),
+        ],
+    )
+}
+
+fn settings_panel(app: &NativeApp, ui: &UiState) -> UxNode {
+    UxNode::boxed(
+        card_style()
+            .w(Dim::Pct(76.0))
+            .gap(12.0)
+            .scroll(SETTINGS_SCROLL),
+        match app.active_settings_tab {
+            SettingsTab::ProviderConnections => provider_connections_panel(app, ui),
+            SettingsTab::Runtime => runtime_settings_panel(app),
+        },
+    )
+}
+
+fn provider_connections_panel(app: &NativeApp, ui: &UiState) -> Vec<UxNode> {
+    vec![
+        label("Provider Connections"),
+        mini_card(
+            if app.runtime.provider().is_ready() {
+                "configured"
+            } else {
+                "blocked"
+            },
+            &format!(
+                "{} / {} {} via {}",
+                app.runtime.provider().kind.as_str(),
+                app.runtime.provider().wire_format.as_str(),
+                app.runtime.provider().model,
+                app.runtime.provider().api_key_env
+            ),
+            if app.runtime.provider().is_ready() {
+                teal()
+            } else {
+                red()
+            },
+        ),
+        UxNode::boxed(
+            Style::row().gap(8.0).h(Dim::Px(42.0)),
+            vec![button(
+                ui,
+                APPLY_PROVIDER,
+                "Apply Provider",
+                teal(),
+                Rgba::rgb8(255, 255, 255),
+            )],
+        ),
+        UxNode::boxed(
+            Style::row().gap(8.0),
+            vec![
+                mini_card(
+                    "route",
+                    "proof-loop -> provider-adapter -> model-worker",
+                    blue(),
+                ),
+                mini_card(
+                    "return",
+                    "model-worker -> proof-loop -> artifact-state",
+                    teal(),
+                ),
+            ],
+        ),
+        provider_input(ui, PROVIDER_KIND_INPUT, "kind"),
+        provider_input(ui, PROVIDER_FORMAT_INPUT, "format"),
+        provider_input(ui, PROVIDER_MODEL_INPUT, "model"),
+        provider_input(ui, PROVIDER_URL_INPUT, "endpoint"),
+        provider_input(ui, PROVIDER_KEY_ENV_INPUT, "key env"),
+        provider_input(ui, PROVIDER_AUTH_HEADER_INPUT, "auth header"),
+        provider_input(ui, PROVIDER_AUTH_SCHEME_INPUT, "auth scheme"),
+        provider_input(ui, PROVIDER_RESPONSE_KEY_INPUT, "response key"),
+        provider_input(ui, PROVIDER_BODY_TEMPLATE_INPUT, "body template"),
+    ]
+}
+
+fn runtime_settings_panel(app: &NativeApp) -> Vec<UxNode> {
+    vec![
+        label("Runtime"),
+        UxNode::boxed(
+            Style::row().gap(8.0),
+            vec![
+                metric("status", app.status().as_str(), status_color(app.status())),
+                metric(
+                    "route",
+                    app.runtime.state().last_route.len().to_string(),
+                    blue(),
+                ),
+                metric(
+                    "evidence",
+                    app.runtime.state().evidence.len().to_string(),
+                    amber(),
+                ),
+            ],
+        ),
+        mini_card(
+            "selected recipe",
+            &app.runtime.state().selected_recipe,
+            status_color(app.status()),
+        ),
+        mini_card(
+            "proof store",
+            &app.last_run_summary,
+            if app.status() == RuntimeStatus::Blocked {
+                red()
+            } else {
+                teal()
+            },
+        ),
+        label("Blockers"),
+        blocker_list(app),
+    ]
 }
 
 fn center_panel(app: &NativeApp) -> UxNode {
@@ -338,49 +529,6 @@ fn input_box(ui: &UiState) -> UxNode {
     )
 }
 
-fn provider_setup(app: &NativeApp, ui: &UiState) -> UxNode {
-    UxNode::boxed(
-        Style::col().gap(7.0),
-        vec![
-            mini_card(
-                if app.runtime.provider().is_ready() {
-                    "configured"
-                } else {
-                    "blocked"
-                },
-                &format!(
-                    "{} / {} {} via {}",
-                    app.runtime.provider().kind.as_str(),
-                    app.runtime.provider().wire_format.as_str(),
-                    app.runtime.provider().model,
-                    app.runtime.provider().api_key_env
-                ),
-                if app.runtime.provider().is_ready() {
-                    teal()
-                } else {
-                    red()
-                },
-            ),
-            provider_input(ui, PROVIDER_KIND_INPUT, "kind"),
-            provider_input(ui, PROVIDER_FORMAT_INPUT, "format"),
-            provider_input(ui, PROVIDER_MODEL_INPUT, "model"),
-            provider_input(ui, PROVIDER_URL_INPUT, "endpoint"),
-            provider_input(ui, PROVIDER_KEY_ENV_INPUT, "key env"),
-            provider_input(ui, PROVIDER_AUTH_HEADER_INPUT, "auth header"),
-            provider_input(ui, PROVIDER_AUTH_SCHEME_INPUT, "auth scheme"),
-            provider_input(ui, PROVIDER_RESPONSE_KEY_INPUT, "response key"),
-            provider_input(ui, PROVIDER_BODY_TEMPLATE_INPUT, "body template"),
-            button(
-                ui,
-                APPLY_PROVIDER,
-                "Apply Provider",
-                teal(),
-                Rgba::rgb8(255, 255, 255),
-            ),
-        ],
-    )
-}
-
 fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
     UxNode::boxed(
         Style::col().gap(3.0),
@@ -441,6 +589,33 @@ fn button(ui: &UiState, id: u32, label: &str, bg: Rgba, fg: Rgba) -> UxNode {
             .radius(7.0)
             .bg(if active { bg.with_alpha(0.86) } else { bg })
             .border(1.0, bg),
+        vec![UxNode::text(label, 13.0, fg)],
+    )
+}
+
+fn tab_button(ui: &UiState, id: u32, label: &str, selected: bool) -> UxNode {
+    let bg = if selected {
+        teal()
+    } else if ui.is_hover(id) || ui.is_pressed(id) {
+        Rgba::rgb8(230, 237, 234)
+    } else {
+        Rgba::rgb8(249, 250, 247)
+    };
+    let fg = if selected {
+        Rgba::rgb8(255, 255, 255)
+    } else {
+        ink()
+    };
+    UxNode::boxed(
+        Style::row()
+            .button(id)
+            .w(Dim::Flex(1.0))
+            .h(Dim::Px(36.0))
+            .align(Align::Center)
+            .justify(Justify::Center)
+            .radius(7.0)
+            .bg(bg)
+            .border(1.0, if selected { teal() } else { line() }),
         vec![UxNode::text(label, 13.0, fg)],
     )
 }

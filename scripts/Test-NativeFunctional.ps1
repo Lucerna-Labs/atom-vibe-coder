@@ -27,6 +27,11 @@ $env:MATH_ATOMS_PROVIDER_URL = "http://127.0.0.1:9/v1/responses"
 $env:MATH_ATOMS_PROVIDER_MODEL = "functional-provider"
 $env:MATH_ATOMS_PROVIDER_KEY_ENV = "MATH_ATOMS_FUNCTIONAL_KEY"
 $env:MATH_ATOMS_FUNCTIONAL_KEY = "test-key"
+$CommandApplyProvider = 12
+$CommandWorkspaceTab = 21
+$CommandSettingsTab = 22
+$CommandProviderConnectionsTab = 23
+$CommandRuntimeSettingsTab = 24
 
 Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
@@ -130,12 +135,52 @@ function Refresh-NativeProcess([string]$Stage) {
 }
 
 try {
-    Invoke-NativeCommand $proc.MainWindowHandle 12
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Settings tab command"
+    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
+        throw "Settings tab did not expose provider connections as the default settings panel. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandRuntimeSettingsTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Runtime settings tab command"
+    if ($proc.MainWindowTitle -notmatch "settings-runtime") {
+        throw "Runtime settings tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Provider connections tab command"
+    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
+        throw "Provider connections tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Workspace tab command"
+    if ($proc.MainWindowTitle -notmatch "workspace") {
+        throw "Workspace tab did not return to the workspace surface. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Provider settings before apply"
+    if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
+        throw "Provider apply path was not on the provider connections settings tab. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandApplyProvider
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Apply Provider"
     if ($proc.MainWindowTitle -notmatch "provider:(idle|blocked)") {
         throw "Apply Provider control did not update provider setup state. Title: $($proc.MainWindowTitle)"
     }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Workspace tab after provider apply"
 
     Clear-Intent $proc.MainWindowHandle
     Send-Text $proc.MainWindowHandle "native renderer artifact only"

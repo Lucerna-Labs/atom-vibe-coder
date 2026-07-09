@@ -1,4 +1,7 @@
-use crate::model::{NativeApp, APPLY_PROVIDER, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, RUN_LOOP};
+use crate::model::{
+    NativeApp, APPLY_PROVIDER, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, PROVIDER_CONNECTIONS_TAB,
+    RUNTIME_SETTINGS_TAB, RUN_LOOP, SETTINGS_TAB, WORKSPACE_TAB,
+};
 use crate::ui;
 use core::ffi::c_void;
 use pmre_kit::ux::UxNode;
@@ -491,6 +494,10 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
         CAPTURE_PROOF => app.model.capture_current_proof(),
         MARK_DRIFT => app.model.mark_drift(),
         APPLY_PROVIDER => app.model.apply_provider_config(&app.ui),
+        WORKSPACE_TAB => app.model.show_workspace(),
+        SETTINGS_TAB => app.model.show_settings(),
+        PROVIDER_CONNECTIONS_TAB => app.model.show_provider_connections(),
+        RUNTIME_SETTINGS_TAB => app.model.show_runtime_settings(),
         _ => {}
     }
 }
@@ -568,10 +575,11 @@ fn paint(hwnd: Hwnd) {
                     SRCCOPY,
                 );
                 let title = format!(
-                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {}]",
+                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {} {}]",
                     ms,
                     app.model.status().as_str(),
                     app.model.provider_title_state(),
+                    app.model.nav_title_state(),
                     app.model.runtime.state().selected_recipe
                 );
                 SetWindowTextW(hwnd, wide(&title).as_ptr());

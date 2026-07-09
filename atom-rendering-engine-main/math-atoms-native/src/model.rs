@@ -24,6 +24,12 @@ pub const PROVIDER_AUTH_HEADER_INPUT: u32 = 15;
 pub const PROVIDER_AUTH_SCHEME_INPUT: u32 = 16;
 pub const PROVIDER_BODY_TEMPLATE_INPUT: u32 = 17;
 pub const PROVIDER_RESPONSE_KEY_INPUT: u32 = 18;
+pub const APP_SCROLL: u32 = 19;
+pub const SETTINGS_SCROLL: u32 = 20;
+pub const WORKSPACE_TAB: u32 = 21;
+pub const SETTINGS_TAB: u32 = 22;
+pub const PROVIDER_CONNECTIONS_TAB: u32 = 23;
+pub const RUNTIME_SETTINGS_TAB: u32 = 24;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -36,6 +42,20 @@ pub struct NativeApp {
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
+    pub active_main_tab: MainTab,
+    pub active_settings_tab: SettingsTab,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MainTab {
+    Workspace,
+    Settings,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettingsTab {
+    ProviderConnections,
+    Runtime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +96,8 @@ impl NativeApp {
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output,
             provider_running: false,
+            active_main_tab: MainTab::Workspace,
+            active_settings_tab: SettingsTab::ProviderConnections,
         }
     }
 
@@ -121,6 +143,24 @@ impl NativeApp {
             .mark_drift("Operator flagged drift from the native PMRE shell.");
         self.last_run_summary =
             "Drift flagged; next proof run must re-establish evidence.".to_string();
+    }
+
+    pub fn show_workspace(&mut self) {
+        self.active_main_tab = MainTab::Workspace;
+    }
+
+    pub fn show_settings(&mut self) {
+        self.active_main_tab = MainTab::Settings;
+    }
+
+    pub fn show_provider_connections(&mut self) {
+        self.active_main_tab = MainTab::Settings;
+        self.active_settings_tab = SettingsTab::ProviderConnections;
+    }
+
+    pub fn show_runtime_settings(&mut self) {
+        self.active_main_tab = MainTab::Settings;
+        self.active_settings_tab = SettingsTab::Runtime;
     }
 
     pub fn apply_provider_config(&mut self, ui: &UiState) {
@@ -249,6 +289,16 @@ impl NativeApp {
             "provider:idle"
         } else {
             "provider:ran"
+        }
+    }
+
+    pub fn nav_title_state(&self) -> &'static str {
+        match (self.active_main_tab, self.active_settings_tab) {
+            (MainTab::Workspace, _) => "workspace",
+            (MainTab::Settings, SettingsTab::ProviderConnections) => {
+                "settings-provider-connections"
+            }
+            (MainTab::Settings, SettingsTab::Runtime) => "settings-runtime",
         }
     }
 
@@ -485,6 +535,50 @@ mod tests {
     }
 
     #[test]
+    fn settings_provider_connections_tab_owns_provider_controls() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let ui = UiState::new(1200, 800);
+
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            assert!(widget_rect(&build, &ui, SETTINGS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_none());
+        }
+
+        app.show_settings();
+        app.show_runtime_settings();
+        assert_eq!(app.nav_title_state(), "settings-runtime");
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            assert!(widget_rect(&build, &ui, PROVIDER_CONNECTIONS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, RUNTIME_SETTINGS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_none());
+        }
+
+        app.show_provider_connections();
+        assert_eq!(app.nav_title_state(), "settings-provider-connections");
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_BODY_TEMPLATE_INPUT).is_some());
+            assert!(widget_rect(&build, &ui, APPLY_PROVIDER).is_some());
+        }
+    }
+
+    #[test]
+    fn app_shell_scrolls_at_small_viewports() {
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        let mut ui = UiState::new(900, 520);
+        app.seed_input(&mut ui);
+
+        let build = |state: &UiState| crate::ui::build(&app, state);
+        handle_event(&mut ui, &build, UiEvent::Wheel(4.0, 4.0, 120.0));
+
+        assert!(ui.scroll_of(APP_SCROLL) > 0.0);
+        assert!(widget_rect(&build, &ui, SETTINGS_TAB).is_some());
+    }
+
+    #[test]
     fn visible_controls_hit_test_and_dispatch() {
         let key = format!("MATH_ATOMS_VISIBLE_CONTROL_KEY_{}", std::process::id());
         std::env::set_var(&key, "secret");
@@ -497,12 +591,22 @@ mod tests {
             "http://127.0.0.1:9/v1/responses".to_string(),
         );
 
-        ui.scrolls.insert(LEFT_SCROLL, 500.0);
+        click_control(&app, &mut ui, SETTINGS_TAB);
+        app.show_settings();
+        assert_eq!(app.active_main_tab, MainTab::Settings);
+
+        click_control(&app, &mut ui, PROVIDER_CONNECTIONS_TAB);
+        app.show_provider_connections();
+        assert_eq!(app.active_settings_tab, SettingsTab::ProviderConnections);
+
         click_control(&app, &mut ui, APPLY_PROVIDER);
         app.apply_provider_config(&ui);
         assert_eq!(app.status(), RuntimeStatus::Draft);
 
-        ui.scrolls.insert(LEFT_SCROLL, 0.0);
+        click_control(&app, &mut ui, WORKSPACE_TAB);
+        app.show_workspace();
+        assert_eq!(app.active_main_tab, MainTab::Workspace);
+
         click_control(&app, &mut ui, RUN_LOOP);
         app.run_current_intent(&ui);
         assert!(!app.runtime.state().last_route.is_empty());
