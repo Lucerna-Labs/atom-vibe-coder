@@ -190,8 +190,9 @@ impl PreparedProviderCall {
                     .arg(&body_arg)
                     .output()
             });
-        let cleanup = fs::remove_file(&body_path).and(fs::remove_file(&config_path));
-        if let Err(error) = cleanup {
+        let body_cleanup = fs::remove_file(&body_path);
+        let config_cleanup = fs::remove_file(&config_path);
+        if let Err(error) = body_cleanup.and(config_cleanup) {
             return Err(ProviderError::Io(format!(
                 "provider temp cleanup failed: {error}"
             )));
