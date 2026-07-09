@@ -66,7 +66,9 @@ try {
     else {
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
-        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native provider responsiveness gate, and provider execution gate"
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildSeveralApps.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "provider multi-app build gate failed with exit code $LASTEXITCODE" }
+        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native provider responsiveness gate, provider execution gate, and provider multi-app build gate"
     }
 }
 finally {

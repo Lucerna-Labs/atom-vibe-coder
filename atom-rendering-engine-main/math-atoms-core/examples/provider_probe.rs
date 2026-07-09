@@ -2,9 +2,16 @@ use math_atoms_core::{provider_output_hash, MathAtomsRuntime, ProviderConfig, Ru
 
 fn main() {
     let mut runtime = MathAtomsRuntime::new(ProviderConfig::from_process_env());
-    let run = runtime.run_intent(
-        "Run the configured provider model against wiki graph RAG evidence on the Spiderweb Bus.",
-    );
+    let arg_intent = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    let intent = if !arg_intent.trim().is_empty() {
+        arg_intent
+    } else {
+        std::env::var("MATH_ATOMS_PROVIDER_PROBE_INTENT").unwrap_or_else(|_| {
+            "Run the configured provider model against wiki graph RAG evidence on the Spiderweb Bus."
+                .to_string()
+        })
+    };
+    let run = runtime.run_intent(&intent);
     if run.status == RuntimeStatus::Blocked {
         eprintln!(
             "provider proof blocked before execution: {:?}",
