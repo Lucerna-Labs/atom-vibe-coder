@@ -825,7 +825,7 @@ fn provider_output_preview(app: &NativeApp) -> UxNode {
 }
 
 fn input_box(ui: &UiState) -> UxNode {
-    let text = ui.input_text(INTENT_INPUT);
+    let text = focused_input_text(ui, INTENT_INPUT);
     UxNode::boxed(
         Style::col()
             .input(INTENT_INPUT)
@@ -846,6 +846,7 @@ fn input_box(ui: &UiState) -> UxNode {
 }
 
 fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
+    let text = focused_input_text(ui, id);
     UxNode::boxed(
         Style::col().gap(4.0),
         vec![
@@ -865,10 +866,22 @@ fn provider_input(ui: &UiState, id: u32, label_text: &str) -> UxNode {
                             line()
                         },
                     ),
-                vec![UxNode::text(ui.input_text(id), 11.0, ink())],
+                vec![UxNode::text(text, 11.0, ink())],
             ),
         ],
     )
+}
+
+fn focused_input_text(ui: &UiState, id: u32) -> String {
+    let mut text = ui.input_text(id).to_string();
+    if ui.is_focused(id) && caret_visible(ui) {
+        text.push('|');
+    }
+    text
+}
+
+fn caret_visible(ui: &UiState) -> bool {
+    ((ui.animation_time * 2.0).floor() as u32).is_multiple_of(2)
 }
 
 fn blocker_list(app: &NativeApp) -> UxNode {

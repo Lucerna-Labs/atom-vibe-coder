@@ -682,6 +682,7 @@ fn parse_artifact_manifest(text: &str) -> Vec<SideArtifact> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pmre_kit::ux::UxNode;
     use pmre_orchestrator::{handle_event, widget_rect, UiEvent};
 
     fn click_control(app: &NativeApp, ui: &mut UiState, id: u32) {
@@ -698,6 +699,16 @@ mod tests {
             handle_event(ui, &build, UiEvent::PointerUp(x, y));
         }
         assert_eq!(ui.take_click(), Some(id));
+    }
+
+    fn tree_contains_text(node: &UxNode, needle: &str) -> bool {
+        match node {
+            UxNode::Box { children, .. } => children
+                .iter()
+                .any(|child| tree_contains_text(child, needle)),
+            UxNode::Text { content, .. } => content.contains(needle),
+            UxNode::Rich { spans, .. } => spans.iter().any(|span| span.text.contains(needle)),
+        }
     }
 
     #[test]
@@ -874,6 +885,23 @@ mod tests {
 
         assert!(ui.scroll_of(APP_SCROLL) > 0.0);
         assert!(widget_rect(&build, &ui, SETTINGS_TAB).is_some());
+    }
+
+    #[test]
+    fn focused_chat_box_renders_a_visible_caret() {
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        ui.inputs.insert(INTENT_INPUT, "abc".to_string());
+        ui.focused = Some(INTENT_INPUT);
+        ui.animation_time = 0.0;
+
+        let tree = crate::ui::build(&app, &ui);
+        assert!(tree_contains_text(&tree, "abc|"));
+
+        ui.focused = None;
+        let tree = crate::ui::build(&app, &ui);
+        assert!(!tree_contains_text(&tree, "abc|"));
     }
 
     #[test]
