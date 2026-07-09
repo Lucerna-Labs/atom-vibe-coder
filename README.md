@@ -12,7 +12,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Test-NativeProviderResponsiveness.ps1` launches the native app against a slow local provider and proves the window remains responsive while provider execution is running.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-ProviderBuildSeveralApps.ps1` asks the configured provider to generate several tiny Rust fixtures, compiles them, runs them, and writes side-window artifact rows.
-- `scripts/Test-ProviderBuildRealPmreApp.ps1` asks the configured provider to generate a real PMRE task-board app, compiles the Cargo project against the local renderer crates, drives UI events, writes a BMP artifact, and adds it to the native side artifact window.
+- `scripts/Test-ProviderBuildRealPmreApp.ps1` gives the configured provider only a natural-language app request, validates the returned product spec, compiles that spec through the harness-owned PMRE scaffold, drives UI events, writes a BMP artifact, and adds it to the native side artifact window.
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
@@ -66,7 +66,7 @@ Run a real DeepSeek Flash model test that asks the provider to generate a depend
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-DeepSeekToyApp.ps1
 ```
 
-Run the stricter app-build gate that asks the configured provider to generate a PMRE-rendered task-board app, compiles it with local renderer crates, exercises UI events, writes a BMP, and exposes it in the native side artifact window:
+Run the stricter app-build gate. The provider receives only a natural-language user request; Math Atoms Coder owns the PMRE renderer scaffold, compiles the resulting app, exercises UI events, writes a BMP, and exposes it in the native side artifact window:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-ProviderBuildRealPmreApp.ps1

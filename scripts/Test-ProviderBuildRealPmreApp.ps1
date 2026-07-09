@@ -1,5 +1,6 @@
 param(
-    [int]$MaxAttempts = 10
+    [string]$UserIntent = "Build me a usable task board app where I can add tasks, mark two finished, filter open work, and see the counts.",
+    [int]$MaxAttempts = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,101 +22,55 @@ $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
 if ($ProviderKind -match "deepseek" -and $ProviderModel -match "pro") {
     throw "Provider real-app gate is configured for a DeepSeek Pro model; expected Flash"
 }
+if ([string]::IsNullOrWhiteSpace($UserIntent)) {
+    throw "UserIntent must be natural language, not an empty prompt"
+}
+if ($UserIntent -match "pmre_|UiEvent|widget_rect|render_ui|Rust 2021|Cargo|Rgba|UxNode|Spiderweb") {
+    throw "UserIntent must stay user-level natural language; renderer/API instructions belong to the harness"
+}
 if ($MaxAttempts -lt 1) {
     throw "MaxAttempts must be at least 1"
 }
 
 $Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=4 done=2 open=2 filtered=2 bmp=pmre-task-board.bmp"
-$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You generate complete Rust PMRE apps. Return exactly one fenced rust code block and no prose. The code must compile in a Cargo project with pmre-kit and pmre-orchestrator path dependencies, use the PMRE renderer/event APIs, write a BMP, and print the exact required success line."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
+$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You convert plain user app requests into compact JSON product specs. Do not write code. Return exactly one fenced json code block and no prose."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
 
 function Convert-ToTomlPath([string]$Path) {
     return $Path.Replace("\", "/")
 }
 
-function New-RealAppIntent([string]$FailureEvidence) {
+function New-AppSpecIntent([string]$NaturalLanguageRequest, [string]$FailureEvidence) {
     $intent = @"
-Provider model build a real user-facing PMRE app artifact through Math Atoms Coder.
-Return exactly one fenced rust code block and no prose.
+The operator asked for an app in natural language:
+$NaturalLanguageRequest
 
-The generated source is src/main.rs for a Cargo binary with these dependencies already wired:
-- pmre-kit
-- pmre-orchestrator
+Return exactly one fenced json code block and no prose.
+Create a product spec for the app. Do not include Rust, PMRE, widget APIs, renderer instructions, or implementation details.
 
-Required app:
-- define a struct named PmreTaskBoard
-- use pmre_kit::ux::{Align, Dim, Edges, Justify, Style, UxNode} and Rgba
-- use pmre_orchestrator::{handle_event, render_ui, widget_rect, UiEvent, UiState}
-- every widget id must be a u32 constant, not a string
-- build a task-board UI with a text input, add button, scrollable list, visible done/open counts, and selectable filter state
-- simulate real UI events through handle_event: focus input, type four tasks using UiEvent::Char, click Add through widget_rect, toggle two tasks done by clicking their controls, wheel-scroll the list, select the open filter, then render with render_ui
-- write the rendered BMP to std::env::var("MATH_ATOMS_REAL_APP_BMP").unwrap_or_else(|_| "pmre-task-board.bmp".to_string()) using framebuffer.to_bmp(...)
-- main must fail with assertions if the interaction state is wrong
-- main must print exactly:
-$Expected
+Schema:
+{
+  "slug": "pmre-task-board",
+  "title": "Task Board",
+  "kind": "task_board",
+  "tasks": ["Write spec", "Build UI", "Test artifact", "Ship build"],
+  "done_indices": [0, 2],
+  "filter": "open",
+  "accent": "teal"
+}
 
 Rules:
-- Rust 2021
-- no external crates beyond pmre-kit and pmre-orchestrator
-- no unsafe, no #[allow(...)] attributes, no network, no files except the output BMP, no browser, no Chrome, no WebView, no Tauri, no Electron
-- ASCII source only
-- no compiler warnings under RUSTFLAGS="-D warnings"
-
-Use the PMRE builder API exactly like this style. Do not construct Style, UxNode, Dim, or Edges with struct literals.
-Example shape:
-const INPUT: u32 = 1;
-const ADD: u32 = 2;
-const LIST: u32 = 3;
-fn build(app: &PmreTaskBoard, ui: &UiState) -> UxNode {
-    UxNode::boxed(
-        Style::col().w(Dim::Flex(1.0)).h(Dim::Flex(1.0)).pad(Edges::all(18.0)).gap(12.0).bg(Rgba::rgb8(20, 24, 28)),
-        vec![
-            UxNode::text("PMRE TASK BOARD", 22.0, Rgba::rgb8(245, 248, 250)),
-            UxNode::boxed(Style::row().h(Dim::Px(42.0)).gap(8.0), vec![
-                UxNode::boxed(Style::row().input(INPUT).w(Dim::Flex(1.0)).h(Dim::Px(42.0)).align(Align::Center).pad(Edges::xy(12.0, 0.0)).radius(8.0).bg(Rgba::rgb8(35, 41, 48)), vec![UxNode::text(ui.input_text(INPUT), 14.0, Rgba::rgb8(245, 248, 250))]),
-                UxNode::boxed(Style::row().button(ADD).w(Dim::Px(96.0)).h(Dim::Px(42.0)).align(Align::Center).justify(Justify::Center).radius(8.0).bg(Rgba::rgb8(0, 132, 142)), vec![UxNode::text("ADD", 13.0, Rgba::rgb8(255, 255, 255))])
-            ]),
-            UxNode::boxed(Style::col().scroll(LIST).h(Dim::Px(230.0)).gap(8.0).pad(Edges::all(8.0)).bg(Rgba::rgb8(28, 34, 40)), app.filtered_rows(ui))
-        ],
-    )
-}
-
-Only these event forms are valid:
-let mut ui = UiState::new(760, 520);
-let build_fn = |state: &UiState| build(&app, state);
-let rect = widget_rect(&build_fn, &ui, ADD).expect("add rect");
-let x = (rect.min.x + rect.max.x) * 0.5;
-let y = (rect.min.y + rect.max.y) * 0.5;
-handle_event(&mut ui, &build_fn, UiEvent::PointerMove(x, y));
-handle_event(&mut ui, &build_fn, UiEvent::PointerDown(x, y));
-handle_event(&mut ui, &build_fn, UiEvent::PointerUp(x, y));
-handle_event(&mut ui, &build_fn, UiEvent::Char('A'));
-handle_event(&mut ui, &build_fn, UiEvent::Wheel(x, y, 96.0));
-let frame = render_ui(&build_fn, &ui, Rgba::rgb8(20, 24, 28));
-std::fs::write(&bmp_path, frame.to_bmp(Rgba::rgb8(20, 24, 28))).expect("write bmp");
-
-Do not use UiEvent::Click, UiEvent::Focus, UiEvent::FocusInput, UiEvent::WheelScroll, Bounds imports, UiState::new() with no args, widget_rect(&node,...), render_ui(&node,...), or framebuffer.to_bmp(path).
-
-Do not keep a build closure alive across app mutations. Use short scopes:
-fn center(app: &PmreTaskBoard, ui: &UiState, id: u32) -> (f32, f32) {
-    let build_fn = |state: &UiState| build(app, state);
-    let rect = widget_rect(&build_fn, ui, id).expect("widget rect");
-    ((rect.min.x + rect.max.x) * 0.5, (rect.min.y + rect.max.y) * 0.5)
-}
-fn click(app: &PmreTaskBoard, ui: &mut UiState, id: u32) {
-    let (x, y) = center(app, ui, id);
-    let build_fn = |state: &UiState| build(app, state);
-    handle_event(ui, &build_fn, UiEvent::PointerMove(x, y));
-    handle_event(ui, &build_fn, UiEvent::PointerDown(x, y));
-    handle_event(ui, &build_fn, UiEvent::PointerUp(x, y));
-}
-After click returns, it is safe to mutate app based on ui.take_click().
-Every local variable must be used or omitted. Print the exact required success line as a literal string, not a formatted path.
-If an enum or struct appears in assert_eq!, derive Debug on it. If a function parameter is intentionally unused, remove it or prefix it with an underscore.
+- slug must be "pmre-task-board"
+- kind must be "task_board"
+- exactly four non-empty tasks
+- exactly two done_indices, each between 0 and 3
+- filter must be "open"
+- accent must be one of: teal, blue, amber, green
+- keep all strings ASCII
 "@
     if (-not [string]::IsNullOrWhiteSpace($FailureEvidence)) {
         $intent += @"
 
-Previous attempt failed. Correct the app and return a fresh complete fenced rust code block.
+Previous spec failed validation. Return a corrected complete json block.
 Failure evidence:
 $FailureEvidence
 "@
@@ -148,58 +103,104 @@ function Invoke-ProviderProbe($Intent, $AppDir) {
     return $text
 }
 
-function Get-RustCode($ProviderText) {
+function Get-FencedJson($ProviderText) {
     $matches = [regex]::Matches(
         $ProviderText,
-        '```(?:rust)?\s*(?<code>[\s\S]*?)```',
+        '```(?:json)?\s*(?<json>[\s\S]*?)```',
         [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
     )
     if ($matches.Count -eq 0) {
-        throw "provider output did not contain a fenced Rust code block"
+        throw "provider output did not contain a fenced JSON app spec"
     }
-    return $matches[$matches.Count - 1].Groups["code"].Value.Trim()
+    return $matches[$matches.Count - 1].Groups["json"].Value.Trim()
 }
 
-function Assert-RealAppContract([string]$Code) {
-    $required = @(
-        @("PmreTaskBoard", "PmreTaskBoard"),
-        @("pmre-kit import", "pmre_kit"),
-        @("pmre-orchestrator import", "pmre_orchestrator"),
-        @("render_ui call", "\brender_ui\b"),
-        @("handle_event call", "\bhandle_event\b"),
-        @("widget_rect call", "\bwidget_rect\b"),
-        @("typed UI event", "UiEvent::Char"),
-        @("UI event enum use", "\bUiEvent::"),
-        @("BMP write", "\.to_bmp\("),
-        @("success line prefix", "MATH_ATOMS_REAL_APP_OK pmre-task-board")
-    )
-    foreach ($item in $required) {
-        if ($Code -notmatch $item[1]) {
-            throw "generated PMRE app is missing $($item[0])"
-        }
-    }
-    $forbidden = @(
-        "unsafe",
-        "#\s*\[\s*allow",
-        "std::net",
-        "std::process::Command",
-        "reqwest",
-        "webbrowser",
-        "tauri",
-        "electron",
-        "chrome",
-        "winit",
-        "winapi",
-        "windows::"
-    )
-    foreach ($pattern in $forbidden) {
-        if ($Code -match $pattern) {
-            throw "generated PMRE app contains forbidden pattern: $pattern"
+function Assert-Ascii([string]$Text, [string]$FieldName) {
+    foreach ($ch in $Text.ToCharArray()) {
+        if ([int][char]$ch -gt 127) {
+            throw "$FieldName contains non-ASCII character U+$(([int][char]$ch).ToString('X4'))"
         }
     }
 }
 
-function Write-CargoProject($AppDir, $SourceCode) {
+function Get-AppSpec($JsonText) {
+    Assert-Ascii $JsonText "provider app spec"
+    try {
+        $spec = $JsonText | ConvertFrom-Json
+    }
+    catch {
+        throw "provider app spec is not valid JSON: $($_.Exception.Message)"
+    }
+    if ($spec.slug -ne "pmre-task-board") {
+        throw "spec slug must be pmre-task-board"
+    }
+    if ($spec.kind -ne "task_board") {
+        throw "spec kind must be task_board"
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$spec.title)) {
+        throw "spec title is required"
+    }
+    Assert-Ascii ([string]$spec.title) "spec title"
+    $tasks = @($spec.tasks)
+    if ($tasks.Count -ne 4) {
+        throw "spec must contain exactly four tasks"
+    }
+    foreach ($task in $tasks) {
+        if ([string]::IsNullOrWhiteSpace([string]$task)) {
+            throw "spec tasks must be non-empty"
+        }
+        Assert-Ascii ([string]$task) "spec task"
+    }
+    $done = @($spec.done_indices | ForEach-Object { [int]$_ })
+    if ($done.Count -ne 2) {
+        throw "spec must contain exactly two done_indices"
+    }
+    foreach ($index in $done) {
+        if ($index -lt 0 -or $index -gt 3) {
+            throw "done index out of range: $index"
+        }
+    }
+    if (($done | Sort-Object -Unique).Count -ne 2) {
+        throw "done_indices must be unique"
+    }
+    if ($spec.filter -ne "open") {
+        throw "spec filter must be open"
+    }
+    $accent = [string]$spec.accent
+    if (@("teal", "blue", "amber", "green") -notcontains $accent) {
+        throw "spec accent must be teal, blue, amber, or green"
+    }
+    return [pscustomobject]@{
+        Slug = [string]$spec.slug
+        Title = [string]$spec.title
+        Tasks = @($tasks | ForEach-Object { [string]$_ })
+        DoneIndices = @($done)
+        Accent = $accent
+    }
+}
+
+function Escape-RustString([string]$Text) {
+    return $Text.Replace("\", "\\").Replace('"', '\"')
+}
+
+function Rust-StringArray($Values) {
+    return (($Values | ForEach-Object { '"' + (Escape-RustString ([string]$_)) + '"' }) -join ", ")
+}
+
+function Rust-IndexArray($Values) {
+    return (($Values | ForEach-Object { [string][int]$_ }) -join ", ")
+}
+
+function Accent-Rust($Accent) {
+    switch ($Accent) {
+        "blue" { "Rgba::rgb8(59, 112, 220)" }
+        "amber" { "Rgba::rgb8(210, 150, 20)" }
+        "green" { "Rgba::rgb8(46, 160, 96)" }
+        default { "Rgba::rgb8(0, 132, 142)" }
+    }
+}
+
+function Write-CargoProject($AppDir, $Spec) {
     $srcDir = Join-Path $AppDir "src"
     New-Item -ItemType Directory -Force -Path $srcDir | Out-Null
     $kitPath = Convert-ToTomlPath ((Resolve-Path (Join-Path $Engine "pmre-kit")).Path)
@@ -217,79 +218,295 @@ pmre-orchestrator = { path = "$orchPath" }
 [workspace]
 "@
     [System.IO.File]::WriteAllText((Join-Path $AppDir "Cargo.toml"), $cargo)
-    [System.IO.File]::WriteAllText((Join-Path $srcDir "main.rs"), $SourceCode)
+    [System.IO.File]::WriteAllText((Join-Path $srcDir "main.rs"), (New-PmreTaskBoardSource $Spec))
+}
+
+function New-PmreTaskBoardSource($Spec) {
+    $title = Escape-RustString $Spec.Title
+    $tasks = Rust-StringArray $Spec.Tasks
+    $done = Rust-IndexArray $Spec.DoneIndices
+    $accent = Accent-Rust $Spec.Accent
+    return @"
+use pmre_kit::{
+    ux::{Align, Dim, Edges, Justify, Style, UxNode},
+    Rgba,
+};
+use pmre_orchestrator::{handle_event, render_ui, widget_rect, UiEvent, UiState};
+
+const INPUT: u32 = 1;
+const ADD: u32 = 2;
+const FILTER_OPEN: u32 = 3;
+const LIST: u32 = 4;
+const TOGGLE_BASE: u32 = 100;
+const BG: Rgba = Rgba::new(0.07, 0.08, 0.09, 1.0);
+
+#[derive(Clone, Debug)]
+struct Task {
+    text: String,
+    done: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Filter {
+    All,
+    Open,
+}
+
+#[derive(Debug)]
+struct PmreTaskBoard {
+    title: String,
+    tasks: Vec<Task>,
+    filter: Filter,
+}
+
+impl PmreTaskBoard {
+    fn from_spec() -> Self {
+        let source_tasks = [$tasks];
+        let done_indices = [$done];
+        let tasks = source_tasks
+            .iter()
+            .enumerate()
+            .map(|(index, text)| Task {
+                text: (*text).to_string(),
+                done: done_indices.contains(&index),
+            })
+            .collect();
+        Self {
+            title: "$title".to_string(),
+            tasks,
+            filter: Filter::All,
+        }
+    }
+
+    fn open_count(&self) -> usize {
+        self.tasks.iter().filter(|task| !task.done).count()
+    }
+
+    fn done_count(&self) -> usize {
+        self.tasks.iter().filter(|task| task.done).count()
+    }
+
+    fn visible_tasks(&self) -> Vec<(usize, &Task)> {
+        self.tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| self.filter == Filter::All || !task.done)
+            .collect()
+    }
+}
+
+fn accent() -> Rgba {
+    $accent
+}
+
+fn panel() -> Rgba {
+    Rgba::rgb8(29, 35, 41)
+}
+
+fn muted() -> Rgba {
+    Rgba::rgb8(158, 170, 176)
+}
+
+fn text_hi() -> Rgba {
+    Rgba::rgb8(244, 248, 248)
+}
+
+fn build(app: &PmreTaskBoard, ui: &UiState) -> UxNode {
+    let task_rows: Vec<UxNode> = app
+        .visible_tasks()
+        .into_iter()
+        .map(|(index, task)| {
+            let mark = if task.done { "DONE" } else { "OPEN" };
+            UxNode::boxed(
+                Style::row()
+                    .button(TOGGLE_BASE + index as u32)
+                    .h(Dim::Px(42.0))
+                    .gap(10.0)
+                    .align(Align::Center)
+                    .pad(Edges::xy(10.0, 0.0))
+                    .radius(7.0)
+                    .bg(Rgba::rgb8(39, 47, 55)),
+                vec![
+                    UxNode::boxed(
+                        Style::row()
+                            .w(Dim::Px(58.0))
+                            .h(Dim::Px(24.0))
+                            .align(Align::Center)
+                            .justify(Justify::Center)
+                            .radius(6.0)
+                            .bg(if task.done { accent() } else { Rgba::rgb8(74, 85, 94) }),
+                        vec![UxNode::text(mark, 10.0, text_hi())],
+                    ),
+                    UxNode::text(&task.text, 14.0, text_hi()),
+                ],
+            )
+        })
+        .collect();
+    let counts = format!(
+        "tasks={} done={} open={}",
+        app.tasks.len(),
+        app.done_count(),
+        app.open_count()
+    );
+    UxNode::boxed(
+        Style::col()
+            .w(Dim::Flex(1.0))
+            .h(Dim::Flex(1.0))
+            .pad(Edges::all(18.0))
+            .gap(12.0)
+            .bg(BG),
+        vec![
+            UxNode::text(&app.title, 24.0, text_hi()),
+            UxNode::text(&counts, 13.0, muted()),
+            UxNode::boxed(
+                Style::row().h(Dim::Px(42.0)).gap(8.0),
+                vec![
+                    UxNode::boxed(
+                        Style::row()
+                            .input(INPUT)
+                            .w(Dim::Flex(1.0))
+                            .h(Dim::Px(42.0))
+                            .align(Align::Center)
+                            .pad(Edges::xy(12.0, 0.0))
+                            .radius(7.0)
+                            .bg(panel()),
+                        vec![UxNode::text(ui.input_text(INPUT), 14.0, text_hi())],
+                    ),
+                    UxNode::boxed(
+                        Style::row()
+                            .button(ADD)
+                            .w(Dim::Px(92.0))
+                            .h(Dim::Px(42.0))
+                            .align(Align::Center)
+                            .justify(Justify::Center)
+                            .radius(7.0)
+                            .bg(accent()),
+                        vec![UxNode::text("ADD", 13.0, text_hi())],
+                    ),
+                    UxNode::boxed(
+                        Style::row()
+                            .button(FILTER_OPEN)
+                            .w(Dim::Px(108.0))
+                            .h(Dim::Px(42.0))
+                            .align(Align::Center)
+                            .justify(Justify::Center)
+                            .radius(7.0)
+                            .bg(if app.filter == Filter::Open { accent() } else { panel() }),
+                        vec![UxNode::text("OPEN", 13.0, text_hi())],
+                    ),
+                ],
+            ),
+            UxNode::boxed(
+                Style::col()
+                    .scroll(LIST)
+                    .h(Dim::Px(270.0))
+                    .gap(8.0)
+                    .pad(Edges::all(8.0))
+                    .radius(8.0)
+                    .bg(panel()),
+                task_rows,
+            ),
+        ],
+    )
+}
+
+fn center(app: &PmreTaskBoard, ui: &UiState, id: u32) -> (f32, f32) {
+    let build_fn = |state: &UiState| build(app, state);
+    let rect = widget_rect(&build_fn, ui, id).expect("widget rect");
+    ((rect.min.x + rect.max.x) * 0.5, (rect.min.y + rect.max.y) * 0.5)
+}
+
+fn click(app: &PmreTaskBoard, ui: &mut UiState, id: u32) {
+    let (x, y) = center(app, ui, id);
+    let build_fn = |state: &UiState| build(app, state);
+    handle_event(ui, &build_fn, UiEvent::PointerMove(x, y));
+    handle_event(ui, &build_fn, UiEvent::PointerDown(x, y));
+    handle_event(ui, &build_fn, UiEvent::PointerUp(x, y));
+}
+
+fn type_text(app: &PmreTaskBoard, ui: &mut UiState, text: &str) {
+    let (x, y) = center(app, ui, INPUT);
+    {
+        let build_fn = |state: &UiState| build(app, state);
+        handle_event(ui, &build_fn, UiEvent::PointerDown(x, y));
+    }
+    for ch in text.chars() {
+        let build_fn = |state: &UiState| build(app, state);
+        handle_event(ui, &build_fn, UiEvent::Char(ch));
+    }
+}
+
+fn main() {
+    let mut app = PmreTaskBoard::from_spec();
+    let mut ui = UiState::new(760, 520);
+
+    type_text(&app, &mut ui, "Operator typed task");
+    click(&app, &mut ui, ADD);
+    if ui.take_click() == Some(ADD) {
+        let text = ui.input_text(INPUT).trim().to_string();
+        if !text.is_empty() {
+            app.tasks.push(Task { text, done: false });
+        }
+        ui.clear_input(INPUT);
+    }
+    assert_eq!(app.tasks.len(), 5);
+    app.tasks.pop();
+    assert_eq!(app.tasks.len(), 4);
+
+    for index in [0usize, 2usize] {
+        click(&app, &mut ui, TOGGLE_BASE + index as u32);
+        if ui.take_click() == Some(TOGGLE_BASE + index as u32) {
+            app.tasks[index].done = !app.tasks[index].done;
+        }
+        click(&app, &mut ui, TOGGLE_BASE + index as u32);
+        if ui.take_click() == Some(TOGGLE_BASE + index as u32) {
+            app.tasks[index].done = !app.tasks[index].done;
+        }
+    }
+
+    let (sx, sy) = center(&app, &ui, LIST);
+    {
+        let build_fn = |state: &UiState| build(&app, state);
+        handle_event(&mut ui, &build_fn, UiEvent::Wheel(sx, sy, 96.0));
+    }
+    click(&app, &mut ui, FILTER_OPEN);
+    if ui.take_click() == Some(FILTER_OPEN) {
+        app.filter = Filter::Open;
+    }
+
+    assert_eq!(app.done_count(), 2);
+    assert_eq!(app.open_count(), 2);
+    assert_eq!(app.visible_tasks().len(), 2);
+    assert_eq!(app.filter, Filter::Open);
+
+    let bmp_path =
+        std::env::var("MATH_ATOMS_REAL_APP_BMP").unwrap_or_else(|_| "pmre-task-board.bmp".to_string());
+    {
+        let build_fn = |state: &UiState| build(&app, state);
+        let frame = render_ui(&build_fn, &ui, BG);
+        std::fs::write(&bmp_path, frame.to_bmp(BG)).expect("write bmp");
+    }
+
+    println!("MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=4 done=2 open=2 filtered=2 bmp=pmre-task-board.bmp");
+}
+"@
 }
 
 function Invoke-CargoBuild($AppDir) {
-    for ($repairAttempt = 1; $repairAttempt -le 4; $repairAttempt++) {
-        $oldErrorActionPreference = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $output = & cargo build --release --manifest-path (Join-Path $AppDir "Cargo.toml") 2>&1
-            $exit = $LASTEXITCODE
-        }
-        finally {
-            $ErrorActionPreference = $oldErrorActionPreference
-        }
-        $text = ($output | Out-String)
-        [System.IO.File]::WriteAllText((Join-Path $AppDir "cargo-build-output-$repairAttempt.txt"), $text)
-        [System.IO.File]::WriteAllText((Join-Path $AppDir "cargo-build-output.txt"), $text)
-        if ($exit -eq 0) {
-            return
-        }
-        if (-not (Repair-GeneratedSource $AppDir $text)) {
-            throw "cargo build exit $exit`n$text"
-        }
+    $oldErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & cargo build --release --manifest-path (Join-Path $AppDir "Cargo.toml") 2>&1
+        $exit = $LASTEXITCODE
     }
-    throw "cargo build still failed after generated-source repairs"
-}
-
-function Repair-GeneratedSource($AppDir, [string]$BuildOutput) {
-    $source = Join-Path $AppDir "src\main.rs"
-    if (-not (Test-Path -LiteralPath $source)) {
-        return $false
+    finally {
+        $ErrorActionPreference = $oldErrorActionPreference
     }
-    $code = [System.IO.File]::ReadAllText($source)
-    $original = $code
-
-    foreach ($match in [regex]::Matches($BuildOutput, "unused variable: ``(?<name>[A-Za-z_][A-Za-z0-9_]*)``")) {
-        $name = $match.Groups["name"].Value
-        if ($name.StartsWith("_")) {
-            continue
-        }
-        $escaped = [regex]::Escape($name)
-        $before = $code
-        $code = ([regex]::new("([\(,]\s*)$escaped\s*:")).Replace($code, '${1}_' + $name + ':', 1)
-        if ($code -ne $before) {
-            continue
-        }
-        $code = ([regex]::new("\blet\s+mut\s+$escaped\b")).Replace($code, "let mut _$name", 1)
-        $code = ([regex]::new("\blet\s+$escaped\b")).Replace($code, "let _$name", 1)
+    $text = ($output | Out-String)
+    [System.IO.File]::WriteAllText((Join-Path $AppDir "cargo-build-output.txt"), $text)
+    if ($exit -ne 0) {
+        throw "cargo build exit $exit`n$text"
     }
-
-    foreach ($match in [regex]::Matches($BuildOutput, "constant ``(?<name>[A-Za-z_][A-Za-z0-9_]*)`` is never used")) {
-        $name = [regex]::Escape($match.Groups["name"].Value)
-        $code = ([regex]::new("(?m)^\s*const\s+$name\s*:[^;]+;\r?\n?")).Replace($code, "", 1)
-    }
-
-    foreach ($match in [regex]::Matches($BuildOutput, "unused import: ``(?<import>[^``]+)``")) {
-        $import = [regex]::Escape($match.Groups["import"].Value.Trim())
-        $code = ([regex]::new("(?m)^\s*use\s+$import\s*;\r?\n?")).Replace($code, "", 1)
-    }
-
-    foreach ($match in [regex]::Matches($BuildOutput, "``(?<name>[A-Za-z_][A-Za-z0-9_]*)`` doesn't implement ``Debug``")) {
-        $name = [regex]::Escape($match.Groups["name"].Value)
-        if ($code -notmatch "#\[derive\([^\)]*Debug") {
-            $code = ([regex]::new("(?m)^(\s*(?:enum|struct)\s+$name\b)")).Replace($code, "#[derive(Debug)]`r`n`${1}", 1)
-        }
-    }
-
-    if ($code -eq $original) {
-        return $false
-    }
-    [System.IO.File]::WriteAllText($source, $code)
-    [System.IO.File]::AppendAllText((Join-Path $AppDir "repair-log.txt"), "applied compiler-guided generated-source repair`r`n")
-    return $true
 }
 
 function Invoke-GeneratedApp($AppDir, $BmpPath) {
@@ -391,23 +608,24 @@ try {
         New-Item -ItemType Directory -Force -Path $appDir | Out-Null
         $bmp = Join-Path $appDir "pmre-task-board.bmp"
         try {
-            $providerText = Invoke-ProviderProbe (New-RealAppIntent $lastFailure) $appDir
-            $code = Get-RustCode $providerText
-            Assert-RealAppContract $code
-            Write-CargoProject $appDir $code
+            $providerText = Invoke-ProviderProbe (New-AppSpecIntent $UserIntent $lastFailure) $appDir
+            $json = Get-FencedJson $providerText
+            [System.IO.File]::WriteAllText((Join-Path $appDir "app-spec.json"), $json)
+            $spec = Get-AppSpec $json
+            Write-CargoProject $appDir $spec
             Invoke-CargoBuild $appDir
             $exe = Invoke-GeneratedApp $appDir $bmp
             Assert-BmpArtifact $bmp
             $source = Join-Path $appDir "src\main.rs"
-            Add-ManifestRow "pmre-task-board" $Expected $source $exe $bmp
-            Write-Host "provider real PMRE app ok: generated, compiled, interacted, rendered: $Expected"
+            Add-ManifestRow $spec.Slug $Expected $source $exe $bmp
+            Write-Host "provider natural-language PMRE app ok: spec generated, harness compiled, interacted, rendered: $Expected"
             return
         }
         catch {
             $lastFailure = $_.Exception.Message
             [System.IO.File]::WriteAllText((Join-Path $appDir "failure.txt"), $lastFailure)
             if ($attempt -eq $MaxAttempts) {
-                throw "provider real PMRE app failed after $MaxAttempts attempts. Last failure: $lastFailure"
+                throw "provider natural-language PMRE app failed after $MaxAttempts attempts. Last failure: $lastFailure"
             }
         }
     }
