@@ -62,11 +62,21 @@ impl ProofStore {
     }
 
     pub fn read_records(&self) -> io::Result<Vec<ProofRecord>> {
-        Ok(self
-            .read_to_string()?
-            .lines()
-            .filter_map(ProofRecord::from_json)
-            .collect())
+        let text = self.read_to_string()?;
+        let mut records = Vec::new();
+        for (idx, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Some(record) = ProofRecord::from_json(line) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid proof store record at line {}", idx + 1),
+                ));
+            };
+            records.push(record);
+        }
+        Ok(records)
     }
 }
 
@@ -263,6 +273,24 @@ mod tests {
         let records = store.read_records().unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(records, vec![record]);
+    }
+
+    #[test]
+    fn proof_store_rejects_corrupt_jsonl_records() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-proof-store-corrupt-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        fs::write(&path, "{\"recipe_id\":\"ok\"}\nnot-json\n").unwrap();
+        let error = store.read_records().unwrap_err();
+        fs::remove_file(&path).ok();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("line 1"));
     }
 
     #[test]

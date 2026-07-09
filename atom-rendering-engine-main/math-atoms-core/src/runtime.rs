@@ -61,11 +61,24 @@ pub struct MathAtomsRuntime {
 
 impl MathAtomsRuntime {
     pub fn new(provider: ProviderConfig) -> Self {
+        Self::with_proof_store(provider, ProofStore::new(ProofStore::default_path()))
+    }
+
+    pub fn with_proof_store(provider: ProviderConfig, proof_store: ProofStore) -> Self {
         let mut graph = WikiGraph::from_default_dirs();
-        if let Ok(records) = ProofStore::new(ProofStore::default_path()).read_records() {
-            graph.add_proof_records(&records);
+        let store_path = proof_store.path().display().to_string();
+        let store_error = match proof_store.read_records() {
+            Ok(records) => {
+                graph.add_proof_records(&records);
+                None
+            }
+            Err(error) => Some(format!("Proof store read failed at {store_path}: {error}")),
+        };
+        let mut runtime = Self::with_graph(provider, graph);
+        if let Some(reason) = store_error {
+            runtime.mark_startup_store_blocked(&reason);
         }
-        Self::with_graph(provider, graph)
+        runtime
     }
 
     pub fn with_graph(provider: ProviderConfig, graph: WikiGraph) -> Self {
@@ -370,6 +383,43 @@ impl MathAtomsRuntime {
         );
     }
 
+    fn mark_startup_store_blocked(&mut self, reason: &str) {
+        self.state.status = RuntimeStatus::Blocked;
+        if !self.state.blockers.iter().any(|item| item == reason) {
+            self.state.blockers.push(reason.to_string());
+        }
+        let l0 = self.bus.l0_transport(
+            BusMessageKind::StoreBlocked,
+            "proof-store",
+            "math-atoms-runtime",
+            reason,
+        );
+        let l1 = self.bus.l1_message(
+            l0,
+            BusMessageKind::StoreBlocked,
+            "math-atoms-runtime",
+            "wiki-graph",
+            "persistent proof records rejected",
+        );
+        let l2 = self.bus.l2_flow(
+            l1,
+            BusMessageKind::StoreBlocked,
+            "wiki-graph",
+            "proof-loop",
+            "startup proof evidence blocked before retrieval",
+            &[],
+        );
+        let l3 = self.bus.l3_orchestrate(
+            l2,
+            BusMessageKind::StoreBlocked,
+            "proof-loop",
+            "artifact-state",
+            reason,
+            &[],
+        );
+        self.state.last_route = self.bus.route_for(l3).iter().map(|env| env.id).collect();
+    }
+
     pub fn learn_proof_record(&mut self, record: &ProofRecord) {
         if record.status == RuntimeStatus::Proven.as_str() {
             self.graph.add_proof_record(record);
@@ -636,5 +686,37 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::StoreBlocked));
+    }
+
+    #[test]
+    fn corrupt_proof_store_blocks_runtime_startup() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-corrupt-startup-store-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "corrupt proof record\n").unwrap();
+        let runtime = MathAtomsRuntime::with_proof_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            ProofStore::new(&path),
+        );
+        std::fs::remove_file(&path).ok();
+        assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
+        assert!(runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|item| item.contains("Proof store read failed")));
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::StoreBlocked));
+        assert!(runtime
+            .bus()
+            .route_contains_all_layers(*runtime.state().last_route.last().unwrap()));
     }
 }
