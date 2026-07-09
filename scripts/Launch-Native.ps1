@@ -29,10 +29,14 @@ if ($Build -or -not (Test-Path -LiteralPath $Exe)) {
 }
 
 $proc = Start-Process -FilePath $Exe -WorkingDirectory $Engine -PassThru
-Start-Sleep -Seconds 2
-$proc = Get-Process -Id $proc.Id
+$NativePid = $proc.Id
+$WindowDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+    Start-Sleep -Milliseconds 250
+    $proc = Get-Process -Id $NativePid -ErrorAction Stop
+} while (($proc.MainWindowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
 if ($proc.MainWindowHandle -eq 0) {
-    throw "Native app launched without a main window handle"
+    throw "Native app launched without a main window handle after 20s"
 }
 if (-not $proc.Responding) {
     throw "Native app is not responding after launch"

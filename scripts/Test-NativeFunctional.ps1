@@ -42,13 +42,27 @@ finally {
 
 $proc = Start-Process -FilePath $Exe -WorkingDirectory $Engine -RedirectStandardOutput $StdOutLog -RedirectStandardError $StdErrLog -PassThru
 $NativePid = $proc.Id
-Start-Sleep -Seconds 2
-$proc = Get-Process -Id $NativePid
+$WindowDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+    Start-Sleep -Milliseconds 250
+    try {
+        $proc = Get-Process -Id $NativePid -ErrorAction Stop
+    }
+    catch {
+        $stdout = if (Test-Path -LiteralPath $StdOutLog) { Get-Content -LiteralPath $StdOutLog -Raw } else { "" }
+        $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
+        throw "Native app exited before creating a main window for pid $NativePid. stdout: $stdout stderr: $stderr"
+    }
+} while (($proc.MainWindowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
 if ($proc.MainWindowHandle -eq 0) {
-    throw "Native app launched without a main window handle"
+    $stdout = if (Test-Path -LiteralPath $StdOutLog) { Get-Content -LiteralPath $StdOutLog -Raw } else { "" }
+    $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
+    throw "Native app launched without a main window handle after 20s. stdout: $stdout stderr: $stderr"
 }
 if (-not $proc.Responding) {
-    throw "Native app is not responding after launch"
+    $stdout = if (Test-Path -LiteralPath $StdOutLog) { Get-Content -LiteralPath $StdOutLog -Raw } else { "" }
+    $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
+    throw "Native app is not responding after launch. stdout: $stdout stderr: $stderr"
 }
 
 $code = @'
