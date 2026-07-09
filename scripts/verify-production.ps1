@@ -18,6 +18,8 @@ try {
     node scripts\smoke.mjs
     if ($LASTEXITCODE -ne 0) { throw "node scripts\smoke.mjs failed with exit code $LASTEXITCODE" }
 
+    Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
+
     Push-Location $Engine
     try {
         $env:RUSTFLAGS = "-D warnings"

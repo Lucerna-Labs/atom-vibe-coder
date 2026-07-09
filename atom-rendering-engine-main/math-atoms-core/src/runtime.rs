@@ -56,9 +56,13 @@ pub struct MathAtomsRuntime {
 
 impl MathAtomsRuntime {
     pub fn new(provider: ProviderConfig) -> Self {
+        Self::with_graph(provider, WikiGraph::from_default_dirs())
+    }
+
+    pub fn with_graph(provider: ProviderConfig, graph: WikiGraph) -> Self {
         Self {
             bus: SpiderwebBus::new(),
-            graph: WikiGraph::seeded(),
+            graph,
             provider,
             state: RuntimeState {
                 selected_recipe: "native-atom-renderer".to_string(),
