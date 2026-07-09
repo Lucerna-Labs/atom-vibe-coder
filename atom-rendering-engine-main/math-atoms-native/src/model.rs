@@ -69,11 +69,12 @@ impl NativeApp {
     }
 
     pub fn new_with_store(provider: ProviderConfig, store: Option<ProofStore>) -> Self {
+        let last_provider_output = initial_provider_output(&provider);
         Self {
             runtime: MathAtomsRuntime::new(provider),
             store,
             last_run_summary: "No proof run yet.".to_string(),
-            last_provider_output: "Provider has not been executed.".to_string(),
+            last_provider_output,
             provider_running: false,
         }
     }
@@ -337,6 +338,23 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
         .or_insert_with(|| provider.response_key.clone());
 }
 
+fn initial_provider_output(provider: &ProviderConfig) -> String {
+    if provider.is_ready() {
+        "Provider has not been executed.".to_string()
+    } else if !provider.api_key_present {
+        format!(
+            "Provider blocked: Missing credential in {}",
+            provider.api_key_env
+        )
+    } else if provider.endpoint.trim().is_empty() {
+        "Provider blocked: Missing provider endpoint".to_string()
+    } else if provider.model.trim().is_empty() {
+        "Provider blocked: Missing provider model".to_string()
+    } else {
+        "Provider blocked: Provider configuration is incomplete".to_string()
+    }
+}
+
 fn current_intent(ui: &UiState) -> String {
     let text = ui.input_text(INTENT_INPUT).trim();
     if text.is_empty() {
@@ -399,12 +417,19 @@ mod tests {
 
     #[test]
     fn provider_title_state_tracks_execution_state() {
-        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         assert_eq!(app.provider_title_state(), "provider:idle");
         app.last_provider_output = "Provider blocked: MissingApiKey".to_string();
         assert_eq!(app.provider_title_state(), "provider:blocked");
         app.last_provider_output = "model response".to_string();
         assert_eq!(app.provider_title_state(), "provider:ran");
+    }
+
+    #[test]
+    fn missing_provider_starts_blocked_not_idle() {
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        assert_eq!(app.provider_title_state(), "provider:blocked");
+        assert!(app.last_provider_output.contains("OPENAI_API_KEY"));
     }
 
     #[test]
