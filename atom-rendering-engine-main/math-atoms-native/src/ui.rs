@@ -515,9 +515,14 @@ fn artifact_window(app: &NativeApp) -> UxNode {
         .side_artifacts
         .iter()
         .map(|artifact| {
+            let artifact_ref = if artifact.artifact_path.trim().is_empty() {
+                &artifact.source_path
+            } else {
+                &artifact.artifact_path
+            };
             mini_card(
                 &format!("{} / {}", artifact.name, artifact.status),
-                &format!("{} | {}", artifact.output, artifact.source_path),
+                &format!("{} | {}", artifact.output, artifact_ref),
                 teal(),
             )
         })

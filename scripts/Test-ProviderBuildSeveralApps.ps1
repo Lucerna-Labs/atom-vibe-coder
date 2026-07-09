@@ -151,7 +151,7 @@ try {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
     $passed = @()
-    $manifestRows = @("name`tstatus`toutput`tsource`texe")
+    $manifestRows = @("name`tstatus`toutput`tsource`texe`tartifact")
     foreach ($spec in $Specs | Select-Object -First $AppsRequired) {
         $lastFailure = ""
         $passedApp = $false
@@ -183,7 +183,7 @@ try {
                     throw "output mismatch. Expected '$($spec.Expected)' but got '$actual'"
                 }
                 $passed += "$($spec.Name)=$actual"
-                $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe"
+                $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe`t"
                 $passedApp = $true
                 break
             }

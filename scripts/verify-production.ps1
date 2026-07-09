@@ -67,11 +67,13 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildSeveralApps.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider multi-app build gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildRealPmreApp.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "provider real PMRE app gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
-        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native provider responsiveness gate, provider execution gate, and provider multi-app build gate"
+        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native provider responsiveness gate, provider execution gate, provider multi-app build gate, and provider real PMRE app gate"
     }
 }
 finally {

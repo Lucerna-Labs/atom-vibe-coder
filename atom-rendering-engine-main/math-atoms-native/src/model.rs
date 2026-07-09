@@ -56,6 +56,7 @@ pub struct SideArtifact {
     pub output: String,
     pub source_path: String,
     pub exe_path: String,
+    pub artifact_path: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -485,6 +486,11 @@ fn parse_artifact_manifest(text: &str) -> Vec<SideArtifact> {
                 output: parts[2].trim().to_string(),
                 source_path: parts[3].trim().to_string(),
                 exe_path: parts[4].trim().to_string(),
+                artifact_path: parts
+                    .get(5)
+                    .map(|part| part.trim())
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
         .collect()
@@ -652,7 +658,7 @@ mod tests {
 
     #[test]
     fn side_artifact_manifest_loads_generated_apps() {
-        let manifest = "name\tstatus\toutput\tsource\texe\ncounter\tcompiled\tMATH_ATOMS_APP_OK counter total=4\tC:\\src\\counter.rs\tC:\\bin\\counter.exe\nrouter\tcompiled\tMATH_ATOMS_APP_OK router health=200 atoms=3\tC:\\src\\router.rs\tC:\\bin\\router.exe\n";
+        let manifest = "name\tstatus\toutput\tsource\texe\tartifact\ncounter\tcompiled\tMATH_ATOMS_APP_OK counter total=4\tC:\\src\\counter.rs\tC:\\bin\\counter.exe\t\nrouter\tcompiled\tMATH_ATOMS_APP_OK router health=200 atoms=3\tC:\\src\\router.rs\tC:\\bin\\router.exe\tC:\\artifacts\\router.bmp\n";
         let artifacts = parse_artifact_manifest(manifest);
         assert_eq!(artifacts.len(), 2);
         assert_eq!(artifacts[0].name, "counter");
@@ -661,6 +667,7 @@ mod tests {
             artifacts[1].output,
             "MATH_ATOMS_APP_OK router health=200 atoms=3"
         );
+        assert_eq!(artifacts[1].artifact_path, "C:\\artifacts\\router.bmp");
     }
 
     #[test]
