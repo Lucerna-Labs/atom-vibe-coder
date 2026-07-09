@@ -53,15 +53,31 @@ function Click-NativeControl([IntPtr]$Handle, [int]$X, [int]$Y) {
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0202, [UIntPtr]::Zero, $lp) | Out-Null
 }
 
+function Get-ProofRecordCount() {
+    $path = Join-Path $env:LOCALAPPDATA "MathAtomsCoder\proofs.jsonl"
+    if (-not (Test-Path -LiteralPath $path)) {
+        return 0
+    }
+    return @([System.IO.File]::ReadLines($path)).Count
+}
+
 try {
-    Click-NativeControl $proc.MainWindowHandle 78 290
+    Click-NativeControl $proc.MainWindowHandle 66 290
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "proven") {
         throw "Run button did not reach proven state. Title: $($proc.MainWindowTitle)"
     }
 
-    Click-NativeControl $proc.MainWindowHandle 186 290
+    $beforeCapture = Get-ProofRecordCount
+    Click-NativeControl $proc.MainWindowHandle 224 290
+    Start-Sleep -Seconds 2
+    $afterCapture = Get-ProofRecordCount
+    if ($afterCapture -le $beforeCapture) {
+        throw "Capture button did not append a proof record. Before: $beforeCapture After: $afterCapture"
+    }
+
+    Click-NativeControl $proc.MainWindowHandle 145 290
     Start-Sleep -Seconds 15
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "provider:(ran|blocked)") {
@@ -71,7 +87,7 @@ try {
         throw "Native app stopped responding after provider action"
     }
 
-    Click-NativeControl $proc.MainWindowHandle 294 290
+    Click-NativeControl $proc.MainWindowHandle 303 290
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "drift flagged") {

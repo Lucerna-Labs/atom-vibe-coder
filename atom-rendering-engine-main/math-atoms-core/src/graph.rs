@@ -227,6 +227,7 @@ impl WikiGraph {
                 .then_with(|| a.node_id.cmp(&b.node_id))
         });
         evidence.truncate(limit);
+        pin_mission_evidence(&mut evidence, self, limit);
         evidence
     }
 
@@ -440,6 +441,32 @@ fn proof_node_id(record: &ProofRecord) -> String {
     format!("proof:{:016x}", hasher.finish())
 }
 
+fn pin_mission_evidence(evidence: &mut Vec<Evidence>, graph: &WikiGraph, limit: usize) {
+    if limit == 0
+        || evidence
+            .iter()
+            .any(|item| item.node_id == "mission:ornith-parity")
+    {
+        return;
+    }
+    let Some(node) = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == "mission:ornith-parity")
+    else {
+        return;
+    };
+    if evidence.len() >= limit {
+        evidence.pop();
+    }
+    evidence.push(Evidence {
+        node_id: node.id.clone(),
+        title: node.title.clone(),
+        excerpt: node.excerpt.clone(),
+        score: 50,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +509,29 @@ mod tests {
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
+    fn mission_evidence_stays_pinned_with_many_store_records() {
+        let mut graph = WikiGraph::seeded();
+        for idx in 0..24 {
+            graph.add_proof_record(&ProofRecord {
+                recipe_id: "provider-model-loop".to_string(),
+                status: "proven".to_string(),
+                atoms: vec!["measure".to_string(), "flow".to_string()],
+                evidence_count: idx + 1,
+                blockers: Vec::new(),
+                provider_state: "provider:blocked".to_string(),
+                route_len: 5,
+            });
+        }
+        let hits = graph.retrieve(
+            "provider model wiki graph rag spiderweb evidence",
+            &["measure".to_string(), "flow".to_string()],
+            8,
+        );
+        assert!(hits
+            .iter()
+            .any(|item| item.node_id == "mission:ornith-parity"));
     }
 }

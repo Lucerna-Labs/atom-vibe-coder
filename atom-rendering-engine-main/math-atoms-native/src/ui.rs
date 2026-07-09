@@ -1,5 +1,6 @@
 use crate::model::{
-    NativeApp, BUS_SCROLL, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, MARK_DRIFT, RUN_LOOP,
+    NativeApp, BUS_SCROLL, CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, MARK_DRIFT,
+    RUN_LOOP,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
@@ -105,6 +106,13 @@ fn left_panel(app: &NativeApp, ui: &UiState) -> UxNode {
                         EXEC_PROVIDER,
                         "Provider",
                         blue(),
+                        Rgba::rgb8(255, 255, 255),
+                    ),
+                    button(
+                        ui,
+                        CAPTURE_PROOF,
+                        "Capture",
+                        amber(),
                         Rgba::rgb8(255, 255, 255),
                     ),
                     button(ui, MARK_DRIFT, "Drift", red(), Rgba::rgb8(255, 255, 255)),

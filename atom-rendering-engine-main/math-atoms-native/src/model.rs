@@ -6,9 +6,10 @@ use pmre_orchestrator::UiState;
 pub const INTENT_INPUT: u32 = 1;
 pub const RUN_LOOP: u32 = 2;
 pub const EXEC_PROVIDER: u32 = 3;
-pub const MARK_DRIFT: u32 = 4;
-pub const EVIDENCE_SCROLL: u32 = 5;
-pub const BUS_SCROLL: u32 = 6;
+pub const CAPTURE_PROOF: u32 = 4;
+pub const MARK_DRIFT: u32 = 5;
+pub const EVIDENCE_SCROLL: u32 = 6;
+pub const BUS_SCROLL: u32 = 7;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -75,6 +76,16 @@ impl NativeApp {
             .mark_drift("Operator flagged drift from the native PMRE shell.");
         self.last_run_summary =
             "Drift flagged; next proof run must re-establish evidence.".to_string();
+    }
+
+    pub fn capture_current_proof(&mut self) {
+        if self.runtime.state().last_route.is_empty() {
+            self.last_run_summary =
+                "Capture blocked: run a proof route before storing evidence.".to_string();
+            return;
+        }
+        let store_result = self.append_proof_record();
+        self.last_run_summary = format!("Captured current proof route. {store_result}");
     }
 
     pub fn execute_provider(&mut self) {
@@ -241,5 +252,33 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert!(text.contains("\"status\":\"blocked\""));
         assert!(text.contains("\"provider_state\":\"provider:blocked\""));
+    }
+
+    #[test]
+    fn capture_button_writes_an_additional_proof_record() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-capture-store-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store.clone()),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        let before = store.read_records().unwrap().len();
+        app.capture_current_proof();
+        let after = store.read_records().unwrap().len();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(after, before + 1);
+        assert!(app
+            .last_run_summary
+            .contains("Captured current proof route"));
     }
 }

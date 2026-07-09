@@ -1,4 +1,4 @@
-use crate::model::{NativeApp, EXEC_PROVIDER, MARK_DRIFT, RUN_LOOP};
+use crate::model::{NativeApp, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, RUN_LOOP};
 use crate::ui;
 use core::ffi::c_void;
 use pmre_kit::ux::UxNode;
@@ -432,6 +432,7 @@ fn dispatch(ev: UiEvent) -> bool {
                 match id {
                     RUN_LOOP => app.model.run_current_intent(&app.ui),
                     EXEC_PROVIDER => app.model.execute_provider(),
+                    CAPTURE_PROOF => app.model.capture_current_proof(),
                     MARK_DRIFT => app.model.mark_drift(),
                     _ => {}
                 }
