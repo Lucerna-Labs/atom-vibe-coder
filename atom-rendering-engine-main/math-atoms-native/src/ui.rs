@@ -468,6 +468,7 @@ fn layer_pill(label: &str, color: Rgba) -> UxNode {
 fn status_color(status: RuntimeStatus) -> Rgba {
     match status {
         RuntimeStatus::Draft => amber(),
+        RuntimeStatus::ProviderPending => amber(),
         RuntimeStatus::Proven => teal(),
         RuntimeStatus::Blocked => red(),
         RuntimeStatus::DriftFlagged => blue(),

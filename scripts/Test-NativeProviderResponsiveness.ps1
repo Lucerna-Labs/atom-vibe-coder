@@ -152,6 +152,9 @@ public static class MathAtomsProviderResponsive {
     if ($tail -notmatch '"provider_state":"provider:ran"') {
         throw "Slow provider proof did not record provider:ran. Tail: $tail"
     }
+    if ($tail -notmatch '"status":"proven"') {
+        throw "Slow provider proof did not promote status to proven after execution. Tail: $tail"
+    }
     if ($tail -notmatch '"provider_model":"fake-responsive-provider"') {
         throw "Slow provider proof did not record provider model. Tail: $tail"
     }

@@ -137,19 +137,11 @@ try {
     Invoke-NativeCommand $proc.MainWindowHandle 2
     Start-Sleep -Seconds 2
     $proc = Refresh-NativeProcess "Run command"
-    if ($proc.MainWindowTitle -notmatch "proven") {
-        throw "Run button did not reach proven state. Title: $($proc.MainWindowTitle)"
+    if ($proc.MainWindowTitle -notmatch "provider pending") {
+        throw "Run button did not reach provider pending state before execution. Title: $($proc.MainWindowTitle)"
     }
     if ($proc.MainWindowTitle -notmatch "provider-model-loop") {
         throw "Typed provider intent did not select provider-model-loop. Title: $($proc.MainWindowTitle)"
-    }
-
-    $beforeCapture = Get-ProofRecordCount
-    Invoke-NativeCommand $proc.MainWindowHandle 4
-    Start-Sleep -Seconds 2
-    $afterCapture = Get-ProofRecordCount
-    if ($afterCapture -le $beforeCapture) {
-        throw "Capture button did not append a proof record. Before: $beforeCapture After: $afterCapture"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle 3
@@ -160,6 +152,14 @@ try {
     }
     if (-not $proc.Responding) {
         throw "Native app stopped responding after provider action"
+    }
+
+    $beforeCapture = Get-ProofRecordCount
+    Invoke-NativeCommand $proc.MainWindowHandle 4
+    Start-Sleep -Seconds 2
+    $afterCapture = Get-ProofRecordCount
+    if ($afterCapture -le $beforeCapture) {
+        throw "Capture button did not append a proof record after provider completion/block. Before: $beforeCapture After: $afterCapture"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle 5

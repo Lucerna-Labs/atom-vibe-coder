@@ -7,6 +7,7 @@ use crate::store::{ProofRecord, ProofStore};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
     Draft,
+    ProviderPending,
     Proven,
     Blocked,
     DriftFlagged,
@@ -16,6 +17,7 @@ impl RuntimeStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Draft => "draft",
+            Self::ProviderPending => "provider pending",
             Self::Proven => "proven",
             Self::Blocked => "blocked",
             Self::DriftFlagged => "drift flagged",
@@ -213,25 +215,36 @@ impl MathAtomsRuntime {
         if !self.bus.route_contains_all_layers(l3) {
             blockers.push("Spiderweb Bus route did not touch all L0-L3 layers".to_string());
         }
-        let status = if blockers.is_empty() {
-            RuntimeStatus::Proven
-        } else {
+        let provider_pending = blockers.is_empty() && provider_call.is_some();
+        let status = if !blockers.is_empty() {
             RuntimeStatus::Blocked
-        };
-        let proof_kind = if blockers.is_empty() {
-            BusMessageKind::ProofCaptured
+        } else if provider_pending {
+            RuntimeStatus::ProviderPending
         } else {
-            BusMessageKind::ProofBlocked
+            RuntimeStatus::Proven
         };
-        let proof_body = if blockers.is_empty() {
+        let proof_kind = if !blockers.is_empty() {
+            BusMessageKind::ProofBlocked
+        } else if provider_pending {
+            BusMessageKind::ProofPending
+        } else {
+            BusMessageKind::ProofCaptured
+        };
+        let proof_body = if !blockers.is_empty() {
+            blockers.join("; ")
+        } else if provider_pending {
+            format!(
+                "{} selected for {}; provider execution required before proof can pass",
+                recipe.name,
+                mission().parity_floor
+            )
+        } else {
             format!(
                 "{} selected for {} with {} evidence nodes",
                 recipe.name,
                 mission().parity_floor,
                 evidence.len()
             )
-        } else {
-            blockers.join("; ")
         };
         let proof = self.bus.l3_orchestrate(
             l3,
@@ -280,6 +293,8 @@ impl MathAtomsRuntime {
     }
 
     pub fn mark_provider_executed(&mut self, output_hash: &str, output_len: usize) {
+        self.state.status = RuntimeStatus::Proven;
+        self.state.proof_count += 1;
         self.state.last_provider_output_hash = output_hash.to_string();
         self.state.last_provider_output_len = output_len;
         let evidence_ids: Vec<String> = self
@@ -301,6 +316,14 @@ impl MathAtomsRuntime {
             "provider-adapter",
             "proof-loop",
             &body,
+            &evidence_ids,
+        );
+        self.bus.l3_orchestrate(
+            self.state.last_route.last().copied().unwrap_or(0),
+            BusMessageKind::ProofCaptured,
+            "proof-loop",
+            "artifact-state",
+            "provider execution returned model output; proof captured",
             &evidence_ids,
         );
     }
@@ -348,15 +371,26 @@ impl MathAtomsRuntime {
     }
 
     pub fn learn_proof_record(&mut self, record: &ProofRecord) {
-        self.graph.add_proof_record(record);
-        self.bus.l3_orchestrate(
-            self.state.last_route.last().copied().unwrap_or(0),
-            BusMessageKind::StoreLearned,
-            "proof-store",
-            "wiki-graph",
-            "stored proof record loaded into graph evidence",
-            &[],
-        );
+        if record.status == RuntimeStatus::Proven.as_str() {
+            self.graph.add_proof_record(record);
+            self.bus.l3_orchestrate(
+                self.state.last_route.last().copied().unwrap_or(0),
+                BusMessageKind::StoreLearned,
+                "proof-store",
+                "wiki-graph",
+                "stored proof record loaded into graph evidence",
+                &[],
+            );
+        } else {
+            self.bus.l3_orchestrate(
+                self.state.last_route.last().copied().unwrap_or(0),
+                BusMessageKind::StoreObserved,
+                "proof-store",
+                "proof-loop",
+                "stored non-proven run observed but not promoted to graph evidence",
+                &[],
+            );
+        }
     }
 }
 
@@ -448,7 +482,7 @@ mod tests {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         let run = runtime.run_intent("Build provider api wiki graph rag on the spiderweb bus");
-        assert_eq!(run.status, RuntimeStatus::Proven);
+        assert_eq!(run.status, RuntimeStatus::ProviderPending);
         assert!(runtime.bus().contains_layer(BusLayer::L0Transport));
         assert!(runtime.bus().contains_layer(BusLayer::L1Message));
         assert!(runtime.bus().contains_layer(BusLayer::L2Flow));
@@ -477,7 +511,7 @@ mod tests {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
-        assert_eq!(runtime.state().status, RuntimeStatus::Proven);
+        assert_eq!(runtime.state().status, RuntimeStatus::ProviderPending);
         runtime.set_provider(ProviderConfig::from_values(
             "ollama",
             "gpt-oss:120b",
@@ -551,6 +585,7 @@ mod tests {
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
         runtime.mark_provider_executed("fnv:abc", 17);
+        assert_eq!(runtime.state().status, RuntimeStatus::Proven);
         assert_eq!(runtime.state().last_provider_output_hash, "fnv:abc");
         assert_eq!(runtime.state().last_provider_output_len, 17);
         assert!(runtime
@@ -558,6 +593,30 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderExecuted));
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProofCaptured));
+    }
+
+    #[test]
+    fn provider_required_routes_do_not_claim_proven_before_execution() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        let run = runtime.run_intent("Run provider api with wiki graph rag");
+        assert_eq!(run.status, RuntimeStatus::ProviderPending);
+        assert_eq!(runtime.state().proof_count, 0);
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProofPending));
+        assert!(!runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProofCaptured));
     }
 
     #[test]

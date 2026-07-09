@@ -37,8 +37,10 @@ pub enum BusMessageKind {
     ProviderBlocked,
     RecipeSelected,
     ProofCaptured,
+    ProofPending,
     ProofBlocked,
     StoreLearned,
+    StoreObserved,
     StoreBlocked,
     DriftFlagged,
 }

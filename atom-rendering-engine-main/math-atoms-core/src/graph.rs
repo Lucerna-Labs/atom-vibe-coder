@@ -271,6 +271,9 @@ impl WikiGraph {
     }
 
     pub fn add_proof_record(&mut self, record: &ProofRecord) {
+        if record.status != "proven" {
+            return;
+        }
         let id = proof_node_id(record);
         if self.nodes.iter().any(|node| node.id == id) {
             return;
@@ -579,12 +582,36 @@ mod tests {
     }
 
     #[test]
+    fn blocked_proof_records_do_not_become_positive_evidence() {
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "blocked".to_string(),
+            atoms: vec!["measure".to_string(), "flow".to_string()],
+            evidence_count: 9,
+            blockers: vec!["provider returned 401".to_string()],
+            provider_state: "provider:blocked".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_hash: String::new(),
+            provider_output_len: 0,
+            route_len: 6,
+        });
+        let hits = graph.retrieve(
+            "provider returned 401 stored proof",
+            &["flow".to_string()],
+            12,
+        );
+        assert!(!hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
     fn mission_evidence_stays_pinned_with_many_store_records() {
         let mut graph = WikiGraph::seeded();
         for idx in 0..24 {
             graph.add_proof_record(&ProofRecord {
                 recipe_id: "provider-model-loop".to_string(),
-                status: "proven".to_string(),
+                status: "blocked".to_string(),
                 atoms: vec!["measure".to_string(), "flow".to_string()],
                 evidence_count: idx + 1,
                 blockers: Vec::new(),

@@ -93,6 +93,14 @@ impl NativeApp {
                 self.runtime.state().last_route.len(),
                 store_result.message()
             )
+        } else if self.status() == RuntimeStatus::ProviderPending {
+            format!(
+                "{} selected with {} evidence nodes through {} route envelopes. Provider execution required before proof can pass. {}",
+                proof.recipe_id,
+                proof.evidence.len(),
+                self.runtime.state().last_route.len(),
+                store_result.message()
+            )
         } else {
             format!(
                 "Blocked: {} {}",
@@ -141,6 +149,12 @@ impl NativeApp {
         if self.runtime.state().last_route.is_empty() {
             self.last_run_summary =
                 "Capture blocked: run a proof route before storing evidence.".to_string();
+            return;
+        }
+        if self.status() == RuntimeStatus::ProviderPending {
+            self.last_run_summary =
+                "Capture blocked: provider execution must complete before proof capture."
+                    .to_string();
             return;
         }
         let store_result = self.append_proof_record();
@@ -335,7 +349,7 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
-        assert_eq!(app.status(), RuntimeStatus::Proven);
+        assert_eq!(app.status(), RuntimeStatus::ProviderPending);
         assert!(app.runtime.bus().contains_all_layers());
         assert!(app.runtime.state().last_provider_call.is_some());
     }
@@ -419,12 +433,15 @@ mod tests {
 
     #[test]
     fn visible_controls_hit_test_and_dispatch() {
+        let key = format!("MATH_ATOMS_VISIBLE_CONTROL_KEY_{}", std::process::id());
+        std::env::set_var(&key, "secret");
         let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
         let mut ui = UiState::new(1600, 1000);
         app.seed_input(&mut ui);
+        ui.inputs.insert(PROVIDER_KEY_ENV_INPUT, key.clone());
         ui.inputs.insert(
-            PROVIDER_KEY_ENV_INPUT,
-            format!("MATH_ATOMS_MISSING_TEST_KEY_{}", std::process::id()),
+            PROVIDER_URL_INPUT,
+            "http://127.0.0.1:9/v1/responses".to_string(),
         );
 
         ui.scrolls.insert(LEFT_SCROLL, 500.0);
@@ -441,10 +458,17 @@ mod tests {
         app.capture_current_proof();
         assert!(app
             .last_run_summary
-            .contains("Captured current proof route"));
+            .contains("Capture blocked: provider execution must complete"));
 
         click_control(&app, &mut ui, EXEC_PROVIDER);
-        assert!(app.begin_provider_execution().is_none());
+        let rx = app
+            .begin_provider_execution()
+            .expect("provider-ready route should start execution");
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("local refused provider should return quickly");
+        app.complete_provider_execution(result);
+        std::env::remove_var(&key);
         assert_eq!(app.provider_title_state(), "provider:blocked");
 
         click_control(&app, &mut ui, MARK_DRIFT);
@@ -472,7 +496,7 @@ mod tests {
         app.run_current_intent(&ui);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
-        assert!(text.contains("\"status\":\"proven\""));
+        assert!(text.contains("\"status\":\"provider pending\""));
         assert!(text.contains("\"recipe_id\":"));
     }
 
@@ -530,6 +554,7 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
+        assert_eq!(app.status(), RuntimeStatus::ProviderPending);
         app.runtime.mark_provider_blocked("test");
         app.last_provider_output = "Provider blocked: test".to_string();
         let _ = app.append_proof_record();
@@ -559,6 +584,7 @@ mod tests {
         app.run_current_intent(&ui);
         app.provider_running = true;
         app.complete_provider_execution(Ok("provider proof".to_string()));
+        assert_eq!(app.status(), RuntimeStatus::Proven);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
@@ -591,6 +617,7 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
+        app.complete_provider_execution(Ok("provider proof".to_string()));
         let before = store.read_records().unwrap().len();
         app.capture_current_proof();
         let after = store.read_records().unwrap().len();
