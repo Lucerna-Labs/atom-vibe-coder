@@ -21,7 +21,8 @@ pub use domain::{
 };
 pub use graph::{Evidence, WikiGraph};
 pub use provider::{
-    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderError, ProviderKind,
+    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderConfigInput, ProviderError,
+    ProviderKind, ProviderWireFormat,
 };
 pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};
 pub use store::{ProofRecord, ProofStore};

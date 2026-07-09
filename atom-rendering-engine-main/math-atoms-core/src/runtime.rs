@@ -171,6 +171,9 @@ impl MathAtomsRuntime {
                 endpoint: String::new(),
                 model: String::new(),
                 api_key_env: String::new(),
+                auth_header: String::new(),
+                auth_scheme: String::new(),
+                response_key: String::new(),
                 body: String::new(),
             })
         };

@@ -39,11 +39,23 @@ cd "C:\Projects\Atoms Coder by Lucerna Labs"
 Provider selection:
 
 ```powershell
-$env:MATH_ATOMS_PROVIDER_KIND="openai" # OPENAI_API_KEY, Responses API
-$env:MATH_ATOMS_PROVIDER_KIND="ollama" # OLLAMA_API_KEY, Ollama Cloud API
+$env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
+$env:MATH_ATOMS_PROVIDER_KIND="ollama"  # OLLAMA_API_KEY, Ollama Cloud chat API
+$env:MATH_ATOMS_PROVIDER_KIND="mistral" # MISTRAL_API_KEY, Mistral chat completions API
+
+# Any OpenAI-compatible/custom provider:
+$env:MATH_ATOMS_PROVIDER_KIND="custom"
+$env:MATH_ATOMS_PROVIDER_FORMAT="chat" # responses | chat | ollama-chat
+$env:MATH_ATOMS_PROVIDER_MODEL="provider-model-name"
+$env:MATH_ATOMS_PROVIDER_URL="https://provider.example/v1/chat/completions"
+$env:MATH_ATOMS_PROVIDER_KEY_ENV="MY_PROVIDER_API_KEY"
+$env:MATH_ATOMS_PROVIDER_AUTH_HEADER="Authorization"
+$env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style headers
+$env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="output_text" # output_text | text | response | content | custom key
+$env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{prompt_json}}}'
 ```
 
-The native PMRE app also exposes provider kind, model, endpoint, and key-env controls. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
+The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
 
 Generate the native artifact:
 

@@ -1,6 +1,6 @@
 use math_atoms_core::{
     provider_output_hash, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
-    ProviderConfig, ProviderError, RuntimeStatus,
+    ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus,
 };
 use pmre_orchestrator::UiState;
 use std::sync::mpsc::{self, Receiver};
@@ -19,6 +19,11 @@ pub const PROVIDER_URL_INPUT: u32 = 10;
 pub const PROVIDER_KEY_ENV_INPUT: u32 = 11;
 pub const APPLY_PROVIDER: u32 = 12;
 pub const LEFT_SCROLL: u32 = 13;
+pub const PROVIDER_FORMAT_INPUT: u32 = 14;
+pub const PROVIDER_AUTH_HEADER_INPUT: u32 = 15;
+pub const PROVIDER_AUTH_SCHEME_INPUT: u32 = 16;
+pub const PROVIDER_BODY_TEMPLATE_INPUT: u32 = 17;
+pub const PROVIDER_RESPONSE_KEY_INPUT: u32 = 18;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -118,16 +123,22 @@ impl NativeApp {
     }
 
     pub fn apply_provider_config(&mut self, ui: &UiState) {
-        let config = ProviderConfig::from_values(
-            ui.input_text(PROVIDER_KIND_INPUT),
-            ui.input_text(PROVIDER_MODEL_INPUT),
-            ui.input_text(PROVIDER_URL_INPUT),
-            ui.input_text(PROVIDER_KEY_ENV_INPUT),
-        );
+        let config = ProviderConfig::from_values_full(ProviderConfigInput {
+            kind_raw: ui.input_text(PROVIDER_KIND_INPUT),
+            format_raw: ui.input_text(PROVIDER_FORMAT_INPUT),
+            model: ui.input_text(PROVIDER_MODEL_INPUT),
+            endpoint: ui.input_text(PROVIDER_URL_INPUT),
+            api_key_env: ui.input_text(PROVIDER_KEY_ENV_INPUT),
+            auth_header: ui.input_text(PROVIDER_AUTH_HEADER_INPUT),
+            auth_scheme: ui.input_text(PROVIDER_AUTH_SCHEME_INPUT),
+            body_template: ui.input_text(PROVIDER_BODY_TEMPLATE_INPUT),
+            response_key: ui.input_text(PROVIDER_RESPONSE_KEY_INPUT),
+        });
         let ready = config.is_ready();
         let summary = format!(
-            "Provider config applied: {} {} via {} ({})",
+            "Provider config applied: {} {} {} via {} ({})",
             config.kind.as_str(),
+            config.wire_format.as_str(),
             config.model,
             config.endpoint,
             if ready { "key present" } else { "key missing" }
@@ -296,6 +307,7 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
     ui.inputs
         .entry(PROVIDER_KIND_INPUT)
         .or_insert_with(|| provider.kind.as_str().to_string());
+    ui.inputs.entry(PROVIDER_FORMAT_INPUT).or_default();
     ui.inputs
         .entry(PROVIDER_MODEL_INPUT)
         .or_insert_with(|| provider.model.clone());
@@ -305,6 +317,24 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
     ui.inputs
         .entry(PROVIDER_KEY_ENV_INPUT)
         .or_insert_with(|| provider.api_key_env.clone());
+    ui.inputs
+        .entry(PROVIDER_AUTH_HEADER_INPUT)
+        .or_insert_with(|| provider.auth_header.clone());
+    ui.inputs
+        .entry(PROVIDER_AUTH_SCHEME_INPUT)
+        .or_insert_with(|| {
+            if provider.auth_scheme.is_empty() {
+                "raw".to_string()
+            } else {
+                provider.auth_scheme.clone()
+            }
+        });
+    ui.inputs
+        .entry(PROVIDER_BODY_TEMPLATE_INPUT)
+        .or_insert_with(|| provider.body_template.clone());
+    ui.inputs
+        .entry(PROVIDER_RESPONSE_KEY_INPUT)
+        .or_insert_with(|| provider.response_key.clone());
 }
 
 fn current_intent(ui: &UiState) -> String {

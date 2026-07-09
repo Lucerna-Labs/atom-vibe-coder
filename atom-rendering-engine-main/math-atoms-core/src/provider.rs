@@ -7,6 +7,8 @@ use std::process::{Command, Output, Stdio};
 pub enum ProviderKind {
     OpenAiResponses,
     OllamaCloudChat,
+    MistralChat,
+    Custom,
 }
 
 impl ProviderKind {
@@ -14,6 +16,25 @@ impl ProviderKind {
         match self {
             Self::OpenAiResponses => "openai",
             Self::OllamaCloudChat => "ollama",
+            Self::MistralChat => "mistral",
+            Self::Custom => "custom",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderWireFormat {
+    OpenAiResponses,
+    ChatCompletions,
+    OllamaChat,
+}
+
+impl ProviderWireFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "responses",
+            Self::ChatCompletions => "chat",
+            Self::OllamaChat => "ollama-chat",
         }
     }
 }
@@ -21,10 +42,28 @@ impl ProviderKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderConfig {
     pub kind: ProviderKind,
+    pub wire_format: ProviderWireFormat,
     pub endpoint: String,
     pub model: String,
     pub api_key_env: String,
+    pub auth_header: String,
+    pub auth_scheme: String,
+    pub body_template: String,
+    pub response_key: String,
     pub api_key_present: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderConfigInput<'a> {
+    pub kind_raw: &'a str,
+    pub format_raw: &'a str,
+    pub model: &'a str,
+    pub endpoint: &'a str,
+    pub api_key_env: &'a str,
+    pub auth_header: &'a str,
+    pub auth_scheme: &'a str,
+    pub body_template: &'a str,
+    pub response_key: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +71,9 @@ pub struct PreparedProviderCall {
     pub endpoint: String,
     pub model: String,
     pub api_key_env: String,
+    pub auth_header: String,
+    pub auth_scheme: String,
+    pub response_key: String,
     pub body: String,
 }
 
@@ -40,6 +82,8 @@ pub enum ProviderError {
     MissingApiKey {
         env: String,
     },
+    MissingEndpoint,
+    MissingModel,
     EmptyPrompt,
     Io(String),
     CurlFailed {
@@ -56,20 +100,37 @@ impl ProviderConfig {
         let kind_raw =
             non_empty_env("MATH_ATOMS_PROVIDER_KIND").unwrap_or_else(|| "openai".to_string());
         let kind = provider_kind_from(&kind_raw);
+        let wire_format = non_empty_env("MATH_ATOMS_PROVIDER_FORMAT")
+            .map(|value| provider_wire_format_from(&value))
+            .unwrap_or_else(|| default_wire_format(kind));
         let model = non_empty_env("MATH_ATOMS_PROVIDER_MODEL")
             .unwrap_or_else(|| default_model(kind).to_string());
         let endpoint = non_empty_env("MATH_ATOMS_PROVIDER_URL")
             .unwrap_or_else(|| default_endpoint(kind).to_string());
         let api_key_env = non_empty_env("MATH_ATOMS_PROVIDER_KEY_ENV")
             .unwrap_or_else(|| default_key_env(kind).to_string());
+        let auth_header = non_empty_env("MATH_ATOMS_PROVIDER_AUTH_HEADER")
+            .unwrap_or_else(|| default_auth_header().to_string());
+        let auth_scheme = std::env::var("MATH_ATOMS_PROVIDER_AUTH_SCHEME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|| default_auth_scheme().to_string());
+        let body_template = non_empty_env("MATH_ATOMS_PROVIDER_BODY_TEMPLATE").unwrap_or_default();
+        let response_key = non_empty_env("MATH_ATOMS_PROVIDER_RESPONSE_KEY")
+            .unwrap_or_else(|| default_response_key().to_string());
         let api_key_present = std::env::var(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
             kind,
+            wire_format,
             endpoint,
             model,
             api_key_env,
+            auth_header: normalize_header_name(&auth_header),
+            auth_scheme: normalize_auth_scheme(&auth_scheme),
+            body_template,
+            response_key: normalize_response_key(&response_key),
             api_key_present,
         }
     }
@@ -87,45 +148,99 @@ impl ProviderConfig {
                 .unwrap_or_else(|| "openai".to_string())
                 .as_str(),
         );
+        let wire_format = lookup("MATH_ATOMS_PROVIDER_FORMAT")
+            .map(|value| provider_wire_format_from(&value))
+            .unwrap_or_else(|| default_wire_format(kind));
         let model =
             lookup("MATH_ATOMS_PROVIDER_MODEL").unwrap_or_else(|| default_model(kind).to_string());
         let endpoint =
             lookup("MATH_ATOMS_PROVIDER_URL").unwrap_or_else(|| default_endpoint(kind).to_string());
         let api_key_env = lookup("MATH_ATOMS_PROVIDER_KEY_ENV")
             .unwrap_or_else(|| default_key_env(kind).to_string());
+        let auth_header = lookup("MATH_ATOMS_PROVIDER_AUTH_HEADER")
+            .unwrap_or_else(|| default_auth_header().to_string());
+        let auth_scheme = pairs
+            .iter()
+            .find(|(name, _)| *name == "MATH_ATOMS_PROVIDER_AUTH_SCHEME")
+            .map(|(_, value)| value.trim().to_string())
+            .unwrap_or_else(|| default_auth_scheme().to_string());
+        let body_template = lookup("MATH_ATOMS_PROVIDER_BODY_TEMPLATE").unwrap_or_default();
+        let response_key = lookup("MATH_ATOMS_PROVIDER_RESPONSE_KEY")
+            .unwrap_or_else(|| default_response_key().to_string());
         let api_key_present = lookup(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
             kind,
+            wire_format,
             endpoint,
             model,
             api_key_env,
+            auth_header: normalize_header_name(&auth_header),
+            auth_scheme: normalize_auth_scheme(&auth_scheme),
+            body_template,
+            response_key: normalize_response_key(&response_key),
             api_key_present,
         }
     }
 
     pub fn from_values(kind_raw: &str, model: &str, endpoint: &str, api_key_env: &str) -> Self {
-        let kind = provider_kind_from(kind_raw);
-        let model = non_empty_value(model).unwrap_or_else(|| default_model(kind).to_string());
+        Self::from_values_full(ProviderConfigInput {
+            kind_raw,
+            format_raw: "",
+            model,
+            endpoint,
+            api_key_env,
+            auth_header: "",
+            auth_scheme: "",
+            body_template: "",
+            response_key: "",
+        })
+    }
+
+    pub fn from_values_full(input: ProviderConfigInput<'_>) -> Self {
+        let kind = provider_kind_from(input.kind_raw);
+        let wire_format = non_empty_value(input.format_raw)
+            .map(|value| provider_wire_format_from(&value))
+            .unwrap_or_else(|| default_wire_format(kind));
+        let model = non_empty_value(input.model).unwrap_or_else(|| default_model(kind).to_string());
         let endpoint =
-            non_empty_value(endpoint).unwrap_or_else(|| default_endpoint(kind).to_string());
+            non_empty_value(input.endpoint).unwrap_or_else(|| default_endpoint(kind).to_string());
         let api_key_env =
-            non_empty_value(api_key_env).unwrap_or_else(|| default_key_env(kind).to_string());
+            non_empty_value(input.api_key_env).unwrap_or_else(|| default_key_env(kind).to_string());
+        let auth_header =
+            non_empty_value(input.auth_header).unwrap_or_else(|| default_auth_header().to_string());
+        let auth_scheme = input.auth_scheme.trim().to_string();
+        let auth_scheme = if auth_scheme.is_empty() {
+            default_auth_scheme().to_string()
+        } else {
+            normalize_auth_scheme(&auth_scheme)
+        };
+        let body_template = input.body_template.trim().to_string();
+        let response_key = non_empty_value(input.response_key)
+            .unwrap_or_else(|| default_response_key().to_string());
         let api_key_present = std::env::var(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
             kind,
+            wire_format,
             endpoint,
             model,
             api_key_env,
+            auth_header: normalize_header_name(&auth_header),
+            auth_scheme,
+            body_template,
+            response_key: normalize_response_key(&response_key),
             api_key_present,
         }
     }
 
     pub fn is_ready(&self) -> bool {
         self.api_key_present
+            && !self.endpoint.trim().is_empty()
+            && !self.model.trim().is_empty()
+            && !self.auth_header.trim().is_empty()
     }
 
     pub fn prepare_call(
@@ -136,6 +251,12 @@ impl ProviderConfig {
     ) -> Result<PreparedProviderCall, ProviderError> {
         if intent.trim().is_empty() {
             return Err(ProviderError::EmptyPrompt);
+        }
+        if self.endpoint.trim().is_empty() {
+            return Err(ProviderError::MissingEndpoint);
+        }
+        if self.model.trim().is_empty() {
+            return Err(ProviderError::MissingModel);
         }
         if !self.api_key_present {
             return Err(ProviderError::MissingApiKey {
@@ -157,7 +278,10 @@ impl ProviderConfig {
             endpoint: self.endpoint.clone(),
             model: self.model.clone(),
             api_key_env: self.api_key_env.clone(),
-            body: provider_body(self.kind, &self.model, &prompt),
+            auth_header: self.auth_header.clone(),
+            auth_scheme: self.auth_scheme.clone(),
+            response_key: self.response_key.clone(),
+            body: provider_body(self.wire_format, &self.model, &prompt, &self.body_template),
         })
     }
 }
@@ -184,7 +308,12 @@ impl PreparedProviderCall {
         let body_path = dir.join(format!("{stem}.json"));
         fs::write(&body_path, &self.body)?;
         let body_arg = format!("@{}", body_path.to_string_lossy());
-        let config = curl_config(&self.endpoint, &api_key);
+        let config = curl_config(
+            &self.endpoint,
+            &self.auth_header,
+            &self.auth_scheme,
+            &api_key,
+        );
         let output = run_curl_with_stdin_config("curl.exe", &body_arg, &config)
             .or_else(|_| run_curl_with_stdin_config("curl", &body_arg, &config));
         if let Err(error) = fs::remove_file(&body_path) {
@@ -203,28 +332,27 @@ impl PreparedProviderCall {
                 body: truncate_for_log(&redact_provider_body(&body, &api_key)),
             });
         }
-        parse_responses_text(&body)
+        parse_provider_text(&body, &self.response_key)
     }
 }
 
 pub fn parse_responses_text(body: &str) -> Result<String, ProviderError> {
-    if let Some(pos) = body.find("\"output_text\"") {
-        if let Some(text) = read_json_string_after_colon(&body[pos + "\"output_text\"".len()..]) {
-            return Ok(text);
+    parse_provider_text(body, default_response_key())
+}
+
+fn parse_provider_text(body: &str, preferred_key: &str) -> Result<String, ProviderError> {
+    let mut keys = Vec::new();
+    let preferred = normalize_response_key(preferred_key);
+    if !preferred.is_empty() {
+        keys.push(preferred);
+    }
+    for key in ["output_text", "text", "response", "content"] {
+        if !keys.iter().any(|item| item == key) {
+            keys.push(key.to_string());
         }
     }
-    if let Some(pos) = body.find("\"text\"") {
-        if let Some(text) = read_json_string_after_colon(&body[pos + "\"text\"".len()..]) {
-            return Ok(text);
-        }
-    }
-    if let Some(pos) = body.find("\"response\"") {
-        if let Some(text) = read_json_string_after_colon(&body[pos + "\"response\"".len()..]) {
-            return Ok(text);
-        }
-    }
-    if let Some(pos) = body.find("\"content\"") {
-        if let Some(text) = read_json_string_after_colon(&body[pos + "\"content\"".len()..]) {
+    for key in keys {
+        if let Some(text) = read_json_string_field(body, &key) {
             return Ok(text);
         }
     }
@@ -240,11 +368,18 @@ pub fn provider_output_hash(text: &str) -> String {
     format!("fnv:{hash:016x}")
 }
 
-fn curl_config(endpoint: &str, api_key: &str) -> String {
+fn curl_config(endpoint: &str, auth_header: &str, auth_scheme: &str, api_key: &str) -> String {
+    let auth_scheme = normalize_auth_scheme(auth_scheme);
+    let auth_value = if auth_scheme.trim().is_empty() {
+        api_key.to_string()
+    } else {
+        format!("{} {}", auth_scheme.trim(), api_key)
+    };
     format!(
-        "url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
+        "url = \"{}\"\nrequest = \"POST\"\nheader = \"{}: {}\"\nheader = \"Content-Type: application/json\"\n",
         curl_escape(endpoint),
-        curl_escape(api_key)
+        curl_escape(&normalize_header_name(auth_header)),
+        curl_escape(&auth_value)
     )
 }
 
@@ -296,6 +431,32 @@ fn unique_suffix() -> u128 {
 
 fn curl_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn normalize_header_name(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect();
+    if cleaned.is_empty() {
+        default_auth_header().to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn normalize_auth_scheme(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "raw" | "none" | "no-prefix" | "no_prefix" => String::new(),
+        _ => value.trim().to_string(),
+    }
+}
+
+fn normalize_response_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .collect()
 }
 
 fn non_empty_env(key: &str) -> Option<String> {
@@ -356,7 +517,30 @@ fn redact_provider_body(body: &str, api_key: &str) -> String {
 fn provider_kind_from(value: &str) -> ProviderKind {
     match value.to_ascii_lowercase().as_str() {
         "ollama" | "ollama-cloud" | "ollama_cloud" => ProviderKind::OllamaCloudChat,
+        "mistral" | "mistral-ai" | "mistral_ai" | "vibe" | "mistral-vibe" => {
+            ProviderKind::MistralChat
+        }
+        "custom" | "generic" | "compatible" | "openai-compatible" | "openai_chat"
+        | "openai-chat" => ProviderKind::Custom,
         _ => ProviderKind::OpenAiResponses,
+    }
+}
+
+fn provider_wire_format_from(value: &str) -> ProviderWireFormat {
+    match value.to_ascii_lowercase().as_str() {
+        "ollama" | "ollama-chat" | "ollama_chat" => ProviderWireFormat::OllamaChat,
+        "chat" | "chat-completions" | "chat_completions" | "openai-chat" | "mistral" => {
+            ProviderWireFormat::ChatCompletions
+        }
+        _ => ProviderWireFormat::OpenAiResponses,
+    }
+}
+
+fn default_wire_format(kind: ProviderKind) -> ProviderWireFormat {
+    match kind {
+        ProviderKind::OpenAiResponses => ProviderWireFormat::OpenAiResponses,
+        ProviderKind::OllamaCloudChat => ProviderWireFormat::OllamaChat,
+        ProviderKind::MistralChat | ProviderKind::Custom => ProviderWireFormat::ChatCompletions,
     }
 }
 
@@ -364,6 +548,8 @@ fn default_model(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::OpenAiResponses => "gpt-5.5",
         ProviderKind::OllamaCloudChat => "gpt-oss:120b",
+        ProviderKind::MistralChat => "mistral-large-latest",
+        ProviderKind::Custom => "",
     }
 }
 
@@ -371,6 +557,8 @@ fn default_endpoint(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::OpenAiResponses => "https://api.openai.com/v1/responses",
         ProviderKind::OllamaCloudChat => "https://ollama.com/api/chat",
+        ProviderKind::MistralChat => "https://api.mistral.ai/v1/chat/completions",
+        ProviderKind::Custom => "",
     }
 }
 
@@ -378,13 +566,36 @@ fn default_key_env(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::OpenAiResponses => "OPENAI_API_KEY",
         ProviderKind::OllamaCloudChat => "OLLAMA_API_KEY",
+        ProviderKind::MistralChat => "MISTRAL_API_KEY",
+        ProviderKind::Custom => "MATH_ATOMS_PROVIDER_API_KEY",
     }
 }
 
-fn provider_body(kind: ProviderKind, model: &str, prompt: &str) -> String {
-    match kind {
-        ProviderKind::OpenAiResponses => responses_body(model, prompt),
-        ProviderKind::OllamaCloudChat => ollama_chat_body(model, prompt),
+fn default_auth_header() -> &'static str {
+    "Authorization"
+}
+
+fn default_auth_scheme() -> &'static str {
+    "Bearer"
+}
+
+fn default_response_key() -> &'static str {
+    "output_text"
+}
+
+fn provider_body(
+    format: ProviderWireFormat,
+    model: &str,
+    prompt: &str,
+    body_template: &str,
+) -> String {
+    if !body_template.trim().is_empty() {
+        return render_body_template(body_template, model, prompt);
+    }
+    match format {
+        ProviderWireFormat::OpenAiResponses => responses_body(model, prompt),
+        ProviderWireFormat::ChatCompletions => chat_completions_body(model, prompt),
+        ProviderWireFormat::OllamaChat => ollama_chat_body(model, prompt),
     }
 }
 
@@ -402,6 +613,35 @@ fn ollama_chat_body(model: &str, prompt: &str) -> String {
         json_escape(model),
         json_escape(prompt)
     )
+}
+
+fn chat_completions_body(model: &str, prompt: &str) -> String {
+    format!(
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}],\"temperature\":0.1,\"stream\":false}}",
+        json_escape(model),
+        json_escape(prompt)
+    )
+}
+
+fn render_body_template(template: &str, model: &str, prompt: &str) -> String {
+    template
+        .replace("{{model}}", &json_escape(model))
+        .replace("{{prompt}}", &json_escape(prompt))
+        .replace("{{model_json}}", &format!("\"{}\"", json_escape(model)))
+        .replace("{{prompt_json}}", &format!("\"{}\"", json_escape(prompt)))
+}
+
+fn read_json_string_field(input: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let mut cursor = 0;
+    while let Some(offset) = input[cursor..].find(&needle) {
+        let start = cursor + offset + needle.len();
+        if let Some(text) = read_json_string_after_colon(&input[start..]) {
+            return Some(text);
+        }
+        cursor = start;
+    }
+    None
 }
 
 fn read_json_string_after_colon(input: &str) -> Option<String> {
@@ -478,6 +718,7 @@ mod tests {
             .unwrap();
         assert!(call.body.contains("\"model\":\"gpt-5.5\""));
         assert!(call.body.contains("\"input\""));
+        assert_eq!(config.wire_format, ProviderWireFormat::OpenAiResponses);
         assert!(!call.body.contains("secret"));
     }
 
@@ -497,6 +738,7 @@ mod tests {
             .prepare_call("provider api", "provider-model-loop", &[])
             .unwrap();
         assert_eq!(config.kind, ProviderKind::OllamaCloudChat);
+        assert_eq!(config.wire_format, ProviderWireFormat::OllamaChat);
         assert_eq!(call.endpoint, "https://ollama.com/api/chat");
         assert!(call.body.contains("\"messages\""));
         assert!(call.body.contains("\"stream\":false"));
@@ -512,6 +754,105 @@ mod tests {
     }
 
     #[test]
+    fn response_text_parser_reads_chat_completion_content() {
+        let text = parse_responses_text(
+            r#"{"choices":[{"message":{"role":"assistant","content":"mistral-ok"}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(text, "mistral-ok");
+    }
+
+    #[test]
+    fn response_text_parser_skips_non_field_matches() {
+        let text =
+            parse_responses_text(r#"{"content":[{"type":"text","text":"anthropic-ok"}]}"#).unwrap();
+        assert_eq!(text, "anthropic-ok");
+    }
+
+    #[test]
+    fn mistral_provider_uses_chat_completions_profile() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "mistral"),
+            ("MISTRAL_API_KEY", "secret"),
+        ]);
+        let call = config
+            .prepare_call("provider api", "provider-model-loop", &[])
+            .unwrap();
+        assert_eq!(config.kind, ProviderKind::MistralChat);
+        assert_eq!(config.wire_format, ProviderWireFormat::ChatCompletions);
+        assert_eq!(config.model, "mistral-large-latest");
+        assert_eq!(call.endpoint, "https://api.mistral.ai/v1/chat/completions");
+        assert!(call.body.contains("\"messages\""));
+        assert!(call.body.contains("\"role\":\"user\""));
+        assert!(!call.body.contains("secret"));
+    }
+
+    #[test]
+    fn custom_provider_accepts_endpoint_format_and_auth_knobs() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_FORMAT", "chat"),
+            ("MATH_ATOMS_PROVIDER_MODEL", "vibe-model"),
+            (
+                "MATH_ATOMS_PROVIDER_URL",
+                "https://example.invalid/v1/chat/completions",
+            ),
+            ("MATH_ATOMS_PROVIDER_KEY_ENV", "VIBE_API_KEY"),
+            ("MATH_ATOMS_PROVIDER_AUTH_HEADER", "x-api-key"),
+            ("MATH_ATOMS_PROVIDER_AUTH_SCHEME", "raw"),
+            ("VIBE_API_KEY", "secret"),
+        ]);
+        let call = config
+            .prepare_call("provider api", "provider-model-loop", &[])
+            .unwrap();
+        assert_eq!(config.kind, ProviderKind::Custom);
+        assert_eq!(config.wire_format, ProviderWireFormat::ChatCompletions);
+        assert_eq!(call.auth_header, "x-api-key");
+        assert_eq!(call.auth_scheme, "");
+        assert!(call.body.contains("\"model\":\"vibe-model\""));
+        assert!(!call.body.contains("secret"));
+    }
+
+    #[test]
+    fn custom_provider_requires_endpoint_model_and_key_before_ready() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+        ]);
+        assert!(!config.is_ready());
+        assert_eq!(
+            config.prepare_call("provider api", "provider-model-loop", &[]),
+            Err(ProviderError::MissingEndpoint)
+        );
+    }
+
+    #[test]
+    fn custom_provider_template_and_response_key_are_applied() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_MODEL", "vibe-model"),
+            ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
+            (
+                "MATH_ATOMS_PROVIDER_BODY_TEMPLATE",
+                "{\"m\":{{model_json}},\"p\":{{prompt_json}}}",
+            ),
+            ("MATH_ATOMS_PROVIDER_RESPONSE_KEY", "answer"),
+            ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+        ]);
+        let call = config
+            .prepare_call("template provider", "provider-model-loop", &[])
+            .unwrap();
+        assert_eq!(call.response_key, "answer");
+        assert!(call
+            .body
+            .starts_with("{\"m\":\"vibe-model\",\"p\":\"Mission:"));
+        assert_eq!(
+            parse_provider_text(r#"{"answer":"template-ok"}"#, &call.response_key).unwrap(),
+            "template-ok"
+        );
+    }
+
+    #[test]
     fn empty_pair_values_do_not_override_provider_defaults() {
         let config = ProviderConfig::from_pairs(&[
             ("MATH_ATOMS_PROVIDER_MODEL", ""),
@@ -521,6 +862,10 @@ mod tests {
         assert_eq!(config.model, "gpt-5.5");
         assert_eq!(config.endpoint, "https://api.openai.com/v1/responses");
         assert_eq!(config.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(config.auth_header, "Authorization");
+        assert_eq!(config.auth_scheme, "Bearer");
+        assert_eq!(config.body_template, "");
+        assert_eq!(config.response_key, "output_text");
     }
 
     #[test]
@@ -531,6 +876,7 @@ mod tests {
         std::env::remove_var(&key);
         assert_eq!(config.kind, ProviderKind::OllamaCloudChat);
         assert_eq!(config.kind.as_str(), "ollama");
+        assert_eq!(config.wire_format.as_str(), "ollama-chat");
         assert_eq!(config.model, "gpt-oss:120b");
         assert_eq!(config.endpoint, "https://ollama.com/api/chat");
         assert_eq!(config.api_key_env, key);
@@ -573,5 +919,12 @@ mod tests {
             .any(|pair| pair[0] == "--config" && pair[1] == "-"));
         assert!(!args.iter().any(|arg| arg.contains(secret)));
         assert!(!args.iter().any(|arg| arg.ends_with(".curl")));
+        let config = curl_config(
+            "https://example.invalid",
+            "x-api-key",
+            "raw",
+            "sk-test-secret",
+        );
+        assert!(config.contains("header = \"x-api-key: sk-test-secret\""));
     }
 }

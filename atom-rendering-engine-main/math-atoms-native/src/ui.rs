@@ -1,7 +1,9 @@
 use crate::model::{
     NativeApp, APPLY_PROVIDER, BUS_SCROLL, CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER,
-    INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
-    PROVIDER_MODEL_INPUT, PROVIDER_URL_INPUT, RUN_LOOP,
+    INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT, PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT,
+    PROVIDER_BODY_TEMPLATE_INPUT, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT,
+    PROVIDER_KIND_INPUT, PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT,
+    RUN_LOOP,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
@@ -347,7 +349,9 @@ fn provider_setup(app: &NativeApp, ui: &UiState) -> UxNode {
                     "blocked"
                 },
                 &format!(
-                    "{} via {}",
+                    "{} / {} {} via {}",
+                    app.runtime.provider().kind.as_str(),
+                    app.runtime.provider().wire_format.as_str(),
                     app.runtime.provider().model,
                     app.runtime.provider().api_key_env
                 ),
@@ -358,9 +362,14 @@ fn provider_setup(app: &NativeApp, ui: &UiState) -> UxNode {
                 },
             ),
             provider_input(ui, PROVIDER_KIND_INPUT, "kind"),
+            provider_input(ui, PROVIDER_FORMAT_INPUT, "format"),
             provider_input(ui, PROVIDER_MODEL_INPUT, "model"),
             provider_input(ui, PROVIDER_URL_INPUT, "endpoint"),
             provider_input(ui, PROVIDER_KEY_ENV_INPUT, "key env"),
+            provider_input(ui, PROVIDER_AUTH_HEADER_INPUT, "auth header"),
+            provider_input(ui, PROVIDER_AUTH_SCHEME_INPUT, "auth scheme"),
+            provider_input(ui, PROVIDER_RESPONSE_KEY_INPUT, "response key"),
+            provider_input(ui, PROVIDER_BODY_TEMPLATE_INPUT, "body template"),
             button(
                 ui,
                 APPLY_PROVIDER,
