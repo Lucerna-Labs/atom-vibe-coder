@@ -74,6 +74,10 @@ jobs:
         shell: pwsh
         run: .\scripts\Test-NativeFunctional.ps1
 
+      - name: Native provider responsiveness gate
+        shell: pwsh
+        run: .\scripts\Test-NativeProviderResponsiveness.ps1
+
       - name: Provider execution gate
         shell: pwsh
         run: .\scripts\Test-ProviderExecution.ps1

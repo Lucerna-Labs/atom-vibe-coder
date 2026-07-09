@@ -1,7 +1,10 @@
 use math_atoms_core::{
-    MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, RuntimeStatus,
+    MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, ProviderError,
+    RuntimeStatus,
 };
 use pmre_orchestrator::UiState;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 pub const INTENT_INPUT: u32 = 1;
 pub const RUN_LOOP: u32 = 2;
@@ -88,16 +91,29 @@ impl NativeApp {
         self.last_run_summary = format!("Captured current proof route. {store_result}");
     }
 
-    pub fn execute_provider(&mut self) {
+    pub fn begin_provider_execution(&mut self) -> Option<Receiver<Result<String, ProviderError>>> {
+        if self.provider_running {
+            self.last_provider_output = "Provider request already running.".to_string();
+            return None;
+        }
         let Some(call) = self.runtime.state().last_provider_call.clone() else {
             let reason =
                 "No prepared provider call. Run an intent that requests provider/model work first.";
             self.runtime.mark_provider_blocked(reason);
             self.last_provider_output = format!("Provider blocked: {reason}");
-            return;
+            return None;
         };
+        let (tx, rx) = mpsc::channel();
         self.provider_running = true;
-        self.last_provider_output = match execute_call(call) {
+        self.last_provider_output = "Provider request running.".to_string();
+        thread::spawn(move || {
+            let _ = tx.send(execute_call(call));
+        });
+        Some(rx)
+    }
+
+    pub fn complete_provider_execution(&mut self, result: Result<String, ProviderError>) {
+        self.last_provider_output = match result {
             Ok(text) => text,
             Err(error) => {
                 let reason = format!("{error:?}");
@@ -107,6 +123,19 @@ impl NativeApp {
         };
         self.provider_running = false;
         let _ = self.append_proof_record();
+    }
+
+    #[cfg(test)]
+    pub fn execute_provider(&mut self) {
+        let Some(rx) = self.begin_provider_execution() else {
+            return;
+        };
+        match rx.recv() {
+            Ok(result) => self.complete_provider_execution(result),
+            Err(error) => self.complete_provider_execution(Err(ProviderError::Io(format!(
+                "provider worker disconnected: {error}"
+            )))),
+        }
     }
 
     pub fn status(&self) -> RuntimeStatus {
@@ -216,6 +245,18 @@ mod tests {
             .blockers
             .iter()
             .any(|item| item.contains("No prepared provider call")));
+    }
+
+    #[test]
+    fn provider_completion_failure_blocks_runtime() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        app.provider_running = true;
+        app.complete_provider_execution(Err(ProviderError::Io("provider failed".to_string())));
+        assert_eq!(app.status(), RuntimeStatus::Blocked);
+        assert_eq!(app.provider_title_state(), "provider:blocked");
     }
 
     #[test]

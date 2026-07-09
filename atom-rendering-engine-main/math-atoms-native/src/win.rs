@@ -4,6 +4,7 @@ use core::ffi::c_void;
 use pmre_kit::ux::UxNode;
 use pmre_orchestrator::{handle_event, render_ui_quality, Quality, UiEvent, UiState};
 use std::cell::RefCell;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 type Hwnd = *mut c_void;
 type Hinstance = *mut c_void;
@@ -127,6 +128,8 @@ extern "system" {
     fn BeginPaint(hwnd: Hwnd, ps: *mut PaintStruct) -> Hdc;
     fn EndPaint(hwnd: Hwnd, ps: *const PaintStruct) -> i32;
     fn LoadCursorW(inst: Hinstance, name: *const u16) -> Hcursor;
+    fn SetTimer(hwnd: Hwnd, id: usize, elapse: u32, timer_proc: *const c_void) -> usize;
+    fn KillTimer(hwnd: Hwnd, id: usize) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -162,6 +165,7 @@ const WM_DESTROY: u32 = 0x0002;
 const WM_PAINT: u32 = 0x000F;
 const WM_SIZE: u32 = 0x0005;
 const WM_KEYDOWN: u32 = 0x0100;
+const WM_TIMER: u32 = 0x0113;
 const WM_MOUSEMOVE: u32 = 0x0200;
 const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_LBUTTONUP: u32 = 0x0202;
@@ -179,6 +183,7 @@ const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const SRCCOPY: u32 = 0x00CC_0020;
 const IDC_ARROW: usize = 32512;
+const PROVIDER_TIMER_ID: usize = 77;
 
 struct App {
     width: u32,
@@ -188,6 +193,7 @@ struct App {
     cursor: (f32, f32),
     quality: Quality,
     tracking_leave: bool,
+    provider_rx: Option<Receiver<Result<String, math_atoms_core::ProviderError>>>,
 }
 
 thread_local! {
@@ -226,6 +232,7 @@ pub fn run() {
                 cursor: (0.0, 0.0),
                 quality: Quality::Fast,
                 tracking_leave: false,
+                provider_rx: None,
             });
         });
 
@@ -289,7 +296,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     app.height = h.max(1);
                 }
             });
-            dispatch(UiEvent::Resize(w.max(1), h.max(1)));
+            dispatch(hwnd, UiEvent::Resize(w.max(1), h.max(1)));
             InvalidateRect(hwnd, std::ptr::null(), 0);
             0
         }
@@ -318,11 +325,14 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                 };
                 TrackMouseEvent(&mut tme);
             }
-            let dirty = dispatch(match msg {
-                WM_LBUTTONDOWN => UiEvent::PointerDown(x, y),
-                WM_LBUTTONUP => UiEvent::PointerUp(x, y),
-                _ => UiEvent::PointerMove(x, y),
-            });
+            let dirty = dispatch(
+                hwnd,
+                match msg {
+                    WM_LBUTTONDOWN => UiEvent::PointerDown(x, y),
+                    WM_LBUTTONUP => UiEvent::PointerUp(x, y),
+                    _ => UiEvent::PointerMove(x, y),
+                },
+            );
             if dirty {
                 InvalidateRect(hwnd, std::ptr::null(), 0);
             }
@@ -334,7 +344,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     app.tracking_leave = false;
                 }
             });
-            if dispatch(UiEvent::PointerMove(-1e6, -1e6)) {
+            if dispatch(hwnd, UiEvent::PointerMove(-1e6, -1e6)) {
                 InvalidateRect(hwnd, std::ptr::null(), 0);
             }
             0
@@ -347,7 +357,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     .map(|app| app.cursor)
                     .unwrap_or((0.0, 0.0))
             });
-            dispatch(UiEvent::Wheel(cursor.0, cursor.1, -delta * 48.0));
+            dispatch(hwnd, UiEvent::Wheel(cursor.0, cursor.1, -delta * 48.0));
             InvalidateRect(hwnd, std::ptr::null(), 0);
             0
         }
@@ -384,14 +394,24 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     .map(UiEvent::Char),
             };
             if let Some(ev) = ev {
-                dispatch(ev);
+                dispatch(hwnd, ev);
                 InvalidateRect(hwnd, std::ptr::null(), 0);
             }
             0
         }
         WM_MATH_ATOMS_COMMAND => {
-            dispatch_command(wp as u32);
+            dispatch_command(hwnd, wp as u32);
             InvalidateRect(hwnd, std::ptr::null(), 0);
+            0
+        }
+        WM_TIMER => {
+            if wp == PROVIDER_TIMER_ID {
+                let complete = poll_provider();
+                if complete {
+                    KillTimer(hwnd, PROVIDER_TIMER_ID);
+                }
+                InvalidateRect(hwnd, std::ptr::null(), 0);
+            }
             0
         }
         WM_KEYDOWN => {
@@ -421,7 +441,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
     }
 }
 
-fn dispatch(ev: UiEvent) -> bool {
+fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
     APP.with(|cell| {
         if let Some(app) = cell.borrow_mut().as_mut() {
             let was_move = matches!(ev, UiEvent::PointerMove(..));
@@ -435,7 +455,7 @@ fn dispatch(ev: UiEvent) -> bool {
                 dirty = true;
             }
             if let Some(id) = app.ui.take_click() {
-                dispatch_model_command(app, id);
+                dispatch_model_command(hwnd, app, id);
                 dirty = true;
             }
             if app.ui.take_submit().is_some() {
@@ -449,22 +469,57 @@ fn dispatch(ev: UiEvent) -> bool {
     })
 }
 
-fn dispatch_command(id: u32) {
+fn dispatch_command(hwnd: Hwnd, id: u32) {
     APP.with(|cell| {
         if let Some(app) = cell.borrow_mut().as_mut() {
-            dispatch_model_command(app, id);
+            dispatch_model_command(hwnd, app, id);
         }
     });
 }
 
-fn dispatch_model_command(app: &mut App, id: u32) {
+fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
     match id {
         RUN_LOOP => app.model.run_current_intent(&app.ui),
-        EXEC_PROVIDER => app.model.execute_provider(),
+        EXEC_PROVIDER => {
+            if let Some(rx) = app.model.begin_provider_execution() {
+                app.provider_rx = Some(rx);
+                unsafe {
+                    SetTimer(hwnd, PROVIDER_TIMER_ID, 100, std::ptr::null());
+                }
+            }
+        }
         CAPTURE_PROOF => app.model.capture_current_proof(),
         MARK_DRIFT => app.model.mark_drift(),
         _ => {}
     }
+}
+
+fn poll_provider() -> bool {
+    APP.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(app) = borrow.as_mut() else {
+            return false;
+        };
+        let Some(rx) = app.provider_rx.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                app.provider_rx = None;
+                app.model.complete_provider_execution(result);
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                app.provider_rx = None;
+                app.model
+                    .complete_provider_execution(Err(math_atoms_core::ProviderError::Io(
+                        "provider worker disconnected".to_string(),
+                    )));
+                true
+            }
+        }
+    })
 }
 
 fn paint(hwnd: Hwnd) {
