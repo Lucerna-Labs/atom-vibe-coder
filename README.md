@@ -13,6 +13,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-ProviderBuildSeveralApps.ps1` asks the configured provider to generate several tiny Rust fixtures, compiles them, runs them, and writes side-window artifact rows.
 - `scripts/Test-ProviderBuildRealPmreApp.ps1` gives the configured provider only a natural-language app request, validates the returned product spec, compiles that spec through the harness-owned PMRE scaffold, drives UI events, writes a BMP artifact, and adds it to the native side artifact window.
+- `scripts/Test-DesignUploadBuild.ps1` accepts uploaded HTML/CSS file paths, compiles a PMRE app that embeds the design, renders it through `render_html`, validates the BMP, and adds it to the native side artifact window.
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
@@ -60,6 +61,8 @@ $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{promp
 
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
 
+The native Settings tab also exposes `Design Upload` with HTML and CSS path inputs. `Build Design` runs the PMRE design-upload gate, compiles the uploaded design into a native renderer app, and refreshes the side artifact window.
+
 Run a real DeepSeek Flash model test that asks the provider to generate a dependency-free Rust toy app, compiles it with `rustc`, runs it, and verifies output:
 
 ```powershell
@@ -70,6 +73,12 @@ Run the stricter app-build gate. The provider receives only a natural-language u
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-ProviderBuildRealPmreApp.ps1
+```
+
+Build a native PMRE app from uploaded HTML/CSS design files and render its side artifact:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-DesignUploadBuild.ps1 -HtmlPath C:\path\design.html -CssPath C:\path\design.css
 ```
 
 Generate the native artifact:

@@ -1,17 +1,20 @@
 //! Reduced HTML/CSS front-end. Parses an HTML subset with inline `style` attributes into
 //! the shared UXI box tree (`pmre_kit::ux`), which then flows through the same layout +
 //! raster path as native UXI. This is the "reduce": the load-bearing core is the box
-//! model, block/flex layout, inline text flow, and a CSS property subset; selectors,
-//! external stylesheets, and the full cascade are the expansion, not the foundation.
+//! model, block/flex layout, inline text flow, and a CSS property subset; full
+//! selector specificity, external stylesheets, and the full cascade are the expansion,
+//! not the foundation.
 //!
-//! Supported structure: comments, doctype, `<script>`/`<style>` skipping, entities,
+//! Supported structure: comments, doctype, `<script>` skipping, `<style>` extraction,
+//! entities,
 //! block elements (`div p h1-h4 ul ol li hr section header footer main nav article`),
 //! and inline elements (`b strong i em u a span small code mark`) that coalesce into a
 //! single word-wrapping rich flow — `<b>bold</b> and plain` stays on one line.
 //!
-//! Supported CSS (inline `style="..."`): display(flex|block|none), flex-direction, flex,
-//! flex-grow, width/height (px/%/auto), padding/margin (+ per-side, 1-4 value shorthand),
-//! gap, background(-color), border, border-radius, box-shadow, color, font-size,
+//! Supported CSS (`<style>` simple selectors plus inline `style="..."`):
+//! display(flex|block|none), flex-direction, flex, flex-grow, width/height
+//! (px/%/auto), padding/margin (+ per-side, 1-4 value shorthand), gap,
+//! background(-color), border, border-radius, box-shadow, color, font-size,
 //! font-weight, text-align, text-decoration, align-items, justify-content, opacity.
 //! Colors: #rgb/#rrggbb/#rrggbbaa, rgb()/rgba(), hsl(), ~40 named colors.
 
@@ -23,6 +26,8 @@ use pmre_kit::ux::{Align, Dim, Dir, Edges, Justify, Shadow, Span, Style, UxNode}
 enum Dom {
     Elem {
         tag: String,
+        id_attr: Option<String>,
+        class_attr: Option<String>,
         style_attr: Option<String>,
         kids: Vec<Dom>,
     },
@@ -32,11 +37,26 @@ enum Dom {
 enum Tok {
     Open {
         tag: String,
+        id_attr: Option<String>,
+        class_attr: Option<String>,
         style_attr: Option<String>,
         self_close: bool,
     },
     Close(String),
     Text(String),
+}
+
+#[derive(Clone)]
+struct CssRule {
+    selectors: Vec<CssSelector>,
+    declarations: String,
+}
+
+#[derive(Clone)]
+struct CssSelector {
+    tag: Option<String>,
+    id: Option<String>,
+    classes: Vec<String>,
 }
 
 /// Inherited text properties (a minimal stand-in for CSS inheritance).
@@ -65,10 +85,11 @@ impl Default for Inherited {
 
 /// Parse an HTML document fragment into a single UXI root node.
 pub fn parse(src: &str) -> UxNode {
+    let css_rules = parse_css_rules(src);
     let toks = tokenize(src);
     let mut pos = 0usize;
     let roots = parse_nodes(&toks, &mut pos, None, 0);
-    let kids = children_to_ux(&roots, Inherited::default(), None, false);
+    let kids = children_to_ux(&roots, Inherited::default(), None, false, &css_rules);
     if kids.len() == 1 {
         kids.into_iter().next().unwrap()
     } else {
@@ -218,7 +239,7 @@ fn tokenize(src: &str) -> Vec<Tok> {
             } else {
                 let self_close = inner.ends_with('/');
                 let inner = inner.trim_end_matches('/').trim();
-                let (tag, style_attr) = parse_open(inner);
+                let (tag, id_attr, class_attr, style_attr) = parse_open(inner);
                 // raw-content elements: skip everything until the matching close tag,
                 // scanning in place (no copy/lowercase of the whole remainder)
                 if tag == "script" || tag == "style" {
@@ -235,6 +256,8 @@ fn tokenize(src: &str) -> Vec<Tok> {
                 let self_close = self_close || is_void(&tag);
                 out.push(Tok::Open {
                     tag,
+                    id_attr,
+                    class_attr,
                     style_attr,
                     self_close,
                 });
@@ -266,11 +289,16 @@ fn find_ascii_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 
 /// Pull the tag name and the `style="..."` value out of an opening-tag body,
 /// scanning attributes properly (quoted values may contain spaces and `=`).
-fn parse_open(inner: &str) -> (String, Option<String>) {
+fn parse_open(inner: &str) -> (String, Option<String>, Option<String>, Option<String>) {
     let mut it = inner.splitn(2, char::is_whitespace);
     let tag = it.next().unwrap_or("").to_ascii_lowercase();
     let attrs = it.next().unwrap_or("");
-    (tag, find_attr(attrs, "style"))
+    (
+        tag,
+        find_attr(attrs, "id"),
+        find_attr(attrs, "class"),
+        find_attr(attrs, "style"),
+    )
 }
 
 fn find_attr(attrs: &str, want: &str) -> Option<String> {
@@ -344,10 +372,14 @@ fn parse_nodes(toks: &[Tok], pos: &mut usize, stop: Option<&str>, depth: usize) 
             }
             Tok::Open {
                 tag,
+                id_attr,
+                class_attr,
                 style_attr,
                 self_close,
             } => {
                 let tag = tag.clone();
+                let id_attr = id_attr.clone();
+                let class_attr = class_attr.clone();
                 let style_attr = style_attr.clone();
                 let self_close = *self_close || depth >= MAX_DOM_DEPTH;
                 *pos += 1;
@@ -358,6 +390,8 @@ fn parse_nodes(toks: &[Tok], pos: &mut usize, stop: Option<&str>, depth: usize) 
                 };
                 nodes.push(Dom::Elem {
                     tag,
+                    id_attr,
+                    class_attr,
                     style_attr,
                     kids,
                 });
@@ -413,6 +447,7 @@ fn children_to_ux(
     inh: Inherited,
     li_prefix: Option<&str>,
     flex_row: bool,
+    css_rules: &[CssRule],
 ) -> Vec<UxNode> {
     let mut out: Vec<UxNode> = Vec::new();
     let mut run: Vec<Span> = Vec::new();
@@ -452,22 +487,48 @@ fn children_to_ux(
             }
             Dom::Elem {
                 tag,
+                id_attr,
+                class_attr,
                 style_attr,
                 kids: inner,
             } if is_inline(tag) => {
-                inline_spans(tag, style_attr.as_deref(), inner, inh, &mut run);
+                inline_spans(
+                    InlineCtx {
+                        tag,
+                        id_attr: id_attr.as_deref(),
+                        class_attr: class_attr.as_deref(),
+                        style_attr: style_attr.as_deref(),
+                        css_rules,
+                    },
+                    inner,
+                    inh,
+                    &mut run,
+                );
                 if flex_row {
                     flush(&mut run, &mut out, &mut first_flush);
                 }
             }
             Dom::Elem {
                 tag,
+                id_attr,
+                class_attr,
                 style_attr,
                 kids: inner,
             } => {
                 flush(&mut run, &mut out, &mut first_flush);
                 let prefix = (tag == "li").then(|| "• ".to_string());
-                if let Some(node) = elem_to_ux(tag, style_attr.as_deref(), inner, inh, prefix) {
+                if let Some(node) = elem_to_ux(
+                    ElemCtx {
+                        tag,
+                        id_attr: id_attr.as_deref(),
+                        class_attr: class_attr.as_deref(),
+                        style_attr: style_attr.as_deref(),
+                        css_rules,
+                    },
+                    inner,
+                    inh,
+                    prefix,
+                ) {
                     out.push(node);
                 }
             }
@@ -487,14 +548,17 @@ fn make_span(text: &str, inh: Inherited) -> Span {
     }
 }
 
+struct InlineCtx<'a> {
+    tag: &'a str,
+    id_attr: Option<&'a str>,
+    class_attr: Option<&'a str>,
+    style_attr: Option<&'a str>,
+    css_rules: &'a [CssRule],
+}
+
 /// Flatten an inline element (possibly nested) into styled spans appended to `run`.
-fn inline_spans(
-    tag: &str,
-    style_attr: Option<&str>,
-    kids: &[Dom],
-    inh: Inherited,
-    run: &mut Vec<Span>,
-) {
+fn inline_spans(ctx: InlineCtx<'_>, kids: &[Dom], inh: Inherited, run: &mut Vec<Span>) {
+    let tag = ctx.tag;
     let mut inh = inh;
     inh.font_size = tag_font(tag, inh.font_size);
     match tag {
@@ -509,8 +573,15 @@ fn inline_spans(
         }
         _ => {}
     }
-    if let Some(css) = style_attr {
-        let mut scratch = Style::col();
+    let mut scratch = Style::col();
+    for rule in ctx
+        .css_rules
+        .iter()
+        .filter(|rule| rule.matches(tag, ctx.id_attr, ctx.class_attr))
+    {
+        let _ = apply_css(&mut scratch, &mut inh, &rule.declarations);
+    }
+    if let Some(css) = ctx.style_attr {
         apply_css(&mut scratch, &mut inh, css);
     }
     for k in kids {
@@ -518,23 +589,42 @@ fn inline_spans(
             Dom::Text(t) => run.push(make_span(t, inh)),
             Dom::Elem {
                 tag,
+                id_attr,
+                class_attr,
                 style_attr,
                 kids,
-            } if is_inline(tag) && tag != "br" => {
-                inline_spans(tag, style_attr.as_deref(), kids, inh, run)
-            }
+            } if is_inline(tag) && tag != "br" => inline_spans(
+                InlineCtx {
+                    tag,
+                    id_attr: id_attr.as_deref(),
+                    class_attr: class_attr.as_deref(),
+                    style_attr: style_attr.as_deref(),
+                    css_rules: ctx.css_rules,
+                },
+                kids,
+                inh,
+                run,
+            ),
             _ => {} // block inside inline: out of subset, dropped
         }
     }
 }
 
+struct ElemCtx<'a> {
+    tag: &'a str,
+    id_attr: Option<&'a str>,
+    class_attr: Option<&'a str>,
+    style_attr: Option<&'a str>,
+    css_rules: &'a [CssRule],
+}
+
 fn elem_to_ux(
-    tag: &str,
-    style_attr: Option<&str>,
+    ctx: ElemCtx<'_>,
     kids: &[Dom],
     inh: Inherited,
     li_prefix: Option<String>,
 ) -> Option<UxNode> {
+    let tag = ctx.tag;
     if is_dropped(tag) {
         return None;
     }
@@ -552,17 +642,203 @@ fn elem_to_ux(
     if matches!(tag, "h1" | "h2" | "h3" | "h4") {
         inh2.bold = true;
     }
-    if let Some(css) = style_attr {
+    for rule in ctx
+        .css_rules
+        .iter()
+        .filter(|rule| rule.matches(tag, ctx.id_attr, ctx.class_attr))
+    {
+        if !apply_css(&mut style, &mut inh2, &rule.declarations) {
+            return None;
+        }
+    }
+    if let Some(css) = ctx.style_attr {
         if !apply_css(&mut style, &mut inh2, css) {
             return None; // display:none
         }
     }
     let flex_row = matches!(style.dir, Dir::Row);
-    let children = children_to_ux(kids, inh2, li_prefix.as_deref(), flex_row);
+    let children = children_to_ux(kids, inh2, li_prefix.as_deref(), flex_row, ctx.css_rules);
     Some(UxNode::Box { style, children })
 }
 
 // ─── CSS ─────────────────────────────────────────────────────────────────────
+
+impl CssRule {
+    fn matches(&self, tag: &str, id_attr: Option<&str>, class_attr: Option<&str>) -> bool {
+        self.selectors
+            .iter()
+            .any(|selector| selector.matches(tag, id_attr, class_attr))
+    }
+}
+
+impl CssSelector {
+    fn matches(&self, tag: &str, id_attr: Option<&str>, class_attr: Option<&str>) -> bool {
+        if let Some(want_tag) = &self.tag {
+            if want_tag != tag {
+                return false;
+            }
+        }
+        if let Some(want_id) = &self.id {
+            if id_attr != Some(want_id.as_str()) {
+                return false;
+            }
+        }
+        if self.classes.is_empty() {
+            return true;
+        }
+        let classes = class_attr.unwrap_or_default();
+        self.classes
+            .iter()
+            .all(|want| classes.split_whitespace().any(|class| class == want))
+    }
+}
+
+fn parse_css_rules(src: &str) -> Vec<CssRule> {
+    style_blocks(src)
+        .into_iter()
+        .flat_map(|block| parse_css_block(&block))
+        .collect()
+}
+
+fn style_blocks(src: &str) -> Vec<String> {
+    let bytes = src.as_bytes();
+    let mut out = Vec::new();
+    let mut search = 0usize;
+    while search < bytes.len() {
+        let Some(open) = find_ascii_ci(bytes, search, b"<style") else {
+            break;
+        };
+        let Some(open_end) = src[open..].find('>').map(|offset| open + offset + 1) else {
+            break;
+        };
+        let Some(close) = find_ascii_ci(bytes, open_end, b"</style") else {
+            break;
+        };
+        out.push(src[open_end..close].to_string());
+        search = src[close..]
+            .find('>')
+            .map(|offset| close + offset + 1)
+            .unwrap_or(bytes.len());
+    }
+    out
+}
+
+fn parse_css_block(block: &str) -> Vec<CssRule> {
+    let css = strip_css_comments(block);
+    let mut out = Vec::new();
+    let mut search = 0usize;
+    while search < css.len() {
+        let Some(open) = css[search..].find('{').map(|offset| search + offset) else {
+            break;
+        };
+        let Some(close) = css[open + 1..].find('}').map(|offset| open + 1 + offset) else {
+            break;
+        };
+        let selectors: Vec<CssSelector> = css[search..open]
+            .split(',')
+            .filter_map(parse_selector)
+            .collect();
+        let declarations = css[open + 1..close].trim();
+        if !selectors.is_empty() && !declarations.is_empty() {
+            out.push(CssRule {
+                selectors,
+                declarations: declarations.to_string(),
+            });
+        }
+        search = close + 1;
+    }
+    out
+}
+
+fn strip_css_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut search = 0usize;
+    while search < input.len() {
+        let Some(start) = input[search..].find("/*").map(|offset| search + offset) else {
+            out.push_str(&input[search..]);
+            break;
+        };
+        out.push_str(&input[search..start]);
+        let Some(end) = input[start + 2..]
+            .find("*/")
+            .map(|offset| start + 2 + offset + 2)
+        else {
+            break;
+        };
+        search = end;
+    }
+    out
+}
+
+fn parse_selector(raw: &str) -> Option<CssSelector> {
+    let selector = raw.trim();
+    if selector.is_empty()
+        || selector.starts_with('@')
+        || selector
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, ':' | '[' | ']' | '>' | '+' | '~' | '*'))
+    {
+        return None;
+    }
+
+    let chars: Vec<char> = selector.chars().collect();
+    let mut i = 0usize;
+    let mut tag = None;
+    let mut id = None;
+    let mut classes = Vec::new();
+    while i < chars.len() {
+        match chars[i] {
+            '#' => {
+                i += 1;
+                let start = i;
+                while i < chars.len() && is_selector_ident(chars[i]) {
+                    i += 1;
+                }
+                if start == i || id.is_some() {
+                    return None;
+                }
+                id = Some(chars[start..i].iter().collect());
+            }
+            '.' => {
+                i += 1;
+                let start = i;
+                while i < chars.len() && is_selector_ident(chars[i]) {
+                    i += 1;
+                }
+                if start == i {
+                    return None;
+                }
+                classes.push(chars[start..i].iter().collect());
+            }
+            ch if is_selector_ident(ch) => {
+                let start = i;
+                while i < chars.len() && is_selector_ident(chars[i]) {
+                    i += 1;
+                }
+                if tag.is_some() {
+                    return None;
+                }
+                tag = Some(
+                    chars[start..i]
+                        .iter()
+                        .collect::<String>()
+                        .to_ascii_lowercase(),
+                );
+            }
+            _ => return None,
+        }
+    }
+
+    if tag.is_none() && id.is_none() && classes.is_empty() {
+        None
+    } else {
+        Some(CssSelector { tag, id, classes })
+    }
+}
+
+fn is_selector_ident(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')
+}
 
 /// Apply inline declarations to `style`/`inh`. Returns `false` for `display:none`.
 fn apply_css(style: &mut Style, inh: &mut Inherited, css: &str) -> bool {
@@ -1023,6 +1299,48 @@ mod tests {
         text_of(&root, &mut t);
         assert!(t.contains("a & b <ok>"), "got {t:?}");
         assert!(!t.contains("var x"), "script content must be dropped");
+    }
+
+    #[test]
+    fn style_blocks_apply_class_id_and_inline_rules() {
+        let doc = r##"
+            <style>
+                /* design upload CSS */
+                .card { background: #123456; padding: 12px; gap: 5px; }
+                #title { color: #ff0000; font-size: 20px; font-weight: 700; }
+                span.badge { color: #00aa55; }
+            </style>
+            <div class="card">
+                <span id="title">Hello</span>
+                <span class="badge" style="color:#0066ff">Badge</span>
+            </div>
+        "##;
+        let root = parse(doc);
+        let UxNode::Box { style, .. } = &root else {
+            panic!("root is a box")
+        };
+        let bg = style.background.expect("class background applied");
+        assert!(bg.b > 0.30 && bg.g > 0.18 && bg.r < 0.10);
+        assert!((style.padding.l - 12.0).abs() < 0.01);
+        assert!((style.gap - 5.0).abs() < 0.01);
+
+        fn find_span<'a>(node: &'a UxNode, needle: &str) -> Option<&'a Span> {
+            match node {
+                UxNode::Rich { spans, .. } => spans.iter().find(|span| span.text.contains(needle)),
+                UxNode::Box { children, .. } => {
+                    children.iter().find_map(|child| find_span(child, needle))
+                }
+                UxNode::Text { .. } => None,
+            }
+        }
+
+        let title = find_span(&root, "Hello").expect("id styled title span");
+        assert!(title.bold);
+        assert!((title.size - 20.0).abs() < 0.01);
+        assert!(title.color.r > 0.99 && title.color.g < 0.01 && title.color.b < 0.01);
+
+        let badge = find_span(&root, "Badge").expect("class styled badge span");
+        assert!(badge.color.b > 0.95 && badge.color.r < 0.01);
     }
 
     #[test]

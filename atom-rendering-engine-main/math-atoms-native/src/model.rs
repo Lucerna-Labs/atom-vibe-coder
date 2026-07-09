@@ -4,6 +4,7 @@ use math_atoms_core::{
 };
 use pmre_orchestrator::UiState;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -32,6 +33,10 @@ pub const SETTINGS_TAB: u32 = 22;
 pub const PROVIDER_CONNECTIONS_TAB: u32 = 23;
 pub const RUNTIME_SETTINGS_TAB: u32 = 24;
 pub const ARTIFACT_SCROLL: u32 = 25;
+pub const DESIGN_UPLOAD_TAB: u32 = 26;
+pub const DESIGN_HTML_PATH_INPUT: u32 = 27;
+pub const DESIGN_CSS_PATH_INPUT: u32 = 28;
+pub const BUILD_DESIGN_UPLOAD: u32 = 29;
 
 pub fn default_intent() -> &'static str {
     "Build the native atom-rendered Math Atoms Coder on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and Ornith 1.0 parity."
@@ -44,6 +49,8 @@ pub struct NativeApp {
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
+    pub design_build_running: bool,
+    pub last_design_output: String,
     pub active_main_tab: MainTab,
     pub active_settings_tab: SettingsTab,
     pub side_artifacts: Vec<SideArtifact>,
@@ -68,6 +75,7 @@ pub enum MainTab {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsTab {
     ProviderConnections,
+    DesignUpload,
     Runtime,
 }
 
@@ -109,6 +117,8 @@ impl NativeApp {
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output,
             provider_running: false,
+            design_build_running: false,
+            last_design_output: "Design upload has not been built.".to_string(),
             active_main_tab: MainTab::Workspace,
             active_settings_tab: SettingsTab::ProviderConnections,
             side_artifacts: load_side_artifacts(),
@@ -120,6 +130,7 @@ impl NativeApp {
             .entry(INTENT_INPUT)
             .or_insert_with(|| default_intent().to_string());
         seed_provider_inputs(self.runtime.provider(), ui);
+        seed_design_inputs(ui);
         ui.focused = Some(INTENT_INPUT);
     }
 
@@ -175,6 +186,11 @@ impl NativeApp {
     pub fn show_runtime_settings(&mut self) {
         self.active_main_tab = MainTab::Settings;
         self.active_settings_tab = SettingsTab::Runtime;
+    }
+
+    pub fn show_design_upload(&mut self) {
+        self.active_main_tab = MainTab::Settings;
+        self.active_settings_tab = SettingsTab::DesignUpload;
     }
 
     pub fn apply_provider_config(&mut self, ui: &UiState) {
@@ -277,6 +293,49 @@ impl NativeApp {
         let _ = self.append_proof_record();
     }
 
+    pub fn begin_design_upload_build(
+        &mut self,
+        ui: &UiState,
+    ) -> Option<Receiver<Result<String, String>>> {
+        if self.design_build_running {
+            self.last_design_output = "Design upload build already running.".to_string();
+            return None;
+        }
+        let Some(script) = design_upload_script_path() else {
+            self.last_design_output =
+                "Design upload blocked: scripts/Test-DesignUploadBuild.ps1 was not found."
+                    .to_string();
+            return None;
+        };
+        let html_path = ui.input_text(DESIGN_HTML_PATH_INPUT).trim().to_string();
+        let css_path = ui.input_text(DESIGN_CSS_PATH_INPUT).trim().to_string();
+        let (tx, rx) = mpsc::channel();
+        self.design_build_running = true;
+        self.last_design_output =
+            "Design upload running through the native PMRE renderer route.".to_string();
+        thread::spawn(move || {
+            let _ = tx.send(run_design_upload_script(script, html_path, css_path));
+        });
+        Some(rx)
+    }
+
+    pub fn complete_design_upload_build(&mut self, result: Result<String, String>) {
+        self.design_build_running = false;
+        match result {
+            Ok(text) => {
+                self.side_artifacts = load_side_artifacts();
+                self.last_design_output = text;
+                self.last_run_summary = format!(
+                    "Design upload built from HTML/CSS. {}",
+                    self.artifact_title_state()
+                );
+            }
+            Err(reason) => {
+                self.last_design_output = format!("Design upload blocked: {reason}");
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn execute_provider(&mut self) {
         let Some(rx) = self.begin_provider_execution() else {
@@ -306,12 +365,31 @@ impl NativeApp {
         }
     }
 
+    pub fn design_title_state(&self) -> &'static str {
+        if self.design_build_running {
+            "design:running"
+        } else if self
+            .last_design_output
+            .starts_with("Design upload blocked:")
+        {
+            "design:blocked"
+        } else if self
+            .last_design_output
+            .starts_with("design upload build ok:")
+        {
+            "design:built"
+        } else {
+            "design:idle"
+        }
+    }
+
     pub fn nav_title_state(&self) -> &'static str {
         match (self.active_main_tab, self.active_settings_tab) {
             (MainTab::Workspace, _) => "workspace",
             (MainTab::Settings, SettingsTab::ProviderConnections) => {
                 "settings-provider-connections"
             }
+            (MainTab::Settings, SettingsTab::DesignUpload) => "settings-design-upload",
             (MainTab::Settings, SettingsTab::Runtime) => "settings-runtime",
         }
     }
@@ -406,6 +484,11 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
         .or_insert_with(|| provider.response_key.clone());
 }
 
+fn seed_design_inputs(ui: &mut UiState) {
+    ui.inputs.entry(DESIGN_HTML_PATH_INPUT).or_default();
+    ui.inputs.entry(DESIGN_CSS_PATH_INPUT).or_default();
+}
+
 fn initial_provider_output(provider: &ProviderConfig) -> String {
     if provider.is_ready() {
         "Provider has not been executed.".to_string()
@@ -434,6 +517,64 @@ fn current_intent(ui: &UiState) -> String {
 
 fn execute_call(call: PreparedProviderCall) -> Result<String, math_atoms_core::ProviderError> {
     call.execute_with_curl()
+}
+
+fn run_design_upload_script(
+    script: PathBuf,
+    html_path: String,
+    css_path: String,
+) -> Result<String, String> {
+    let mut command = Command::new("powershell");
+    command
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(script);
+    if !html_path.trim().is_empty() {
+        command.arg("-HtmlPath").arg(html_path.trim());
+    }
+    if !css_path.trim().is_empty() {
+        command.arg("-CssPath").arg(css_path.trim());
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to launch design upload gate: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        if stderr.is_empty() {
+            Ok(stdout)
+        } else {
+            Ok(format!("{stdout}\n{stderr}"))
+        }
+    } else {
+        Err(format!(
+            "design upload gate exited {}. stdout: {} stderr: {}",
+            output.status, stdout, stderr
+        ))
+    }
+}
+
+fn design_upload_script_path() -> Option<PathBuf> {
+    let script = "Test-DesignUploadBuild.ps1";
+    let mut candidates = Vec::new();
+    if let Ok(root) = std::env::var("MATH_ATOMS_SCRIPT_ROOT") {
+        candidates.push(PathBuf::from(root).join(script));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("scripts").join(script));
+        candidates.push(cwd.join("..").join("scripts").join(script));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(release_dir) = exe.parent() {
+            if let Some(target_dir) = release_dir.parent() {
+                if let Some(engine_dir) = target_dir.parent() {
+                    candidates.push(engine_dir.join("..").join("scripts").join(script));
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 fn load_side_artifacts() -> Vec<SideArtifact> {
@@ -554,6 +695,21 @@ mod tests {
     }
 
     #[test]
+    fn design_title_state_tracks_build_state() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        assert_eq!(app.design_title_state(), "design:idle");
+        app.design_build_running = true;
+        assert_eq!(app.design_title_state(), "design:running");
+        app.design_build_running = false;
+        app.last_design_output = "Design upload blocked: missing html".to_string();
+        assert_eq!(app.design_title_state(), "design:blocked");
+        app.last_design_output =
+            "design upload build ok: MATH_ATOMS_DESIGN_APP_OK uploaded-design-app html=1 css=1 bmp=design-upload-app.bmp"
+                .to_string();
+        assert_eq!(app.design_title_state(), "design:built");
+    }
+
+    #[test]
     fn missing_provider_starts_blocked_not_idle() {
         let app = NativeApp::new(ProviderConfig::from_pairs(&[]));
         assert_eq!(app.provider_title_state(), "provider:blocked");
@@ -629,6 +785,7 @@ mod tests {
         {
             let build = |state: &UiState| crate::ui::build(&app, state);
             assert!(widget_rect(&build, &ui, PROVIDER_CONNECTIONS_TAB).is_some());
+            assert!(widget_rect(&build, &ui, DESIGN_UPLOAD_TAB).is_some());
             assert!(widget_rect(&build, &ui, RUNTIME_SETTINGS_TAB).is_some());
             assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_none());
         }
@@ -640,6 +797,22 @@ mod tests {
             assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_some());
             assert!(widget_rect(&build, &ui, PROVIDER_BODY_TEMPLATE_INPUT).is_some());
             assert!(widget_rect(&build, &ui, APPLY_PROVIDER).is_some());
+        }
+    }
+
+    #[test]
+    fn settings_design_upload_tab_owns_design_controls() {
+        let mut app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let ui = UiState::new(1200, 800);
+
+        app.show_design_upload();
+        assert_eq!(app.nav_title_state(), "settings-design-upload");
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            assert!(widget_rect(&build, &ui, DESIGN_HTML_PATH_INPUT).is_some());
+            assert!(widget_rect(&build, &ui, DESIGN_CSS_PATH_INPUT).is_some());
+            assert!(widget_rect(&build, &ui, BUILD_DESIGN_UPLOAD).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_none());
         }
     }
 

@@ -1,6 +1,7 @@
 use crate::model::{
-    NativeApp, APPLY_PROVIDER, CAPTURE_PROOF, EXEC_PROVIDER, MARK_DRIFT, PROVIDER_CONNECTIONS_TAB,
-    RUNTIME_SETTINGS_TAB, RUN_LOOP, SETTINGS_TAB, WORKSPACE_TAB,
+    NativeApp, APPLY_PROVIDER, BUILD_DESIGN_UPLOAD, CAPTURE_PROOF, DESIGN_UPLOAD_TAB,
+    EXEC_PROVIDER, MARK_DRIFT, PROVIDER_CONNECTIONS_TAB, RUNTIME_SETTINGS_TAB, RUN_LOOP,
+    SETTINGS_TAB, WORKSPACE_TAB,
 };
 use crate::ui;
 use core::ffi::c_void;
@@ -187,6 +188,7 @@ const DIB_RGB_COLORS: u32 = 0;
 const SRCCOPY: u32 = 0x00CC_0020;
 const IDC_ARROW: usize = 32512;
 const PROVIDER_TIMER_ID: usize = 77;
+const DESIGN_TIMER_ID: usize = 78;
 
 struct App {
     width: u32,
@@ -197,6 +199,7 @@ struct App {
     quality: Quality,
     tracking_leave: bool,
     provider_rx: Option<Receiver<Result<String, math_atoms_core::ProviderError>>>,
+    design_rx: Option<Receiver<Result<String, String>>>,
 }
 
 thread_local! {
@@ -236,6 +239,7 @@ pub fn run() {
                 quality: Quality::Fast,
                 tracking_leave: false,
                 provider_rx: None,
+                design_rx: None,
             });
         });
 
@@ -414,6 +418,12 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     KillTimer(hwnd, PROVIDER_TIMER_ID);
                 }
                 InvalidateRect(hwnd, std::ptr::null(), 0);
+            } else if wp == DESIGN_TIMER_ID {
+                let complete = poll_design_upload();
+                if complete {
+                    KillTimer(hwnd, DESIGN_TIMER_ID);
+                }
+                InvalidateRect(hwnd, std::ptr::null(), 0);
             }
             0
         }
@@ -494,9 +504,18 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
         CAPTURE_PROOF => app.model.capture_current_proof(),
         MARK_DRIFT => app.model.mark_drift(),
         APPLY_PROVIDER => app.model.apply_provider_config(&app.ui),
+        BUILD_DESIGN_UPLOAD => {
+            if let Some(rx) = app.model.begin_design_upload_build(&app.ui) {
+                app.design_rx = Some(rx);
+                unsafe {
+                    SetTimer(hwnd, DESIGN_TIMER_ID, 100, std::ptr::null());
+                }
+            }
+        }
         WORKSPACE_TAB => app.model.show_workspace(),
         SETTINGS_TAB => app.model.show_settings(),
         PROVIDER_CONNECTIONS_TAB => app.model.show_provider_connections(),
+        DESIGN_UPLOAD_TAB => app.model.show_design_upload(),
         RUNTIME_SETTINGS_TAB => app.model.show_runtime_settings(),
         _ => {}
     }
@@ -524,6 +543,33 @@ fn poll_provider() -> bool {
                     .complete_provider_execution(Err(math_atoms_core::ProviderError::Io(
                         "provider worker disconnected".to_string(),
                     )));
+                true
+            }
+        }
+    })
+}
+
+fn poll_design_upload() -> bool {
+    APP.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(app) = borrow.as_mut() else {
+            return false;
+        };
+        let Some(rx) = app.design_rx.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                app.design_rx = None;
+                app.model.complete_design_upload_build(result);
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                app.design_rx = None;
+                app.model.complete_design_upload_build(Err(
+                    "design upload worker disconnected".to_string()
+                ));
                 true
             }
         }
@@ -575,10 +621,11 @@ fn paint(hwnd: Hwnd) {
                     SRCCOPY,
                 );
                 let title = format!(
-                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {} {} {}]",
+                    "Math Atoms Coder - Native PMRE [{:.1}ms {} {} {} {} {} {}]",
                     ms,
                     app.model.status().as_str(),
                     app.model.provider_title_state(),
+                    app.model.design_title_state(),
                     app.model.nav_title_state(),
                     app.model.artifact_title_state(),
                     app.model.runtime.state().selected_recipe

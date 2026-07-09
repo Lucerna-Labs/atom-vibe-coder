@@ -1,6 +1,7 @@
 use crate::model::{
-    MainTab, NativeApp, SettingsTab, APPLY_PROVIDER, APP_SCROLL, ARTIFACT_SCROLL, BUS_SCROLL,
-    CAPTURE_PROOF, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT,
+    MainTab, NativeApp, SettingsTab, APPLY_PROVIDER, APP_SCROLL, ARTIFACT_SCROLL,
+    BUILD_DESIGN_UPLOAD, BUS_SCROLL, CAPTURE_PROOF, DESIGN_CSS_PATH_INPUT, DESIGN_HTML_PATH_INPUT,
+    DESIGN_UPLOAD_TAB, EVIDENCE_SCROLL, EXEC_PROVIDER, INTENT_INPUT, LEFT_SCROLL, MARK_DRIFT,
     PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT, PROVIDER_BODY_TEMPLATE_INPUT,
     PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
     PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT, RUNTIME_SETTINGS_TAB,
@@ -199,6 +200,12 @@ fn settings_nav(app: &NativeApp, ui: &UiState) -> UxNode {
             ),
             tab_button(
                 ui,
+                DESIGN_UPLOAD_TAB,
+                "Design Upload",
+                app.active_settings_tab == SettingsTab::DesignUpload,
+            ),
+            tab_button(
+                ui,
                 RUNTIME_SETTINGS_TAB,
                 "Runtime",
                 app.active_settings_tab == SettingsTab::Runtime,
@@ -234,6 +241,7 @@ fn settings_panel(app: &NativeApp, ui: &UiState) -> UxNode {
             .scroll(SETTINGS_SCROLL),
         match app.active_settings_tab {
             SettingsTab::ProviderConnections => provider_connections_panel(app, ui),
+            SettingsTab::DesignUpload => design_upload_panel(app, ui),
             SettingsTab::Runtime => runtime_settings_panel(app),
         },
     )
@@ -295,6 +303,57 @@ fn provider_connections_panel(app: &NativeApp, ui: &UiState) -> Vec<UxNode> {
         provider_input(ui, PROVIDER_AUTH_SCHEME_INPUT, "auth scheme"),
         provider_input(ui, PROVIDER_RESPONSE_KEY_INPUT, "response key"),
         provider_input(ui, PROVIDER_BODY_TEMPLATE_INPUT, "body template"),
+    ]
+}
+
+fn design_upload_panel(app: &NativeApp, ui: &UiState) -> Vec<UxNode> {
+    vec![
+        label("Design Upload"),
+        mini_card(
+            if app.design_build_running {
+                "building"
+            } else if app.last_design_output.starts_with("Design upload blocked:") {
+                "blocked"
+            } else if app
+                .last_design_output
+                .starts_with("design upload build ok:")
+            {
+                "compiled"
+            } else {
+                "ready"
+            },
+            &app.last_design_output,
+            if app.design_build_running {
+                amber()
+            } else if app.last_design_output.starts_with("Design upload blocked:") {
+                red()
+            } else {
+                teal()
+            },
+        ),
+        UxNode::boxed(
+            Style::row().gap(8.0).h(Dim::Px(42.0)),
+            vec![button(
+                ui,
+                BUILD_DESIGN_UPLOAD,
+                "Build Design",
+                teal(),
+                Rgba::rgb8(255, 255, 255),
+            )],
+        ),
+        UxNode::boxed(
+            Style::row().gap(8.0),
+            vec![
+                mini_card("upload", "html/css files -> design-upload gate", blue()),
+                mini_card(
+                    "render",
+                    "render_html -> PMRE artifact -> side window",
+                    teal(),
+                ),
+            ],
+        ),
+        provider_input(ui, DESIGN_HTML_PATH_INPUT, "html path"),
+        provider_input(ui, DESIGN_CSS_PATH_INPUT, "css path"),
     ]
 }
 

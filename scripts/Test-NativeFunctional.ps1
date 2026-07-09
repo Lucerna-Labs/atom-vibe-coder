@@ -33,6 +33,8 @@ $CommandWorkspaceTab = 21
 $CommandSettingsTab = 22
 $CommandProviderConnectionsTab = 23
 $CommandRuntimeSettingsTab = 24
+$CommandDesignUploadTab = 26
+$CommandBuildDesignUpload = 29
 
 Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
@@ -126,6 +128,18 @@ function Get-ExpectedArtifactCount() {
     return [Math]::Max(0, @([System.IO.File]::ReadLines($ArtifactManifest)).Count - 1)
 }
 
+function Test-DesignArtifactRow() {
+    if (-not (Test-Path -LiteralPath $ArtifactManifest)) {
+        return $false
+    }
+    foreach ($line in [System.IO.File]::ReadLines($ArtifactManifest)) {
+        if ($line -match '^uploaded-design-app\tcompiled\tMATH_ATOMS_DESIGN_APP_OK uploaded-design-app html=1 css=1 bmp=design-upload-app\.bmp\t') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Refresh-NativeProcess([string]$Stage) {
     try {
         $refreshed = Get-Process -Id $script:NativePid -ErrorAction Stop
@@ -140,6 +154,18 @@ function Refresh-NativeProcess([string]$Stage) {
         $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
         throw "Native app exited during $Stage for pid $script:NativePid with exit code $($script:proc.ExitCode). stdout: $stdout stderr: $stderr"
     }
+}
+
+function Wait-ForTitlePattern([string]$Pattern, [string]$Stage, [int]$Seconds = 90) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        Start-Sleep -Seconds 1
+        $script:proc = Refresh-NativeProcess $Stage
+        if ($script:proc.MainWindowTitle -match $Pattern) {
+            return $script:proc
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "$Stage did not reach expected title pattern '$Pattern'. Title: $($script:proc.MainWindowTitle)"
 }
 
 try {
@@ -171,6 +197,19 @@ try {
     $proc = Refresh-NativeProcess "Provider connections tab command"
     if ($proc.MainWindowTitle -notmatch "settings-provider-connections") {
         throw "Provider connections tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandDesignUploadTab
+    Start-Sleep -Seconds 1
+    $proc = Refresh-NativeProcess "Design Upload settings tab command"
+    if ($proc.MainWindowTitle -notmatch "settings-design-upload") {
+        throw "Design Upload tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    }
+
+    Invoke-NativeCommand $proc.MainWindowHandle $CommandBuildDesignUpload
+    $proc = Wait-ForTitlePattern "design:built" "Build Design Upload" 120
+    if (-not (Test-DesignArtifactRow)) {
+        throw "Build Design Upload did not write the uploaded-design-app artifact manifest row"
     }
 
     Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
