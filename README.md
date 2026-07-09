@@ -11,6 +11,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `scripts/Test-NativeFunctional.ps1` launches the real native window and exercises Run, Provider, and Drift.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
+- `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 
 ## Operator Mission
@@ -30,9 +31,8 @@ Extended atoms must not be adopted as stable without a bench result. A bench res
 Run the native app:
 
 ```powershell
-cd "C:\Projects\Atoms Coder by Lucerna Labs\atom-rendering-engine-main"
-$env:RUSTFLAGS="-D warnings"
-cargo run -p math-atoms-native --release
+cd "C:\Projects\Atoms Coder by Lucerna Labs"
+.\scripts\Launch-Native.ps1 -Build -Restart
 ```
 
 Provider selection:
