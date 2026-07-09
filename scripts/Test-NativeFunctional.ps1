@@ -42,30 +42,26 @@ public static class MathAtomsNativeFunctional {
 '@
 Add-Type $code -ErrorAction SilentlyContinue
 
-function Send-Enter([IntPtr]$Handle) {
-    [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0102, [UIntPtr]::new(13), [IntPtr]::Zero) | Out-Null
-}
-
 function Make-LParam([int]$X, [int]$Y) {
     return [IntPtr](($Y -shl 16) -bor ($X -band 0xffff))
 }
 
-function Click-Provider([IntPtr]$Handle) {
-    $lp = Make-LParam 186 290
+function Click-NativeControl([IntPtr]$Handle, [int]$X, [int]$Y) {
+    $lp = Make-LParam $X $Y
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0201, [UIntPtr]::new(1), $lp) | Out-Null
     Start-Sleep -Milliseconds 100
     [MathAtomsNativeFunctional]::PostMessage($Handle, 0x0202, [UIntPtr]::Zero, $lp) | Out-Null
 }
 
 try {
-    Send-Enter $proc.MainWindowHandle
+    Click-NativeControl $proc.MainWindowHandle 78 290
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "proven") {
-        throw "Native proof loop did not reach proven state. Title: $($proc.MainWindowTitle)"
+        throw "Run button did not reach proven state. Title: $($proc.MainWindowTitle)"
     }
 
-    Click-Provider $proc.MainWindowHandle
+    Click-NativeControl $proc.MainWindowHandle 186 290
     Start-Sleep -Seconds 15
     $proc = Get-Process -Id $proc.Id
     if ($proc.MainWindowTitle -notmatch "provider:(ran|blocked)") {
@@ -73,6 +69,16 @@ try {
     }
     if (-not $proc.Responding) {
         throw "Native app stopped responding after provider action"
+    }
+
+    Click-NativeControl $proc.MainWindowHandle 294 290
+    Start-Sleep -Seconds 2
+    $proc = Get-Process -Id $proc.Id
+    if ($proc.MainWindowTitle -notmatch "drift flagged") {
+        throw "Drift button did not mark drift. Title: $($proc.MainWindowTitle)"
+    }
+    if (-not $proc.Responding) {
+        throw "Native app stopped responding after drift action"
     }
 
     Write-Host "native functional ok: $($proc.MainWindowTitle)"

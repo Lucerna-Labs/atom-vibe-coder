@@ -7,7 +7,7 @@ Math Atoms Coder is a local, recipe-first coding workbench for the Rekonquest at
 - `atom-rendering-engine-main/math-atoms-core` owns the Spiderweb Bus, wiki graph RAG, provider adapters, recipes, and proof state.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `app/` is a legacy static doctrine mirror for quick inspection only.
-- `scripts/smoke.mjs` validates legacy doctrine data; it is not a functional readiness test.
+- `scripts/doctrine-check.mjs` validates legacy doctrine data; it is not a functional readiness test.
 - `scripts/verify-production.ps1` runs the current static and Rust baseline gate, builds the native shell, and regenerates `math_atoms_coder.bmp`.
 
 ## Operator Mission
@@ -52,6 +52,6 @@ cargo run -p pmre-examples --example math_atoms_coder --release
 ```powershell
 node --check app\app-data.js
 node --check app\app.js
-node scripts\smoke.mjs
+node scripts\doctrine-check.mjs
 .\scripts\verify-production.ps1
 ```

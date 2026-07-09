@@ -13,10 +13,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "node --check app\app-data.js failed with exit code $LASTEXITCODE" }
     node --check app\app.js
     if ($LASTEXITCODE -ne 0) { throw "node --check app\app.js failed with exit code $LASTEXITCODE" }
-    node --check scripts\smoke.mjs
-    if ($LASTEXITCODE -ne 0) { throw "node --check scripts\smoke.mjs failed with exit code $LASTEXITCODE" }
-    node scripts\smoke.mjs
-    if ($LASTEXITCODE -ne 0) { throw "node scripts\smoke.mjs failed with exit code $LASTEXITCODE" }
+    node --check scripts\doctrine-check.mjs
+    if ($LASTEXITCODE -ne 0) { throw "node --check scripts\doctrine-check.mjs failed with exit code $LASTEXITCODE" }
+    node scripts\doctrine-check.mjs
+    if ($LASTEXITCODE -ne 0) { throw "node scripts\doctrine-check.mjs failed with exit code $LASTEXITCODE" }
 
     Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force
 
