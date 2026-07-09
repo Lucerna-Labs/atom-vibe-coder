@@ -1,6 +1,6 @@
 use crate::domain::{atoms, gates, mission, recipes};
 use crate::store::ProofRecord;
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -125,6 +125,16 @@ impl WikiGraph {
                 weight: 7,
             },
             StaticEdge {
+                from: "mission:ornith-parity",
+                to: "rag:wiki-graph",
+                weight: 7,
+            },
+            StaticEdge {
+                from: "mission:ornith-parity",
+                to: "provider:openai-responses",
+                weight: 7,
+            },
+            StaticEdge {
                 from: "bus:spiderweb",
                 to: "spiderweb-proof-loop",
                 weight: 9,
@@ -229,6 +239,35 @@ impl WikiGraph {
         evidence.truncate(limit);
         pin_mission_evidence(&mut evidence, self, limit);
         evidence
+    }
+
+    pub fn has_relationship_path(&self, from: &str, to: &str, max_depth: usize) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::from([(from.to_string(), 0usize)]);
+        while let Some((node, depth)) = queue.pop_front() {
+            if !seen.insert(node.clone()) || depth >= max_depth {
+                continue;
+            }
+            for edge in self
+                .edges
+                .iter()
+                .filter(|edge| edge.from == node || edge.to == node)
+            {
+                let next = if edge.from == node {
+                    edge.to.clone()
+                } else {
+                    edge.from.clone()
+                };
+                if next == to {
+                    return true;
+                }
+                queue.push_back((next, depth + 1));
+            }
+        }
+        false
     }
 
     pub fn add_proof_record(&mut self, record: &ProofRecord) {
@@ -524,6 +563,19 @@ mod tests {
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
+    fn mission_path_reaches_every_core_recipe() {
+        let graph = WikiGraph::seeded();
+        for recipe in recipes() {
+            assert!(
+                graph.has_relationship_path(recipe.id, "mission:ornith-parity", 6),
+                "{} is not linked to the mission graph",
+                recipe.id
+            );
+        }
+        assert!(!graph.has_relationship_path("missing-recipe", "mission:ornith-parity", 6));
     }
 
     #[test]

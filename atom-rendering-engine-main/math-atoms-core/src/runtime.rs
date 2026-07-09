@@ -179,6 +179,15 @@ impl MathAtomsRuntime {
         {
             blockers.push("Ornith parity evidence was not retrieved".to_string());
         }
+        if !self
+            .graph
+            .has_relationship_path(recipe.id, "mission:ornith-parity", 6)
+        {
+            blockers.push(format!(
+                "{} is not graph-linked to the Ornith parity mission",
+                recipe.id
+            ));
+        }
 
         let l3 = self.bus.l3_orchestrate(
             l2,
