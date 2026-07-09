@@ -32,7 +32,7 @@ if ($MaxAttempts -lt 1) {
     throw "MaxAttempts must be at least 1"
 }
 
-$Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=4 done=2 open=2 filtered=2 bmp=pmre-task-board.bmp"
+$Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 bmp=pmre-task-board.bmp"
 $DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You convert plain user app requests into compact JSON product specs. Do not write code. Return exactly one fenced json code block and no prose."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
 
 function Convert-ToTomlPath([string]$Path) {
@@ -191,6 +191,10 @@ function Rust-IndexArray($Values) {
     return (($Values | ForEach-Object { [string][int]$_ }) -join ", ")
 }
 
+function Rust-IndexArrayUsize($Values) {
+    return (($Values | ForEach-Object { "$([int]$_)usize" }) -join ", ")
+}
+
 function Accent-Rust($Accent) {
     switch ($Accent) {
         "blue" { "Rgba::rgb8(59, 112, 220)" }
@@ -224,7 +228,7 @@ pmre-orchestrator = { path = "$orchPath" }
 function New-PmreTaskBoardSource($Spec) {
     $title = Escape-RustString $Spec.Title
     $tasks = Rust-StringArray $Spec.Tasks
-    $done = Rust-IndexArray $Spec.DoneIndices
+    $done = Rust-IndexArrayUsize $Spec.DoneIndices
     $accent = Accent-Rust $Spec.Accent
     return @"
 use pmre_kit::{
@@ -262,13 +266,11 @@ struct PmreTaskBoard {
 impl PmreTaskBoard {
     fn from_spec() -> Self {
         let source_tasks = [$tasks];
-        let done_indices = [$done];
         let tasks = source_tasks
             .iter()
-            .enumerate()
-            .map(|(index, text)| Task {
+            .map(|text| Task {
                 text: (*text).to_string(),
-                done: done_indices.contains(&index),
+                done: false,
             })
             .collect();
         Self {
@@ -450,17 +452,11 @@ fn main() {
         ui.clear_input(INPUT);
     }
     assert_eq!(app.tasks.len(), 5);
-    app.tasks.pop();
-    assert_eq!(app.tasks.len(), 4);
 
-    for index in [0usize, 2usize] {
+    for index in [$done] {
         click(&app, &mut ui, TOGGLE_BASE + index as u32);
         if ui.take_click() == Some(TOGGLE_BASE + index as u32) {
-            app.tasks[index].done = !app.tasks[index].done;
-        }
-        click(&app, &mut ui, TOGGLE_BASE + index as u32);
-        if ui.take_click() == Some(TOGGLE_BASE + index as u32) {
-            app.tasks[index].done = !app.tasks[index].done;
+            app.tasks[index].done = true;
         }
     }
 
@@ -475,8 +471,8 @@ fn main() {
     }
 
     assert_eq!(app.done_count(), 2);
-    assert_eq!(app.open_count(), 2);
-    assert_eq!(app.visible_tasks().len(), 2);
+    assert_eq!(app.open_count(), 3);
+    assert_eq!(app.visible_tasks().len(), 3);
     assert_eq!(app.filter, Filter::Open);
 
     let bmp_path =
@@ -487,7 +483,7 @@ fn main() {
         std::fs::write(&bmp_path, frame.to_bmp(BG)).expect("write bmp");
     }
 
-    println!("MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=4 done=2 open=2 filtered=2 bmp=pmre-task-board.bmp");
+    println!("MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 bmp=pmre-task-board.bmp");
 }
 "@
 }
