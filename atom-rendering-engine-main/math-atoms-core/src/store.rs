@@ -10,6 +10,10 @@ pub struct ProofRecord {
     pub evidence_count: usize,
     pub blockers: Vec<String>,
     pub provider_state: String,
+    pub provider_model: String,
+    pub provider_endpoint: String,
+    pub provider_output_hash: String,
+    pub provider_output_len: usize,
     pub route_len: usize,
 }
 
@@ -69,13 +73,17 @@ impl ProofStore {
 impl ProofRecord {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"route_len\":{}}}",
+            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"provider_model\":\"{}\",\"provider_endpoint\":\"{}\",\"provider_output_hash\":\"{}\",\"provider_output_len\":{},\"route_len\":{}}}",
             escape(&self.recipe_id),
             escape(&self.status),
             string_array(&self.atoms),
             self.evidence_count,
             string_array(&self.blockers),
             escape(&self.provider_state),
+            escape(&self.provider_model),
+            escape(&self.provider_endpoint),
+            escape(&self.provider_output_hash),
+            self.provider_output_len,
             self.route_len
         )
     }
@@ -88,6 +96,10 @@ impl ProofRecord {
             evidence_count: usize_field(line, "evidence_count")?,
             blockers: string_array_field(line, "blockers")?,
             provider_state: string_field(line, "provider_state")?,
+            provider_model: string_field(line, "provider_model").unwrap_or_default(),
+            provider_endpoint: string_field(line, "provider_endpoint").unwrap_or_default(),
+            provider_output_hash: string_field(line, "provider_output_hash").unwrap_or_default(),
+            provider_output_len: usize_field(line, "provider_output_len").unwrap_or(0),
             route_len: usize_field(line, "route_len")?,
         })
     }
@@ -206,6 +218,10 @@ mod tests {
             evidence_count: 3,
             blockers: Vec::new(),
             provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_hash: "fnv:0123456789abcdef".to_string(),
+            provider_output_len: 18,
             route_len: 4,
         };
         store.append(&record).unwrap();
@@ -213,6 +229,9 @@ mod tests {
         fs::remove_file(&path).ok();
         assert!(text.contains("\"recipe_id\":\"ornith-parity-runtime\""));
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
+        assert!(text.contains("\"provider_model\":\"gpt-test\""));
+        assert!(text.contains("\"provider_output_hash\":\"fnv:0123456789abcdef\""));
+        assert!(text.contains("\"provider_output_len\":18"));
         assert!(text.ends_with('\n'));
     }
 
@@ -234,11 +253,26 @@ mod tests {
             evidence_count: 7,
             blockers: vec!["none".to_string()],
             provider_state: "provider:ran".to_string(),
+            provider_model: "fake-responsive-provider".to_string(),
+            provider_endpoint: "http://127.0.0.1:1/v1/responses".to_string(),
+            provider_output_hash: "fnv:fedcba9876543210".to_string(),
+            provider_output_len: 16,
             route_len: 5,
         };
         store.append(&record).unwrap();
         let records = store.read_records().unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(records, vec![record]);
+    }
+
+    #[test]
+    fn proof_store_reads_legacy_records_without_provider_audit_fields() {
+        let line = "{\"recipe_id\":\"wiki-graph-rag\",\"status\":\"proven\",\"atoms\":[\"scan\"],\"evidence_count\":7,\"blockers\":[],\"provider_state\":\"provider:ran\",\"route_len\":5}";
+        let record = ProofRecord::from_json(line).unwrap();
+        assert_eq!(record.provider_model, "");
+        assert_eq!(record.provider_endpoint, "");
+        assert_eq!(record.provider_output_hash, "");
+        assert_eq!(record.provider_output_len, 0);
+        assert_eq!(record.route_len, 5);
     }
 }

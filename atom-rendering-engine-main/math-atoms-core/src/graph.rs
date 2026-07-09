@@ -242,17 +242,24 @@ impl WikiGraph {
             record.status.to_ascii_lowercase(),
             record.provider_state.to_ascii_lowercase(),
         ];
+        if !record.provider_output_hash.is_empty() {
+            node_tags.push("provider-output-audited".to_string());
+            node_tags.push(record.provider_model.to_ascii_lowercase());
+        }
         node_tags.extend(record.atoms.iter().map(|atom| atom.to_ascii_lowercase()));
         self.nodes.push(WikiNode {
             id: id.clone(),
             title: format!("Proof: {}", record.recipe_id),
             excerpt: format!(
-                "{} proof for {} with {} evidence nodes, {} route envelopes, and {} blockers.",
+                "{} proof for {} with {} evidence nodes, {} route envelopes, {} blockers, provider {}, output {} bytes {}.",
                 record.status,
                 record.recipe_id,
                 record.evidence_count,
                 record.route_len,
-                record.blockers.len()
+                record.blockers.len(),
+                record.provider_state,
+                record.provider_output_len,
+                record.provider_output_hash
             ),
             tags: node_tags,
         });
@@ -437,6 +444,10 @@ fn proof_node_id(record: &ProofRecord) -> String {
     record.evidence_count.hash(&mut hasher);
     record.blockers.hash(&mut hasher);
     record.provider_state.hash(&mut hasher);
+    record.provider_model.hash(&mut hasher);
+    record.provider_endpoint.hash(&mut hasher);
+    record.provider_output_hash.hash(&mut hasher);
+    record.provider_output_len.hash(&mut hasher);
     record.route_len.hash(&mut hasher);
     format!("proof:{:016x}", hasher.finish())
 }
@@ -505,6 +516,10 @@ mod tests {
             evidence_count: 9,
             blockers: Vec::new(),
             provider_state: "provider:ran".to_string(),
+            provider_model: "fake-responsive-provider".to_string(),
+            provider_endpoint: "http://127.0.0.1:1/v1/responses".to_string(),
+            provider_output_hash: "fnv:1111111111111111".to_string(),
+            provider_output_len: 18,
             route_len: 6,
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
@@ -522,6 +537,10 @@ mod tests {
                 evidence_count: idx + 1,
                 blockers: Vec::new(),
                 provider_state: "provider:blocked".to_string(),
+                provider_model: String::new(),
+                provider_endpoint: String::new(),
+                provider_output_hash: String::new(),
+                provider_output_len: 0,
                 route_len: 5,
             });
         }

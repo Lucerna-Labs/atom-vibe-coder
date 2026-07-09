@@ -114,7 +114,12 @@ impl NativeApp {
 
     pub fn complete_provider_execution(&mut self, result: Result<String, ProviderError>) {
         self.last_provider_output = match result {
-            Ok(text) => text,
+            Ok(text) => {
+                let output_hash = provider_output_hash(&text);
+                self.runtime
+                    .mark_provider_executed(&output_hash, text.len());
+                text
+            }
             Err(error) => {
                 let reason = format!("{error:?}");
                 self.runtime.mark_provider_blocked(&reason);
@@ -168,6 +173,12 @@ impl NativeApp {
 
     fn current_proof_record(&self) -> ProofRecord {
         let state = self.runtime.state();
+        let provider = state.last_provider_call.as_ref();
+        let provider_output_hash = if self.provider_title_state() == "provider:ran" {
+            state.last_provider_output_hash.clone()
+        } else {
+            String::new()
+        };
         ProofRecord {
             recipe_id: state.selected_recipe.clone(),
             status: state.status.as_str().to_string(),
@@ -175,6 +186,16 @@ impl NativeApp {
             evidence_count: state.evidence.len(),
             blockers: state.blockers.clone(),
             provider_state: self.provider_title_state().to_string(),
+            provider_model: provider.map(|call| call.model.clone()).unwrap_or_default(),
+            provider_endpoint: provider
+                .map(|call| call.endpoint.clone())
+                .unwrap_or_default(),
+            provider_output_hash,
+            provider_output_len: if self.provider_title_state() == "provider:ran" {
+                state.last_provider_output_len
+            } else {
+                0
+            },
             route_len: state.last_route.len(),
         }
     }
@@ -191,6 +212,15 @@ fn current_intent(ui: &UiState) -> String {
 
 fn execute_call(call: PreparedProviderCall) -> Result<String, math_atoms_core::ProviderError> {
     call.execute_with_curl()
+}
+
+fn provider_output_hash(text: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv:{hash:016x}")
 }
 
 #[cfg(test)]
@@ -308,6 +338,40 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert!(text.contains("\"status\":\"blocked\""));
         assert!(text.contains("\"provider_state\":\"provider:blocked\""));
+    }
+
+    #[test]
+    fn provider_execution_success_persists_output_audit() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-provider-audit-store-test-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store.clone()),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        app.run_current_intent(&ui);
+        app.provider_running = true;
+        app.complete_provider_execution(Ok("provider proof".to_string()));
+        let text = store.read_to_string().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(text.contains("\"provider_state\":\"provider:ran\""));
+        assert!(text.contains("\"provider_model\":"));
+        assert!(text.contains("\"provider_output_hash\":\"fnv:"));
+        assert!(text.contains("\"provider_output_len\":14"));
+        assert!(app
+            .runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == math_atoms_core::BusMessageKind::ProviderExecuted));
     }
 
     #[test]

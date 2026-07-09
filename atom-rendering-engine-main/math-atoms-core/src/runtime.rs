@@ -33,6 +33,8 @@ pub struct RuntimeState {
     pub evidence: Vec<Evidence>,
     pub blockers: Vec<String>,
     pub last_provider_call: Option<PreparedProviderCall>,
+    pub last_provider_output_hash: String,
+    pub last_provider_output_len: usize,
     pub last_route: Vec<EnvelopeId>,
 }
 
@@ -78,6 +80,8 @@ impl MathAtomsRuntime {
                 evidence: Vec::new(),
                 blockers: Vec::new(),
                 last_provider_call: None,
+                last_provider_output_hash: String::new(),
+                last_provider_output_len: 0,
                 last_route: Vec::new(),
             },
         }
@@ -222,6 +226,8 @@ impl MathAtomsRuntime {
         self.state.evidence = evidence.clone();
         self.state.blockers = blockers.clone();
         self.state.last_provider_call = provider_call.clone();
+        self.state.last_provider_output_hash.clear();
+        self.state.last_provider_output_len = 0;
         self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
         if status == RuntimeStatus::Proven {
             self.state.proof_count += 1;
@@ -248,6 +254,32 @@ impl MathAtomsRuntime {
             "proof-loop",
             reason,
             &[],
+        );
+    }
+
+    pub fn mark_provider_executed(&mut self, output_hash: &str, output_len: usize) {
+        self.state.last_provider_output_hash = output_hash.to_string();
+        self.state.last_provider_output_len = output_len;
+        let evidence_ids: Vec<String> = self
+            .state
+            .evidence
+            .iter()
+            .map(|item| item.node_id.clone())
+            .collect();
+        let model = self
+            .state
+            .last_provider_call
+            .as_ref()
+            .map(|call| call.model.as_str())
+            .unwrap_or("provider");
+        let body = format!("{model} executed output {output_hash} ({output_len} bytes)");
+        self.bus.l3_orchestrate(
+            self.state.last_route.last().copied().unwrap_or(0),
+            BusMessageKind::ProviderExecuted,
+            "provider-adapter",
+            "proof-loop",
+            &body,
+            &evidence_ids,
         );
     }
 
@@ -415,6 +447,10 @@ mod tests {
             evidence_count: 4,
             blockers: Vec::new(),
             provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_hash: "fnv:0011223344556677".to_string(),
+            provider_output_len: 24,
             route_len: 4,
         });
         let run = runtime.run_intent("Use stored proof for wiki graph rag");
@@ -446,5 +482,20 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderBlocked));
+    }
+
+    #[test]
+    fn provider_execution_success_is_bus_evidence() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Run provider api with wiki graph rag");
+        runtime.mark_provider_executed("fnv:abc", 17);
+        assert_eq!(runtime.state().last_provider_output_hash, "fnv:abc");
+        assert_eq!(runtime.state().last_provider_output_len, 17);
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProviderExecuted));
     }
 }

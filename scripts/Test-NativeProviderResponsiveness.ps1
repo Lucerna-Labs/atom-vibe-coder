@@ -152,6 +152,15 @@ public static class MathAtomsProviderResponsive {
     if ($tail -notmatch '"provider_state":"provider:ran"') {
         throw "Slow provider proof did not record provider:ran. Tail: $tail"
     }
+    if ($tail -notmatch '"provider_model":"fake-responsive-provider"') {
+        throw "Slow provider proof did not record provider model. Tail: $tail"
+    }
+    if ($tail -notmatch '"provider_output_hash":"fnv:[0-9a-f]{16}"') {
+        throw "Slow provider proof did not record output hash. Tail: $tail"
+    }
+    if ($tail -notmatch '"provider_output_len":16') {
+        throw "Slow provider proof did not record output length. Tail: $tail"
+    }
 
     Write-Host "native provider responsiveness ok: $($proc.MainWindowTitle)"
 }
