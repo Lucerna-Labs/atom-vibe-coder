@@ -1,0 +1,11 @@
+[package]
+name = "math-atoms-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Native PMRE shell for Math Atoms Coder."
+
+[dependencies]
+math-atoms-core = { path = "../math-atoms-core" }
+pmre-kit = { path = "../pmre-kit" }
+pmre-orchestrator = { path = "../pmre-orchestrator" }

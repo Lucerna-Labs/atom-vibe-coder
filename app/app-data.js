@@ -1,15 +1,15 @@
 window.MATH_ATOMS_DATA = {
   defaultIntent: "Build a tiny local app with an atom renderer, a self-correcting proof loop, a recipe-first store, and a live artifact pane.",
   operatorMission: {
-    title: "DS4 Gate Recipe",
-    body: "Match or beat DS4 by selecting the smallest gate-passing Q2/Q3/Q4/Q5/Q6/Q8 recipe from clean full-precision evidence.",
+    title: "Ornith 1.0 Parity",
+    body: "Meet or exceed Ornith 1.0 with native atom rendering, Spiderweb Bus routing, wiki graph RAG, provider execution, and proof capture.",
     recipes: [
-      { key: "Q2", size: 2, gate: "pending" },
-      { key: "Q3", size: 3, gate: "pending" },
-      { key: "Q4", size: 4, gate: "pending" },
-      { key: "Q5", size: 5, gate: "pending" },
-      { key: "Q6", size: 6, gate: "pending" },
-      { key: "Q8", size: 8, gate: "pending" }
+      { key: "NATIVE", size: 1, gate: "passing" },
+      { key: "BUS", size: 2, gate: "passing" },
+      { key: "RAG", size: 3, gate: "passing" },
+      { key: "API", size: 4, gate: "blocked" },
+      { key: "PROOF", size: 5, gate: "passing" },
+      { key: "O1", size: 6, gate: "pending" }
     ]
   },
   atoms: [
@@ -206,12 +206,12 @@ window.MATH_ATOMS_DATA = {
       bonds: 4
     },
     {
-      id: "ds4-q-recipe-selector",
-      name: "DS4 Q Recipe Selector",
+      id: "ornith-parity-runtime",
+      name: "Ornith 1.0 Parity Runtime",
       level: "L3",
       status: "draft",
       kind: "bench",
-      summary: "Select the smallest gate-passing Q recipe from clean full-precision evidence.",
+      summary: "Select the smallest gate-passing native recipe that meets or exceeds Ornith 1.0 function.",
       atoms: ["scan", "compare", "scale", "preserve", "measure", "order"],
       bonds: 5
     }

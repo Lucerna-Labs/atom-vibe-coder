@@ -356,9 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn ornith_replaces_ds4_as_product_mission() {
+    fn ornith_is_the_product_mission() {
         let m = mission();
         assert!(m.body.contains("Ornith 1.0"));
-        assert!(!m.body.contains("DS4"));
+        assert_eq!(m.parity_floor, "Ornith 1.0");
     }
 }

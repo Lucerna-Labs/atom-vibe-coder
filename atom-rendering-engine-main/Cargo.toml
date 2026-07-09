@@ -5,6 +5,7 @@
 resolver = "2"
 members = [
     "math-atoms-core",
+    "math-atoms-native",
     "pmre-font",
     "pmre-html",
     "pmre-kit",

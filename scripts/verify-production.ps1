@@ -27,6 +27,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "cargo test --workspace failed with exit code $LASTEXITCODE" }
         cargo clippy --workspace --all-targets -- -D warnings
         if ($LASTEXITCODE -ne 0) { throw "cargo clippy failed with exit code $LASTEXITCODE" }
+        cargo build -p math-atoms-native --release
+        if ($LASTEXITCODE -ne 0) { throw "native PMRE app build failed with exit code $LASTEXITCODE" }
         cargo run -p pmre-examples --example math_atoms_coder --release
         if ($LASTEXITCODE -ne 0) { throw "native artifact render failed with exit code $LASTEXITCODE" }
     }
@@ -52,7 +54,7 @@ try {
         throw "Unexpected native artifact dimensions: ${width}x${height}"
     }
 
-    Write-Host "baseline verification ok: static app checks, Rust tests, clippy, and native artifact"
+    Write-Host "baseline verification ok: doctrine check, Rust tests, clippy, native app build, and native artifact"
 }
 finally {
     Pop-Location

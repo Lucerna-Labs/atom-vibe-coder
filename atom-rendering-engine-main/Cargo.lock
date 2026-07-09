@@ -465,6 +465,15 @@ name = "math-atoms-core"
 version = "0.1.0"
 
 [[package]]
+name = "math-atoms-native"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-core",
+ "pmre-kit",
+ "pmre-orchestrator",
+]
+
+[[package]]
 name = "metal"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

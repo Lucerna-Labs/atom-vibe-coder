@@ -47,6 +47,12 @@ jobs:
         working-directory: atom-rendering-engine-main
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Native app build
+        working-directory: atom-rendering-engine-main
+        run: cargo build -p math-atoms-native --release
+        env:
+          RUSTFLAGS: "-D warnings"
+
       - name: Native artifact render
         working-directory: atom-rendering-engine-main
         run: cargo run -p pmre-examples --example math_atoms_coder --release

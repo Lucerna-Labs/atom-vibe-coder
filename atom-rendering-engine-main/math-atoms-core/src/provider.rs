@@ -1,12 +1,12 @@
 use crate::graph::Evidence;
 use std::fs;
 use std::io;
-use std::path::Path;
 use std::process::Command;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKind {
     OpenAiResponses,
+    OllamaCloudChat,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,17 +37,22 @@ pub enum ProviderError {
 
 impl ProviderConfig {
     pub fn from_process_env() -> Self {
-        let model =
-            std::env::var("MATH_ATOMS_PROVIDER_MODEL").unwrap_or_else(|_| "gpt-5.5".to_string());
+        let kind = provider_kind_from(
+            std::env::var("MATH_ATOMS_PROVIDER_KIND")
+                .unwrap_or_else(|_| "openai".to_string())
+                .as_str(),
+        );
+        let model = std::env::var("MATH_ATOMS_PROVIDER_MODEL")
+            .unwrap_or_else(|_| default_model(kind).to_string());
         let endpoint = std::env::var("MATH_ATOMS_PROVIDER_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1/responses".to_string());
+            .unwrap_or_else(|_| default_endpoint(kind).to_string());
         let api_key_env = std::env::var("MATH_ATOMS_PROVIDER_KEY_ENV")
-            .unwrap_or_else(|_| "OPENAI_API_KEY".to_string());
+            .unwrap_or_else(|_| default_key_env(kind).to_string());
         let api_key_present = std::env::var(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
-            kind: ProviderKind::OpenAiResponses,
+            kind,
             endpoint,
             model,
             api_key_env,
@@ -62,16 +67,22 @@ impl ProviderConfig {
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).to_string())
         };
-        let model = lookup("MATH_ATOMS_PROVIDER_MODEL").unwrap_or_else(|| "gpt-5.5".to_string());
-        let endpoint = lookup("MATH_ATOMS_PROVIDER_URL")
-            .unwrap_or_else(|| "https://api.openai.com/v1/responses".to_string());
-        let api_key_env =
-            lookup("MATH_ATOMS_PROVIDER_KEY_ENV").unwrap_or_else(|| "OPENAI_API_KEY".to_string());
+        let kind = provider_kind_from(
+            lookup("MATH_ATOMS_PROVIDER_KIND")
+                .unwrap_or_else(|| "openai".to_string())
+                .as_str(),
+        );
+        let model =
+            lookup("MATH_ATOMS_PROVIDER_MODEL").unwrap_or_else(|| default_model(kind).to_string());
+        let endpoint =
+            lookup("MATH_ATOMS_PROVIDER_URL").unwrap_or_else(|| default_endpoint(kind).to_string());
+        let api_key_env = lookup("MATH_ATOMS_PROVIDER_KEY_ENV")
+            .unwrap_or_else(|| default_key_env(kind).to_string());
         let api_key_present = lookup(&api_key_env)
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
         Self {
-            kind: ProviderKind::OpenAiResponses,
+            kind,
             endpoint,
             model,
             api_key_env,
@@ -112,7 +123,7 @@ impl ProviderConfig {
             endpoint: self.endpoint.clone(),
             model: self.model.clone(),
             api_key_env: self.api_key_env.clone(),
-            body: responses_body(&self.model, &prompt),
+            body: provider_body(self.kind, &self.model, &prompt),
         })
     }
 }
@@ -139,16 +150,16 @@ impl PreparedProviderCall {
         let body_path = dir.join(format!("{stem}.json"));
         let config_path = dir.join(format!("{stem}.curl"));
         fs::write(&body_path, &self.body)?;
-        fs::write(
-            &config_path,
-            curl_config(&self.endpoint, &self.model, &api_key, &body_path),
-        )?;
+        fs::write(&config_path, curl_config(&self.endpoint, &api_key))?;
+        let body_arg = format!("@{}", body_path.to_string_lossy());
         let output = Command::new("curl.exe")
             .arg("--silent")
             .arg("--show-error")
             .arg("--fail-with-body")
             .arg("--config")
             .arg(&config_path)
+            .arg("--data-binary")
+            .arg(&body_arg)
             .output()
             .or_else(|_| {
                 Command::new("curl")
@@ -157,6 +168,8 @@ impl PreparedProviderCall {
                     .arg("--fail-with-body")
                     .arg("--config")
                     .arg(&config_path)
+                    .arg("--data-binary")
+                    .arg(&body_arg)
                     .output()
             });
         let cleanup = fs::remove_file(&body_path).and(fs::remove_file(&config_path));
@@ -188,16 +201,24 @@ pub fn parse_responses_text(body: &str) -> Result<String, ProviderError> {
             return Ok(text);
         }
     }
+    if let Some(pos) = body.find("\"response\"") {
+        if let Some(text) = read_json_string_after_colon(&body[pos + "\"response\"".len()..]) {
+            return Ok(text);
+        }
+    }
+    if let Some(pos) = body.find("\"content\"") {
+        if let Some(text) = read_json_string_after_colon(&body[pos + "\"content\"".len()..]) {
+            return Ok(text);
+        }
+    }
     Err(ProviderError::ResponseTextMissing)
 }
 
-fn curl_config(endpoint: &str, model: &str, api_key: &str, body_path: &Path) -> String {
+fn curl_config(endpoint: &str, api_key: &str) -> String {
     format!(
-        "url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\nheader = \"OpenAI-Beta: responses=v1\"\ndata = \"@{}\"\n# model: {}\n",
+        "url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
         curl_escape(endpoint),
-        curl_escape(api_key),
-        curl_escape_path(body_path),
-        curl_escape(model)
+        curl_escape(api_key)
     )
 }
 
@@ -212,13 +233,52 @@ fn curl_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn curl_escape_path(path: &Path) -> String {
-    curl_escape(&path.to_string_lossy())
+fn provider_kind_from(value: &str) -> ProviderKind {
+    match value.to_ascii_lowercase().as_str() {
+        "ollama" | "ollama-cloud" | "ollama_cloud" => ProviderKind::OllamaCloudChat,
+        _ => ProviderKind::OpenAiResponses,
+    }
+}
+
+fn default_model(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::OpenAiResponses => "gpt-5.5",
+        ProviderKind::OllamaCloudChat => "gpt-oss:120b",
+    }
+}
+
+fn default_endpoint(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::OpenAiResponses => "https://api.openai.com/v1/responses",
+        ProviderKind::OllamaCloudChat => "https://ollama.com/api/chat",
+    }
+}
+
+fn default_key_env(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::OpenAiResponses => "OPENAI_API_KEY",
+        ProviderKind::OllamaCloudChat => "OLLAMA_API_KEY",
+    }
+}
+
+fn provider_body(kind: ProviderKind, model: &str, prompt: &str) -> String {
+    match kind {
+        ProviderKind::OpenAiResponses => responses_body(model, prompt),
+        ProviderKind::OllamaCloudChat => ollama_chat_body(model, prompt),
+    }
 }
 
 fn responses_body(model: &str, prompt: &str) -> String {
     format!(
         "{{\"model\":\"{}\",\"input\":[{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}],\"temperature\":0.1}}",
+        json_escape(model),
+        json_escape(prompt)
+    )
+}
+
+fn ollama_chat_body(model: &str, prompt: &str) -> String {
+    format!(
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}],\"stream\":false}}",
         json_escape(model),
         json_escape(prompt)
     )
@@ -305,5 +365,29 @@ mod tests {
     fn response_text_parser_reads_output_text() {
         let text = parse_responses_text(r#"{"output_text":"route proven\nnext"}"#).unwrap();
         assert_eq!(text, "route proven\nnext");
+    }
+
+    #[test]
+    fn ollama_provider_uses_cloud_chat_shape() {
+        let config = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "ollama"),
+            ("OLLAMA_API_KEY", "secret"),
+        ]);
+        let call = config
+            .prepare_call("provider api", "provider-model-loop", &[])
+            .unwrap();
+        assert_eq!(config.kind, ProviderKind::OllamaCloudChat);
+        assert_eq!(call.endpoint, "https://ollama.com/api/chat");
+        assert!(call.body.contains("\"messages\""));
+        assert!(call.body.contains("\"stream\":false"));
+        assert!(!call.body.contains("secret"));
+    }
+
+    #[test]
+    fn response_text_parser_reads_ollama_content() {
+        let text =
+            parse_responses_text(r#"{"message":{"role":"assistant","content":"provider-ok"}}"#)
+                .unwrap();
+        assert_eq!(text, "provider-ok");
     }
 }

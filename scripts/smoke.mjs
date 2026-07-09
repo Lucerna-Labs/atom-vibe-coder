@@ -3,7 +3,7 @@ import path from "node:path";
 import vm from "node:vm";
 
 const root = process.cwd();
-const operatorMission = "match or beat ds4 by selecting the smallest gate-passing q2/q3/q4/q5/q6/q8 recipe from clean full-precision evidence";
+const operatorMission = "meet or exceed ornith 1.0 with native atom rendering, spiderweb bus routing, wiki graph rag, provider execution, and proof capture";
 const files = [
   "README.md",
   "app/index.html",
@@ -66,14 +66,14 @@ if (!data.fabric || data.fabric.layers.length !== 4) {
   throw new Error("Spiderweb fabric must expose four layers");
 }
 
-const expectedLadder = ["Q2", "Q3", "Q4", "Q5", "Q6", "Q8"];
+const expectedLadder = ["NATIVE", "BUS", "RAG", "API", "PROOF", "O1"];
 const dataLadder = data.operatorMission.recipes.map((recipe) => recipe.key).join("/");
 const appLadder = invariants.qTierLadder.join("/");
 if (dataLadder !== expectedLadder.join("/") || appLadder !== expectedLadder.join("/")) {
-  throw new Error("Q2/Q3/Q4/Q5/Q6/Q8 ladder was not preserved");
+  throw new Error("Ornith parity ladder was not preserved");
 }
 if (!data.operatorMission.body.toLowerCase().includes(operatorMission)) {
   throw new Error("Operator mission text was not preserved");
 }
 
-console.log("smoke ok: static app, atom doctrine, Spiderweb layers, Q ladder, and operator mission validated");
+console.log("static doctrine check ok: atom doctrine, Spiderweb layers, Ornith parity ladder, and operator mission validated");

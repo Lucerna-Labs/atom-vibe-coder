@@ -575,7 +575,7 @@ fn right_rail(fb: &mut Framebuffer) {
     status_box(fb, 1265.0, 776.0, "BONDS", "2");
     text_at(
         fb,
-        "DS4 gate: Q2/Q3/Q4/Q5/Q6/Q8 smallest passing recipe",
+        "Ornith parity: native bus + graph RAG + provider + proof",
         1001.0,
         900.0,
         11.0,
