@@ -17,6 +17,8 @@ pub use domain::{
     RecipeStatus,
 };
 pub use graph::{Evidence, WikiGraph};
-pub use provider::{PreparedProviderCall, ProviderConfig, ProviderError, ProviderKind};
-pub use runtime::{MathAtomsRuntime, ProofRun, RuntimeState, RuntimeStatus};
+pub use provider::{
+    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderError, ProviderKind,
+};
+pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};
 pub use store::{ProofRecord, ProofStore};

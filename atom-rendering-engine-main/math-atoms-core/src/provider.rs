@@ -231,6 +231,15 @@ pub fn parse_responses_text(body: &str) -> Result<String, ProviderError> {
     Err(ProviderError::ResponseTextMissing)
 }
 
+pub fn provider_output_hash(text: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv:{hash:016x}")
+}
+
 fn curl_config(endpoint: &str, api_key: &str) -> String {
     format!(
         "url = \"{}\"\nrequest = \"POST\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\n",
@@ -544,6 +553,15 @@ mod tests {
             redacted,
             "Incorrect API key provided: [redacted]. You can find your API key."
         );
+    }
+
+    #[test]
+    fn provider_output_hash_is_stable_for_audit_records() {
+        assert_eq!(
+            provider_output_hash("provider proof"),
+            provider_output_hash("provider proof")
+        );
+        assert!(provider_output_hash("provider proof").starts_with("fnv:"));
     }
 
     #[test]

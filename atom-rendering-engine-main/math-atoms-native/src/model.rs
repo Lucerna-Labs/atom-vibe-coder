@@ -1,6 +1,6 @@
 use math_atoms_core::{
-    MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, ProviderError,
-    RuntimeStatus,
+    provider_output_hash, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
+    ProviderConfig, ProviderError, RuntimeStatus,
 };
 use pmre_orchestrator::UiState;
 use std::sync::mpsc::{self, Receiver};
@@ -170,18 +170,25 @@ impl NativeApp {
             self.last_provider_output = "Provider request already running.".to_string();
             return None;
         }
-        let Some(call) = self.runtime.state().last_provider_call.clone() else {
-            let reason =
-                "No prepared provider call. Run an intent that requests provider/model work first.";
-            self.runtime.mark_provider_blocked(reason);
+        let Some(task) = self.runtime.schedule_provider_execution() else {
+            let reason = self
+                .runtime
+                .state()
+                .blockers
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "Provider execution was not scheduled.".to_string());
             self.last_provider_output = format!("Provider blocked: {reason}");
             return None;
         };
         let (tx, rx) = mpsc::channel();
         self.provider_running = true;
-        self.last_provider_output = "Provider request running.".to_string();
+        self.last_provider_output = format!(
+            "Provider request running through {} Spiderweb route envelopes.",
+            task.route.len()
+        );
         thread::spawn(move || {
-            let _ = tx.send(execute_call(call));
+            let _ = tx.send(execute_call(task.call));
         });
         Some(rx)
     }
@@ -311,15 +318,6 @@ fn current_intent(ui: &UiState) -> String {
 
 fn execute_call(call: PreparedProviderCall) -> Result<String, math_atoms_core::ProviderError> {
     call.execute_with_curl()
-}
-
-fn provider_output_hash(text: &str) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in text.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("fnv:{hash:016x}")
 }
 
 #[cfg(test)]
@@ -464,6 +462,16 @@ mod tests {
         let rx = app
             .begin_provider_execution()
             .expect("provider-ready route should start execution");
+        assert!(app
+            .runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == math_atoms_core::BusMessageKind::ProviderExecutionScheduled));
+        assert!(app
+            .runtime
+            .bus()
+            .route_contains_all_layers(*app.runtime.state().last_route.last().unwrap()));
         let result = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("local refused provider should return quickly");

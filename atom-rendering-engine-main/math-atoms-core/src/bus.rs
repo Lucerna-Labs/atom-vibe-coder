@@ -33,6 +33,8 @@ pub enum BusMessageKind {
     RetrievalRequested,
     EvidenceRetrieved,
     ProviderPrepared,
+    ProviderExecutionRequested,
+    ProviderExecutionScheduled,
     ProviderExecuted,
     ProviderBlocked,
     RecipeSelected,

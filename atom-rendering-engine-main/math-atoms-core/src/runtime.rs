@@ -52,6 +52,12 @@ pub struct ProofRun {
 }
 
 #[derive(Clone, Debug)]
+pub struct ProviderExecutionTask {
+    pub call: PreparedProviderCall,
+    pub route: Vec<EnvelopeId>,
+}
+
+#[derive(Clone, Debug)]
 pub struct MathAtomsRuntime {
     bus: SpiderwebBus,
     graph: WikiGraph,
@@ -305,17 +311,62 @@ impl MathAtomsRuntime {
         );
     }
 
+    pub fn schedule_provider_execution(&mut self) -> Option<ProviderExecutionTask> {
+        let Some(call) = self.state.last_provider_call.clone() else {
+            self.mark_provider_blocked(
+                "No prepared provider call. Run an intent that requests provider/model work first.",
+            );
+            return None;
+        };
+        if self.state.status != RuntimeStatus::ProviderPending {
+            self.mark_provider_blocked(
+                "Provider execution requires a provider pending Spiderweb route",
+            );
+            return None;
+        }
+        let evidence_ids = self.provider_evidence_ids();
+        let l0 = self.bus.l0_transport(
+            BusMessageKind::ProviderExecutionRequested,
+            "proof-loop",
+            "provider-adapter",
+            "provider execution requested from pending proof route",
+        );
+        let l1 = self.bus.l1_message(
+            l0,
+            BusMessageKind::ProviderExecutionRequested,
+            "provider-adapter",
+            "model-worker",
+            &format!("{} via {}", call.model, call.endpoint),
+        );
+        let l2 = self.bus.l2_flow(
+            l1,
+            BusMessageKind::ProviderExecutionScheduled,
+            "provider-adapter",
+            "model-worker",
+            "provider worker scheduled with graph evidence payload",
+            &evidence_ids,
+        );
+        let l3 = self.bus.l3_orchestrate(
+            l2,
+            BusMessageKind::ProviderExecutionScheduled,
+            "proof-loop",
+            "provider-worker",
+            "provider execution lifted onto Spiderweb orchestration route",
+            &evidence_ids,
+        );
+        self.state.last_route = self.bus.route_for(l3).iter().map(|env| env.id).collect();
+        Some(ProviderExecutionTask {
+            call,
+            route: self.state.last_route.clone(),
+        })
+    }
+
     pub fn mark_provider_executed(&mut self, output_hash: &str, output_len: usize) {
         self.state.status = RuntimeStatus::Proven;
         self.state.proof_count += 1;
         self.state.last_provider_output_hash = output_hash.to_string();
         self.state.last_provider_output_len = output_len;
-        let evidence_ids: Vec<String> = self
-            .state
-            .evidence
-            .iter()
-            .map(|item| item.node_id.clone())
-            .collect();
+        let evidence_ids = self.provider_evidence_ids();
         let model = self
             .state
             .last_provider_call
@@ -323,22 +374,44 @@ impl MathAtomsRuntime {
             .map(|call| call.model.as_str())
             .unwrap_or("provider");
         let body = format!("{model} executed output {output_hash} ({output_len} bytes)");
-        self.bus.l3_orchestrate(
-            self.state.last_route.last().copied().unwrap_or(0),
+        let l0 = self.bus.l0_transport(
+            BusMessageKind::ProviderExecuted,
+            "model-worker",
+            "provider-adapter",
+            &body,
+        );
+        let l1 = self.bus.l1_message(
+            l0,
+            BusMessageKind::ProviderExecuted,
+            "provider-adapter",
+            "proof-loop",
+            &body,
+        );
+        let l2 = self.bus.l2_flow(
+            l1,
             BusMessageKind::ProviderExecuted,
             "provider-adapter",
             "proof-loop",
             &body,
             &evidence_ids,
         );
-        self.bus.l3_orchestrate(
-            self.state.last_route.last().copied().unwrap_or(0),
+        let l3 = self.bus.l3_orchestrate(
+            l2,
+            BusMessageKind::ProviderExecuted,
+            "proof-loop",
+            "artifact-state",
+            "provider worker completed through Spiderweb route",
+            &evidence_ids,
+        );
+        let proof = self.bus.l3_orchestrate(
+            l3,
             BusMessageKind::ProofCaptured,
             "proof-loop",
             "artifact-state",
             "provider execution returned model output; proof captured",
             &evidence_ids,
         );
+        self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
     }
 
     pub fn mark_provider_blocked(&mut self, reason: &str) {
@@ -346,20 +419,37 @@ impl MathAtomsRuntime {
         if !self.state.blockers.iter().any(|item| item == reason) {
             self.state.blockers.push(reason.to_string());
         }
-        let evidence_ids: Vec<String> = self
-            .state
-            .evidence
-            .iter()
-            .map(|item| item.node_id.clone())
-            .collect();
-        self.bus.l3_orchestrate(
-            self.state.last_route.last().copied().unwrap_or(0),
+        let evidence_ids = self.provider_evidence_ids();
+        let l0 = self.bus.l0_transport(
+            BusMessageKind::ProviderBlocked,
+            "model-worker",
+            "provider-adapter",
+            reason,
+        );
+        let l1 = self.bus.l1_message(
+            l0,
+            BusMessageKind::ProviderBlocked,
+            "provider-adapter",
+            "proof-loop",
+            reason,
+        );
+        let l2 = self.bus.l2_flow(
+            l1,
             BusMessageKind::ProviderBlocked,
             "provider-adapter",
             "proof-loop",
             reason,
             &evidence_ids,
         );
+        let l3 = self.bus.l3_orchestrate(
+            l2,
+            BusMessageKind::ProviderBlocked,
+            "proof-loop",
+            "artifact-state",
+            reason,
+            &evidence_ids,
+        );
+        self.state.last_route = self.bus.route_for(l3).iter().map(|env| env.id).collect();
     }
 
     pub fn mark_store_blocked(&mut self, reason: &str) {
@@ -441,6 +531,14 @@ impl MathAtomsRuntime {
                 &[],
             );
         }
+    }
+
+    fn provider_evidence_ids(&self) -> Vec<String> {
+        self.state
+            .evidence
+            .iter()
+            .map(|item| item.node_id.clone())
+            .collect()
     }
 }
 
@@ -615,6 +713,7 @@ mod tests {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
+        runtime.schedule_provider_execution().unwrap();
         runtime.mark_provider_blocked("provider returned 401");
         assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
         assert!(runtime
@@ -627,6 +726,9 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderBlocked));
+        assert!(runtime
+            .bus()
+            .route_contains_all_layers(*runtime.state().last_route.last().unwrap()));
     }
 
     #[test]
@@ -634,10 +736,18 @@ mod tests {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
+        let task = runtime.schedule_provider_execution().unwrap();
+        assert!(!task.route.is_empty());
+        assert_eq!(task.call.model, "gpt-5.5");
         runtime.mark_provider_executed("fnv:abc", 17);
         assert_eq!(runtime.state().status, RuntimeStatus::Proven);
         assert_eq!(runtime.state().last_provider_output_hash, "fnv:abc");
         assert_eq!(runtime.state().last_provider_output_len, 17);
+        assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProviderExecutionScheduled));
         assert!(runtime
             .bus()
             .envelopes()
@@ -648,6 +758,9 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProofCaptured));
+        assert!(runtime
+            .bus()
+            .route_contains_all_layers(*runtime.state().last_route.last().unwrap()));
     }
 
     #[test]
