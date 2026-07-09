@@ -138,6 +138,7 @@ impl MathAtomsRuntime {
     }
 
     pub fn run_intent(&mut self, intent: &str) -> ProofRun {
+        let provider_route = provider_route_required(intent);
         let l0 = self.bus.l0_transport(
             BusMessageKind::IntentIngress,
             "operator",
@@ -163,9 +164,15 @@ impl MathAtomsRuntime {
             "graph evidence ranked from atom and recipe relationships",
             &evidence_ids,
         );
-        let recipe = select_recipe(intent, &intent_atoms, &evidence, self.provider.is_ready());
+        let recipe = select_recipe(
+            intent,
+            &intent_atoms,
+            &evidence,
+            self.provider.is_ready(),
+            provider_route,
+        );
         let atom_stack = recipe_stack(recipe);
-        let provider_result = if recipe.requires_provider || provider_requested(intent) {
+        let provider_result = if recipe.requires_provider || provider_route {
             self.provider.prepare_call(intent, recipe.id, &evidence)
         } else {
             Ok(PreparedProviderCall {
@@ -556,14 +563,15 @@ impl MathAtomsRuntime {
 }
 
 fn classify_intent(intent: &str) -> Vec<String> {
-    let lower = intent.to_ascii_lowercase();
+    let tokens = intent_tokens(intent);
+    let provider_route = provider_route_required_from_tokens(&tokens, &[]);
     let mut scored: Vec<(&str, i32)> = crate::domain::atoms()
         .iter()
         .map(|atom| {
             let score = atom
                 .keywords
                 .iter()
-                .filter(|keyword| lower.contains(**keyword))
+                .filter(|keyword| tokens_match_keyword(&tokens, keyword))
                 .count() as i32;
             (atom.key, score)
         })
@@ -577,27 +585,103 @@ fn classify_intent(intent: &str) -> Vec<String> {
                 .cmp(&atom_by_key(b_key).unwrap().id)
         })
     });
-    let mut atoms: Vec<String> = scored.into_iter().map(|(key, _)| key.to_string()).collect();
+    let mut atoms: Vec<String> = Vec::new();
+    if provider_route {
+        append_unique_atoms(&mut atoms, &["measure", "compose", "flow", "preserve"]);
+    }
+    for key in scored.into_iter().map(|(key, _)| key.to_string()) {
+        if !atoms.iter().any(|existing| existing == &key) {
+            atoms.push(key);
+        }
+    }
     if atoms.is_empty() {
         atoms = ["scan", "project", "compare", "compose", "measure"]
             .into_iter()
             .map(str::to_string)
             .collect();
     }
-    for required in ["flow", "preserve", "measure"] {
-        if provider_requested(intent) && !atoms.iter().any(|key| key == required) {
-            atoms.push(required.to_string());
-        }
+    if provider_route {
+        append_unique_atoms(&mut atoms, &["scan", "project"]);
     }
     atoms.truncate(6);
     atoms
 }
 
-fn provider_requested(intent: &str) -> bool {
-    let lower = intent.to_ascii_lowercase();
-    ["provider", "api", "model", "openai", "llm", "rag"]
+fn provider_route_required(intent: &str) -> bool {
+    let tokens = intent_tokens(intent);
+    provider_route_required_from_tokens(&tokens, &classify_intent_without_provider_forcing(&tokens))
+}
+
+fn provider_requested_from_tokens(tokens: &[String]) -> bool {
+    let provider_terms = [
+        "provider", "api", "model", "openai", "llm", "rag", "chatgpt", "deepseek", "mistral",
+        "ollama",
+    ];
+    tokens
+        .iter()
+        .any(|token| provider_terms.iter().any(|term| token == term))
+}
+
+fn provider_route_required_from_tokens(tokens: &[String], atoms: &[String]) -> bool {
+    provider_requested_from_tokens(tokens) || provider_signature_atoms(atoms) >= 3
+}
+
+fn provider_signature_atoms(atoms: &[String]) -> usize {
+    ["measure", "compose", "flow", "preserve"]
         .into_iter()
-        .any(|term| lower.contains(term))
+        .filter(|required| atoms.iter().any(|atom| atom == required))
+        .count()
+}
+
+fn classify_intent_without_provider_forcing(tokens: &[String]) -> Vec<String> {
+    let mut scored: Vec<(&str, i32)> = crate::domain::atoms()
+        .iter()
+        .map(|atom| {
+            let score = atom
+                .keywords
+                .iter()
+                .filter(|keyword| tokens_match_keyword(tokens, keyword))
+                .count() as i32;
+            (atom.key, score)
+        })
+        .filter(|(_, score)| *score > 0)
+        .collect();
+    scored.sort_by(|(a_key, a_score), (b_key, b_score)| {
+        b_score.cmp(a_score).then_with(|| {
+            atom_by_key(a_key)
+                .unwrap()
+                .id
+                .cmp(&atom_by_key(b_key).unwrap().id)
+        })
+    });
+    scored.into_iter().map(|(key, _)| key.to_string()).collect()
+}
+
+fn append_unique_atoms(atoms: &mut Vec<String>, required: &[&str]) {
+    for atom in required {
+        if !atoms.iter().any(|existing| existing == atom) {
+            atoms.push((*atom).to_string());
+        }
+    }
+}
+
+fn intent_tokens(intent: &str) -> Vec<String> {
+    intent
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn tokens_match_keyword(tokens: &[String], keyword: &str) -> bool {
+    let keyword_tokens = intent_tokens(keyword);
+    if keyword_tokens.is_empty() {
+        return false;
+    }
+    tokens
+        .windows(keyword_tokens.len())
+        .any(|window| window == keyword_tokens.as_slice())
 }
 
 fn select_recipe(
@@ -605,6 +689,7 @@ fn select_recipe(
     atoms: &[String],
     evidence: &[Evidence],
     provider_ready: bool,
+    provider_route: bool,
 ) -> &'static Recipe {
     let mut candidates: Vec<(&Recipe, i32)> = recipes()
         .iter()
@@ -620,63 +705,69 @@ fn select_recipe(
                 .map(|item| item.score)
                 .max()
                 .unwrap_or(0);
-            let provider_penalty = if recipe.requires_provider && !provider_ready {
+            let provider_penalty = if recipe.requires_provider && !provider_ready && !provider_route
+            {
                 -30
             } else {
                 0
             };
             let stack_score = stack_quality(atoms, recipe.atoms);
-            let fit_bonus = intent_fit_bonus(intent, recipe);
+            let fit_bonus = intent_fit_bonus(intent, recipe, provider_route);
+            let complexity = recipe_complexity(recipe);
             let score =
                 atom_overlap * 8 + stack_score + evidence_score + fit_bonus + provider_penalty
-                    - recipe.bonds as i32;
+                    - complexity;
             (recipe, score)
         })
         .collect();
     candidates.sort_by(|(a_recipe, a_score), (b_recipe, b_score)| {
         b_score
             .cmp(a_score)
-            .then_with(|| a_recipe.bonds.cmp(&b_recipe.bonds))
+            .then_with(|| recipe_complexity(a_recipe).cmp(&recipe_complexity(b_recipe)))
             .then_with(|| a_recipe.id.cmp(b_recipe.id))
     });
     candidates[0].0
 }
 
-fn intent_fit_bonus(intent: &str, recipe: &Recipe) -> i32 {
-    let lower = intent.to_ascii_lowercase();
+fn intent_fit_bonus(intent: &str, recipe: &Recipe, provider_route: bool) -> i32 {
+    let tokens = intent_tokens(intent);
     let renderer_terms = [
         "renderer", "render", "artifact", "native", "pmre", "surface",
     ]
     .iter()
-    .any(|term| lower.contains(term));
+    .any(|term| tokens.iter().any(|token| token == term));
     match recipe.kind {
-        "renderer" if renderer_terms && lower.contains("only") => 95,
+        "renderer" if renderer_terms && tokens.iter().any(|token| token == "only") => 95,
         "renderer" if renderer_terms => 42,
-        "provider" if provider_requested(intent) => 35,
+        "provider" if provider_route => 35,
         "retrieval"
             if ["wiki", "graph", "rag"]
                 .iter()
-                .any(|term| lower.contains(term)) =>
+                .any(|term| tokens.iter().any(|token| token == term)) =>
         {
             14
         }
         "fabric"
             if ["spiderweb", "bus", "route", "fabric"]
                 .iter()
-                .any(|term| lower.contains(term)) =>
+                .any(|term| tokens.iter().any(|token| token == term)) =>
         {
             14
         }
-        "product" if renderer_terms && lower.contains("only") => -40,
+        "product" if renderer_terms && tokens.iter().any(|token| token == "only") => -40,
         "product"
             if ["app", "build", "production", "dashboard", "usable"]
                 .iter()
-                .any(|term| lower.contains(term)) =>
+                .any(|term| tokens.iter().any(|token| token == term)) =>
         {
             16
         }
         _ => 0,
     }
+}
+
+fn recipe_complexity(recipe: &Recipe) -> i32 {
+    recipe.atoms.len() as i32 + recipe.bonds as i32
 }
 
 fn recipe_stack(recipe: &Recipe) -> Vec<String> {
@@ -789,8 +880,80 @@ mod tests {
     fn renderer_only_intent_prefers_renderer_despite_product_stack_overlap() {
         let atoms = classify_intent("native renderer artifact only");
         let evidence = WikiGraph::seeded().retrieve("native renderer artifact only", &atoms, 8);
-        let recipe = select_recipe("native renderer artifact only", &atoms, &evidence, true);
+        let recipe = select_recipe(
+            "native renderer artifact only",
+            &atoms,
+            &evidence,
+            true,
+            provider_route_required("native renderer artifact only"),
+        );
         assert_eq!(recipe.id, "native-atom-renderer");
+    }
+
+    #[test]
+    fn provider_detection_uses_tokens_not_substrings() {
+        for intent in [
+            "Show current storage and drag-and-drop ordering for the business dashboard",
+            "Rapidly review the login dialog",
+            "Quarterly profit for individual capital accounts",
+            "Remodel the local shell layout",
+        ] {
+            assert!(
+                !provider_requested_from_tokens(&intent_tokens(intent)),
+                "{intent} should not request a provider"
+            );
+        }
+        assert!(provider_requested_from_tokens(&intent_tokens(
+            "Run the provider api model with graph rag"
+        )));
+    }
+
+    #[test]
+    fn atom_classification_uses_tokens_not_embedded_substrings() {
+        let tokens = intent_tokens("Fix the login dialog logic for a business review");
+        let atoms = classify_intent_without_provider_forcing(&tokens);
+        assert!(
+            atoms.is_empty(),
+            "embedded substrings should not classify atoms: {atoms:?}"
+        );
+    }
+
+    #[test]
+    fn provider_forced_atoms_survive_truncation() {
+        let atoms = classify_intent("provider model wiki graph rag from typed input");
+        for required in ["measure", "compose", "flow", "preserve"] {
+            assert!(
+                atoms.iter().any(|atom| atom == required),
+                "{required} was dropped from {atoms:?}"
+            );
+        }
+        assert!(atoms.len() <= 6);
+    }
+
+    #[test]
+    fn provider_intent_selects_provider_recipe_even_without_key() {
+        let mut runtime = MathAtomsRuntime::new(ProviderConfig::from_pairs(&[]));
+        let run = runtime.run_intent("provider model wiki graph rag from typed input");
+        assert_eq!(run.recipe_id, "provider-model-loop");
+        assert_eq!(run.status, RuntimeStatus::Blocked);
+        assert!(run
+            .blockers
+            .iter()
+            .any(|item| item.contains("OPENAI_API_KEY")));
+    }
+
+    #[test]
+    fn provider_signature_atoms_fail_closed_without_provider_keyword() {
+        let mut runtime = MathAtomsRuntime::new(ProviderConfig::from_pairs(&[]));
+        let run = runtime.run_intent(
+            "Compose a nested orchestrator that preserve the budget invariant and flow along the fabric while observe telemetry",
+        );
+        assert_eq!(run.recipe_id, "provider-model-loop");
+        assert_eq!(run.status, RuntimeStatus::Blocked);
+        assert!(run
+            .blockers
+            .iter()
+            .any(|item| item.contains("OPENAI_API_KEY")));
     }
 
     #[test]

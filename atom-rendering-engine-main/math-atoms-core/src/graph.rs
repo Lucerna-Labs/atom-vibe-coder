@@ -274,7 +274,8 @@ impl WikiGraph {
         if !proof_record_is_positive_evidence(record) {
             return;
         }
-        let id = proof_node_id(record);
+        let record_atoms = authored_record_atoms(record);
+        let id = proof_node_id(record, &record_atoms);
         if self.nodes.iter().any(|node| node.id == id) {
             return;
         }
@@ -288,7 +289,7 @@ impl WikiGraph {
             node_tags.push("provider-output-audited".to_string());
             node_tags.push(record.provider_model.to_ascii_lowercase());
         }
-        node_tags.extend(record.atoms.iter().map(|atom| atom.to_ascii_lowercase()));
+        node_tags.extend(record_atoms.iter().map(|atom| atom.to_ascii_lowercase()));
         self.nodes.push(WikiNode {
             id: id.clone(),
             title: format!("Proof: {}", record.recipe_id),
@@ -315,7 +316,7 @@ impl WikiGraph {
             to: id.clone(),
             weight: 5,
         });
-        for atom in &record.atoms {
+        for atom in &record_atoms {
             self.edges.push(WikiEdge {
                 from: atom.clone(),
                 to: id.clone(),
@@ -478,11 +479,26 @@ fn wiki_links(text: &str) -> Vec<String> {
     links
 }
 
-fn proof_node_id(record: &ProofRecord) -> String {
+fn authored_record_atoms(record: &ProofRecord) -> Vec<String> {
+    let Some(recipe) = recipes()
+        .iter()
+        .find(|recipe| recipe.id == record.recipe_id)
+    else {
+        return Vec::new();
+    };
+    recipe
+        .atoms
+        .iter()
+        .filter(|atom| record.atoms.iter().any(|record_atom| record_atom == **atom))
+        .map(|atom| (*atom).to_string())
+        .collect()
+}
+
+fn proof_node_id(record: &ProofRecord, record_atoms: &[String]) -> String {
     let mut hasher = DefaultHasher::new();
     record.recipe_id.hash(&mut hasher);
     record.status.hash(&mut hasher);
-    record.atoms.hash(&mut hasher);
+    record_atoms.hash(&mut hasher);
     record.evidence_count.hash(&mut hasher);
     record.blockers.hash(&mut hasher);
     record.provider_state.hash(&mut hasher);
@@ -644,6 +660,41 @@ mod tests {
             12,
         );
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+    }
+
+    #[test]
+    fn proof_record_atoms_are_limited_to_authored_recipe_stack() {
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "proven".to_string(),
+            atoms: vec![
+                "measure".to_string(),
+                "compose".to_string(),
+                "flow".to_string(),
+                "preserve".to_string(),
+                "combine".to_string(),
+            ],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_hash: "fnv:abcdef1234567890".to_string(),
+            provider_output_len: 14,
+            route_len: 8,
+        });
+
+        let proof_node = graph
+            .nodes
+            .iter()
+            .find(|node| node.id.starts_with("proof:"))
+            .expect("audited provider proof should be promoted");
+        assert!(!proof_node.tags.iter().any(|tag| tag == "combine"));
+        assert!(!graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == "combine" && edge.to == proof_node.id));
     }
 
     #[test]
