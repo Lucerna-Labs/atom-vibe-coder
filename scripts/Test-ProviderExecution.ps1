@@ -48,7 +48,27 @@ try {
     if ($actualHash -ne $providerHash) {
         throw "provider execution artifact hash mismatch"
     }
-    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $providerArtifact -ArtifactHash $providerHash -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
+    $harnessId = [Guid]::NewGuid().ToString("N")
+    $harnessDir = Split-Path -Parent $providerArtifact
+    $harnessSource = Join-Path $harnessDir "provider-transport-harness-$harnessId.rs"
+    $harnessExe = Join-Path $harnessDir "provider-transport-harness-$harnessId.exe"
+    $providerLength = (Get-Item -LiteralPath $providerArtifact).Length
+    $harnessExpected = "MATH_ATOMS_PROVIDER_HARNESS_OK bytes=$providerLength"
+    $harnessCode = @'
+fn main() {
+    let path = std::env::var("MATH_ATOMS_PROVIDER_OUTPUT").expect("provider output path");
+    let bytes = std::fs::read(&path).expect("read provider output");
+    assert!(!bytes.is_empty(), "provider output must not be empty");
+    println!("MATH_ATOMS_PROVIDER_HARNESS_OK bytes={}", bytes.len());
+}
+'@
+    [System.IO.File]::WriteAllText($harnessSource, $harnessCode)
+    rustc --edition=2021 -D warnings $harnessSource -o $harnessExe
+    if ($LASTEXITCODE -ne 0) {
+        throw "provider transport harness compilation failed with exit code $LASTEXITCODE"
+    }
+    $attestation = New-AtomHarnessAttestation -HarnessId "provider-transport-functional-v1" -Gate "provider-execution" -Artifact $providerArtifact -Executable $harnessExe -ExpectedOutput $harnessExpected -AttestationPath (Join-Path $harnessDir "provider-transport-attestation-$harnessId.json") -WorkingDirectory $harnessDir -WorkPlanId $work.PlanId -ProviderModel $work.Model -ArtifactEnv "MATH_ATOMS_PROVIDER_OUTPUT"
+    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $providerArtifact -ArtifactHash $providerHash -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
 }
 catch {
     $failure = $_.Exception.Message

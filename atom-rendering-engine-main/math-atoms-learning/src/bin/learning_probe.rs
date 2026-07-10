@@ -1,3 +1,4 @@
+use math_atoms_attestation::{run_harness, HarnessRunSpec};
 use math_atoms_learning::{
     artifact_hash, effective_records, rank_records, LearningOutcome, LearningRecord,
     LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
@@ -20,9 +21,10 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("record") => record(&args[1..]),
+        Some("attest") => attest(&args[1..]),
         Some("summary") => summary(&args[1..]),
         Some("context") => context(&args[1..]),
-        _ => Err("expected record, summary, or context command".to_string()),
+        _ => Err("expected attest, record, summary, or context command".to_string()),
     }
 }
 
@@ -62,6 +64,8 @@ fn record(args: &[String]) -> Result<(), String> {
         work_plan_id: optional(args, "--work-plan-id").unwrap_or_default(),
         work_plan_manifest: optional(args, "--work-plan-manifest").unwrap_or_default(),
         work_packet_count: parse_optional(args, "--work-packet-count")?.unwrap_or(0),
+        harness_attestation_path: optional(args, "--harness-attestation").unwrap_or_default(),
+        harness_attestation_hash: optional(args, "--harness-attestation-hash").unwrap_or_default(),
         route_len: parse_optional(args, "--route-len")?.unwrap_or(0),
     };
     let record = LearningRecord::new(input);
@@ -82,6 +86,30 @@ fn record(args: &[String]) -> Result<(), String> {
         record.id,
         record.outcome.as_str(),
         records.len()
+    );
+    Ok(())
+}
+
+fn attest(args: &[String]) -> Result<(), String> {
+    let path = PathBuf::from(required(args, "--attestation")?);
+    let spec = HarnessRunSpec {
+        harness_id: required(args, "--harness-id")?,
+        gate: required(args, "--gate")?,
+        work_plan_id: optional(args, "--work-plan-id").unwrap_or_default(),
+        provider_model: optional(args, "--provider-model").unwrap_or_default(),
+        artifact_path: PathBuf::from(required(args, "--artifact")?),
+        executable_path: PathBuf::from(required(args, "--executable")?),
+        working_directory: PathBuf::from(required(args, "--working-directory")?),
+        expected_stdout: read_required_file(args, "--expected-output-file")?,
+        artifact_env: optional(args, "--artifact-env"),
+        timeout_seconds: parse_optional(args, "--timeout-seconds")?.unwrap_or(120),
+        attestation_path: path,
+    };
+    let written = run_harness(&spec).map_err(|error| error.to_string())?;
+    println!(
+        "MATH_ATOMS_ATTESTATION_OK path={} hash={}",
+        written.path.display(),
+        written.hash
     );
     Ok(())
 }

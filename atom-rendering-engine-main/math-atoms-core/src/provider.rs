@@ -94,6 +94,7 @@ pub struct PreparedProviderCall {
     pub evidence_context: String,
     pub body_template: String,
     pub request_timeout_seconds: u64,
+    pub credential_scope_hash: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -105,6 +106,7 @@ pub enum ProviderError {
     MissingModel,
     EmptyPrompt,
     InvalidBodyTemplate,
+    CredentialScopeChanged,
     Io(String),
     CurlFailed {
         code: Option<i32>,
@@ -361,6 +363,7 @@ impl ProviderConfig {
             evidence_context: context,
             body_template: self.body_template.clone(),
             request_timeout_seconds: self.request_timeout_seconds,
+            credential_scope_hash: self.credential_scope_hash.clone(),
         })
     }
 }
@@ -371,6 +374,7 @@ impl PreparedProviderCall {
     }
 
     pub fn execute_with_curl_report(&self) -> Result<ProviderExecutionOutput, ProviderError> {
+        self.execution_api_key()?;
         if let Some(plan) = &self.work_plan {
             return self.execute_work_plan(plan.clone());
         }
@@ -455,6 +459,20 @@ impl PreparedProviderCall {
     }
 
     fn execute_body_with_curl(&self, body_json: &str) -> Result<String, ProviderError> {
+        let api_key = self.execution_api_key()?;
+        let body = post_json(ProviderHttpRequest {
+            endpoint: &self.endpoint,
+            auth_header: &self.auth_header,
+            auth_scheme: &self.auth_scheme,
+            api_key: &api_key,
+            body_json,
+            timeout_seconds: self.request_timeout_seconds,
+        })
+        .map_err(provider_transport_error)?;
+        parse_provider_text(&body, self.wire_format, &self.response_key)
+    }
+
+    fn execution_api_key(&self) -> Result<String, ProviderError> {
         let api_key = std::env::var(&self.api_key_env)
             .map_err(|_| ProviderError::MissingApiKey {
                 env: self.api_key_env.clone(),
@@ -466,16 +484,10 @@ impl PreparedProviderCall {
                 env: self.api_key_env.clone(),
             });
         }
-        let body = post_json(ProviderHttpRequest {
-            endpoint: &self.endpoint,
-            auth_header: &self.auth_header,
-            auth_scheme: &self.auth_scheme,
-            api_key: &api_key,
-            body_json,
-            timeout_seconds: self.request_timeout_seconds,
-        })
-        .map_err(provider_transport_error)?;
-        parse_provider_text(&body, self.wire_format, &self.response_key)
+        if credential_scope_hash(&self.endpoint, &api_key) != self.credential_scope_hash {
+            return Err(ProviderError::CredentialScopeChanged);
+        }
+        Ok(api_key)
     }
 }
 
@@ -1098,6 +1110,27 @@ mod tests {
             .work_plan
             .unwrap();
         assert_ne!(first_plan.id, second_plan.id);
+    }
+
+    #[test]
+    fn execution_rejects_credential_change_after_plan_preparation() {
+        let key_env = format!("MATH_ATOMS_SCOPE_TEST_{}", std::process::id());
+        std::env::set_var(&key_env, "tenant-secret-one");
+        let config = ProviderConfig::from_values(
+            "custom",
+            "custom-model",
+            "https://example.invalid/run",
+            &key_env,
+        );
+        let call = config
+            .prepare_call("build an app", "provider-model-loop", &[])
+            .unwrap();
+        std::env::set_var(&key_env, "tenant-secret-two");
+        assert_eq!(
+            call.execute_with_curl_report(),
+            Err(ProviderError::CredentialScopeChanged)
+        );
+        std::env::remove_var(key_env);
     }
 
     #[test]

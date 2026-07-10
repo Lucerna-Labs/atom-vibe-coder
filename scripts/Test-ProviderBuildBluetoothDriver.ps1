@@ -267,8 +267,9 @@ $actual
 "@
             [System.IO.File]::WriteAllText($Review, $reviewText)
             Update-ArtifactManifest $actual
+            $attestation = New-AtomHarnessAttestation -HarnessId "rust-console-exact-v1" -Gate "bluetooth-driver" -Artifact $Source -Executable $Exe -ExpectedOutput $Expected -AttestationPath (Join-Path $attemptDir "harness-attestation.json") -WorkingDirectory $attemptDir -WorkPlanId $work.PlanId -ProviderModel $work.Model
             $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $Source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
+            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $Source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
             Write-Host "provider bluetooth driver ok: $actual"
             Write-Host "driver review: $Review"
             return

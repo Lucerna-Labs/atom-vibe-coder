@@ -817,6 +817,8 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            harness_attestation_path: String::new(),
+            harness_attestation_hash: String::new(),
             route_len: 4,
         });
         record.schema_version = LEARNING_SCHEMA_VERSION;
@@ -850,6 +852,45 @@ mod tests {
             item.node_id == "wiki:provider-proof:02-step-02-verify-product"
                 && item.excerpt.contains("functional harness")
         }));
+    }
+
+    #[test]
+    fn repository_complex_build_recipes_are_retrieved_as_precise_steps() {
+        let wiki = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("knowledge")
+            .join("wiki");
+        let graph = WikiGraph::from_markdown_dir(wiki).unwrap();
+        for (query, node_id, evidence) in [
+            (
+                "2d raster clipping golden images",
+                "wiki:2d-engine-build:04-step-04-rasterize-core-primitives",
+                "golden images",
+            ),
+            (
+                "3d homogeneous frustum clipping",
+                "wiki:3d-engine-build:06-step-06-clip-before-rasterization",
+                "homogeneous frustum",
+            ),
+            (
+                "wifi real hardware matrix",
+                "wiki:wifi-adapter-build:13-step-13-run-the-real-hardware-matrix",
+                "Simulation or a smoke scan cannot promote",
+            ),
+            (
+                "browser JavaScript runtime incomplete",
+                "wiki:browser-engine-build:16-step-16-open-blocker--script-runtime-is-incomplete",
+                "No JavaScript parser",
+            ),
+        ] {
+            let hits = graph.retrieve(query, &[], 24);
+            assert!(
+                hits.iter()
+                    .any(|item| { item.node_id == node_id && item.excerpt.contains(evidence) }),
+                "missing precise recipe evidence for {query}: {hits:?}"
+            );
+        }
     }
 
     #[test]

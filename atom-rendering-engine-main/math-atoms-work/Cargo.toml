@@ -8,4 +8,5 @@ description = "Fine-grained, resumable provider work packets for Atom Vibe Coder
 [dependencies]
 math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
+math-atoms-lock = { path = "../math-atoms-lock" }
 math-atoms-secrets = { path = "../math-atoms-secrets" }

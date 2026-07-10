@@ -1,15 +1,14 @@
 //! Strict proof records and durable JSONL persistence.
 
 use math_atoms_json::{parse as parse_json, JsonValue};
+use math_atoms_lock::{acquire_file_lease, FileLease};
 use math_atoms_secrets::redact_sensitive_text;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::Duration;
 
-const LOCK_RETRIES: usize = 400;
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+const LOCK_TIMEOUT: Duration = Duration::from_secs(4);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,15 +36,7 @@ pub struct ProofStore {
 }
 
 struct StoreLock {
-    path: PathBuf,
-    file: Option<fs::File>,
-}
-
-impl Drop for StoreLock {
-    fn drop(&mut self) {
-        self.file.take();
-        let _ = fs::remove_file(&self.path);
-    }
+    _lease: FileLease,
 }
 
 impl ProofStore {
@@ -128,27 +119,8 @@ impl ProofStore {
 
 fn acquire_lock(store_path: &Path) -> io::Result<StoreLock> {
     let path = lock_path(store_path);
-    for _ in 0..LOCK_RETRIES {
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                writeln!(file, "pid={}", std::process::id())?;
-                file.flush()?;
-                return Ok(StoreLock {
-                    path,
-                    file: Some(file),
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                reclaim_stale_lock(&path)?;
-                thread::sleep(LOCK_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::WouldBlock,
-        format!("proof store lock timed out at {}", path.display()),
-    ))
+    let lease = acquire_file_lease(&path, LOCK_TIMEOUT, STALE_LOCK_AGE)?;
+    Ok(StoreLock { _lease: lease })
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -157,27 +129,6 @@ fn lock_path(path: &Path) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("proofs.jsonl");
     path.with_file_name(format!("{name}.lock"))
-}
-
-fn reclaim_stale_lock(path: &Path) -> io::Result<()> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    let stale = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age > STALE_LOCK_AGE);
-    if stale {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
 }
 
 impl ProofRecord {

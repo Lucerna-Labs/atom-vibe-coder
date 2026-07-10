@@ -302,7 +302,8 @@ try {
     Assert-BmpArtifact $bmp
     $source = Join-Path $appDir "src\main.rs"
     Add-ManifestRow $Name $expected $source $exe $bmp
-    Write-AtomLearningRecord -Source "design-upload" -Intent $LearningIntent -Recipe "native-atom-renderer" -Atoms "project,combine,measure,compose" -Gate "design-upload-build" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $bmp
+    $attestation = New-AtomHarnessAttestation -HarnessId "design-upload-functional-v1" -Gate "design-upload-build" -Artifact $bmp -Executable $exe -ExpectedOutput $expected -AttestationPath (Join-Path $appDir "harness-attestation.json") -WorkingDirectory $appDir -ArtifactEnv "MATH_ATOMS_DESIGN_APP_BMP"
+    Write-AtomLearningRecord -Source "design-upload" -Intent $LearningIntent -Recipe "native-atom-renderer" -Atoms "project,combine,measure,compose" -Gate "design-upload-build" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $bmp -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
     Write-Host "design upload build ok: $expected"
 }
 catch {

@@ -7,4 +7,5 @@ description = "Strict durable proof records and JSONL persistence for Atom Vibe 
 
 [dependencies]
 math-atoms-json = { path = "../math-atoms-json" }
+math-atoms-lock = { path = "../math-atoms-lock" }
 math-atoms-secrets = { path = "../math-atoms-secrets" }

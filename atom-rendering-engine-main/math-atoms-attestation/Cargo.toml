@@ -1,0 +1,11 @@
+[package]
+name = "math-atoms-attestation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Typed executable harness attestations for Atom Vibe Coder learning authority."
+
+[dependencies]
+math-atoms-hash = { path = "../math-atoms-hash" }
+math-atoms-json = { path = "../math-atoms-json" }
+

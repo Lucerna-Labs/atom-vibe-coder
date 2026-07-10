@@ -5,28 +5,15 @@ use crate::{
 };
 use math_atoms_hash::{sha256_file, sha256_tagged, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
+use math_atoms_lock::{acquire_file_lease, FileLease};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
-static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn OpenProcess(
-        desired_access: u32,
-        inherit_handle: i32,
-        process_id: u32,
-    ) -> *mut std::ffi::c_void;
-    fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredPacket {
@@ -57,19 +44,7 @@ pub struct VerifiedWorkPlan {
 
 #[derive(Debug)]
 pub struct WorkPlanLease {
-    path: PathBuf,
-    owner_token: String,
-}
-
-impl Drop for WorkPlanLease {
-    fn drop(&mut self) {
-        if fs::read_to_string(&self.path)
-            .map(|value| value == self.owner_token)
-            .unwrap_or(false)
-        {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
+    _lease: FileLease,
 }
 
 pub fn default_work_root() -> PathBuf {
@@ -434,44 +409,8 @@ impl WorkPlanStore {
         validate_id(plan_id)?;
         fs::create_dir_all(&self.root)?;
         let lock = self.root.join(format!("{plan_id}.lock"));
-        let deadline = Instant::now() + LOCK_TIMEOUT;
-        loop {
-            match OpenOptions::new().write(true).create_new(true).open(&lock) {
-                Ok(mut file) => {
-                    let owner_token = format!(
-                        "pid={} time_ms={} sequence={}",
-                        std::process::id(),
-                        now_ms(),
-                        LEASE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-                    );
-                    file.write_all(owner_token.as_bytes())?;
-                    file.sync_all()?;
-                    return Ok(WorkPlanLease {
-                        path: lock,
-                        owner_token,
-                    });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(&lock) {
-                        match fs::remove_file(&lock) {
-                            Ok(()) => continue,
-                            Err(remove) if remove.kind() == std::io::ErrorKind::NotFound => {
-                                continue
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    if Instant::now() >= deadline {
-                        return Err(WorkError::Io(format!(
-                            "timed out acquiring plan lock {}",
-                            lock.display()
-                        )));
-                    }
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        let lease = acquire_file_lease(&lock, LOCK_TIMEOUT, STALE_LOCK_AGE)?;
+        Ok(WorkPlanLease { _lease: lease })
     }
 
     pub fn write_plan_manifest(&self, plan: &WorkPlan) -> Result<PathBuf, WorkError> {
@@ -789,43 +728,6 @@ fn validate_id(value: &str) -> Result<(), WorkError> {
     Ok(())
 }
 
-fn lock_is_stale(path: &Path) -> bool {
-    let old_enough = fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .map(|age| age > STALE_LOCK_AGE)
-        .unwrap_or(false);
-    if !old_enough {
-        return false;
-    }
-    let pid = fs::read_to_string(path).ok().and_then(|text| {
-        text.split_whitespace()
-            .find_map(|part| part.strip_prefix("pid="))
-            .and_then(|value| value.parse::<u32>().ok())
-    });
-    pid.map(|pid| !process_is_alive(pid)).unwrap_or(true)
-}
-
-#[cfg(windows)]
-fn process_is_alive(pid: u32) -> bool {
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            false
-        } else {
-            CloseHandle(handle);
-            true
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn process_is_alive(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
-}
-
 fn string<'a>(value: &'a JsonValue, key: &str) -> Result<&'a str, WorkError> {
     value
         .get(key)
@@ -1051,20 +953,14 @@ mod tests {
     }
 
     #[test]
-    fn active_process_is_not_treated_as_a_stale_plan_owner() {
-        assert!(process_is_alive(std::process::id()));
-    }
-
-    #[test]
-    fn lease_drop_never_removes_a_replacement_owner_lock() {
+    fn work_plan_lease_uses_shared_owner_safe_lock() {
         let (path, store) = temp_store("lease-owner");
         let plan = expanded_plan();
         let lease = store.acquire(&plan.id).unwrap();
         let lock = path.join(format!("{}.lock", plan.id));
-        fs::write(&lock, "pid=999999 time_ms=1 sequence=2").unwrap();
-        drop(lease);
         assert!(lock.exists());
-        fs::remove_file(lock).unwrap();
+        drop(lease);
+        assert!(!lock.exists());
         fs::remove_dir_all(path).unwrap();
     }
 }

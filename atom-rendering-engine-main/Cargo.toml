@@ -4,6 +4,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "math-atoms-attestation",
     "math-atoms-bus",
     "math-atoms-core",
     "math-atoms-doctrine",
@@ -11,6 +12,7 @@ members = [
     "math-atoms-hash",
     "math-atoms-json",
     "math-atoms-learning",
+    "math-atoms-lock",
     "math-atoms-native",
     "math-atoms-proof",
     "math-atoms-provider-transport",

@@ -8,6 +8,7 @@ $Engine = Join-Path $Root "atom-rendering-engine-main"
 $TestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-learning-functional-" + [Guid]::NewGuid().ToString("N"))
 $Store = Join-Path $TestDir "learning.jsonl"
 $Artifact = Join-Path $TestDir "bluetooth-driver.rs"
+$Executable = Join-Path $TestDir "bluetooth-driver.exe"
 $OriginalStore = $env:MATH_ATOMS_LEARNING_STORE
 $Intent = "Build a Bluetooth driver with connection validation"
 $Atoms = "scan,project,compose,measure,preserve,order"
@@ -17,10 +18,15 @@ $Failure = "compiler rejected missing connect transition; provider token sk-func
 try {
     New-Item -ItemType Directory -Path $TestDir -Force | Out-Null
     [System.IO.File]::WriteAllText($Artifact, 'fn main() { println!("bluetooth corrected"); }')
+    rustc --edition=2021 -D warnings $Artifact -o $Executable
+    if ($LASTEXITCODE -ne 0) {
+        throw "self-learning executable compilation failed with exit code $LASTEXITCODE"
+    }
     $env:MATH_ATOMS_LEARNING_STORE = $Store
 
     Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 1 -Outcome "failed" -Failure $Failure
-    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 2 -Outcome "succeeded" -Correction $Failure -Artifact $Artifact
+    $attestation = New-AtomHarnessAttestation -HarnessId "self-learning-restart-v1" -Gate "bluetooth-driver" -Artifact $Artifact -Executable $Executable -ExpectedOutput "bluetooth corrected" -AttestationPath (Join-Path $TestDir "harness-attestation.json") -WorkingDirectory $TestDir
+    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 2 -Outcome "succeeded" -Correction $Failure -Artifact $Artifact -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
 
     $lines = @([System.IO.File]::ReadAllLines($Store))
     if ($lines.Count -ne 2) {
@@ -32,6 +38,9 @@ try {
     }
     if ($text -notmatch '"artifact_hash":"sha256:[0-9a-f]{64}"') {
         throw "self-learning success is missing an artifact hash: $text"
+    }
+    if ($text -notmatch '"harness_attestation_hash":"sha256:[0-9a-f]{64}"') {
+        throw "self-learning success is missing typed harness evidence: $text"
     }
     if ($text -match 'sk-functional-secret') {
         throw "self-learning ledger leaked token-like secret material"

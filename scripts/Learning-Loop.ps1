@@ -60,6 +60,8 @@ function Write-AtomLearningRecord {
         [string]$WorkPlanId = "",
         [string]$WorkPlanManifest = "",
         [int]$WorkPacketCount = 0,
+        [string]$HarnessAttestation = "",
+        [string]$HarnessAttestationHash = "",
         [int]$RouteLen = 4
     )
 
@@ -106,11 +108,74 @@ function Write-AtomLearningRecord {
         if ($WorkPacketCount -gt 0) {
             $arguments += @("--work-packet-count", $WorkPacketCount.ToString())
         }
+        if (-not [string]::IsNullOrWhiteSpace($HarnessAttestation)) {
+            $arguments += @("--harness-attestation", $HarnessAttestation)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($HarnessAttestationHash)) {
+            $arguments += @("--harness-attestation-hash", $HarnessAttestationHash)
+        }
         $result = Invoke-AtomLearningProbe -Arguments $arguments
         if ($result -notmatch '^MATH_ATOMS_LEARNING_OK ') {
             throw "learning probe returned an unexpected result: $result"
         }
         Write-Host $result
+    }
+    finally {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function New-AtomHarnessAttestation {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("rust-console-exact-v1", "native-pmre-functional-v1", "design-upload-functional-v1", "provider-transport-functional-v1", "self-learning-restart-v1")][string]$HarnessId,
+        [Parameter(Mandatory = $true)][string]$Gate,
+        [Parameter(Mandatory = $true)][string]$Artifact,
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string]$ExpectedOutput,
+        [Parameter(Mandatory = $true)][string]$AttestationPath,
+        [string]$WorkingDirectory = "",
+        [string]$WorkPlanId = "",
+        [string]$ProviderModel = "",
+        [int]$TimeoutSeconds = 120,
+        [ValidateSet("", "MATH_ATOMS_REAL_APP_BMP", "MATH_ATOMS_DESIGN_APP_BMP", "MATH_ATOMS_PROVIDER_OUTPUT")][string]$ArtifactEnv = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $WorkingDirectory = Split-Path -Parent $Executable
+    }
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-attestation-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+    try {
+        $expectedFile = Join-Path $tempDir "expected-output.txt"
+        [System.IO.File]::WriteAllText($expectedFile, $ExpectedOutput)
+        $arguments = @(
+            "attest",
+            "--harness-id", $HarnessId,
+            "--gate", $Gate,
+            "--artifact", $Artifact,
+            "--executable", $Executable,
+            "--working-directory", $WorkingDirectory,
+            "--expected-output-file", $expectedFile,
+            "--attestation", $AttestationPath,
+            "--timeout-seconds", $TimeoutSeconds.ToString()
+        )
+        if (-not [string]::IsNullOrWhiteSpace($WorkPlanId)) {
+            $arguments += @("--work-plan-id", $WorkPlanId)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ProviderModel)) {
+            $arguments += @("--provider-model", $ProviderModel)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ArtifactEnv)) {
+            $arguments += @("--artifact-env", $ArtifactEnv)
+        }
+        $result = Invoke-AtomLearningProbe -Arguments $arguments
+        if ($result -notmatch '^MATH_ATOMS_ATTESTATION_OK path=(?<path>.+) hash=(?<hash>sha256:[0-9a-f]{64})$') {
+            throw "attestation probe returned an unexpected result: $result"
+        }
+        return [pscustomobject]@{
+            Path = $Matches.path.Trim()
+            Hash = $Matches.hash
+        }
     }
     finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue

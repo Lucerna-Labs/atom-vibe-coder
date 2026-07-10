@@ -137,13 +137,7 @@ fn collect_assignments(value: &str, spans: &mut Vec<(usize, usize)>) {
         if !matches!(bytes[separator], b'=' | b':') {
             continue;
         }
-        let mut label_end = separator;
-        while label_end > 0
-            && (bytes[label_end - 1].is_ascii_whitespace()
-                || matches!(bytes[label_end - 1], b'"' | b'\'' | b'`'))
-        {
-            label_end -= 1;
-        }
+        let label_end = skip_backward_label_spacing(value, separator);
         let mut label_start = label_end;
         while label_start > 0 && label_char(bytes[label_start - 1]) {
             label_start -= 1;
@@ -155,25 +149,30 @@ fn collect_assignments(value: &str, spans: &mut Vec<(usize, usize)>) {
         if !sensitive_label(&label) {
             continue;
         }
-        let mut start = separator + 1;
-        while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-            start += 1;
-        }
-        if start < bytes.len() && matches!(bytes[start], b'"' | b'\'' | b'`') {
+        let mut start = skip_forward_whitespace(value, separator + 1);
+        let quote = bytes
+            .get(start)
+            .copied()
+            .filter(|byte| matches!(byte, b'"' | b'\'' | b'`'));
+        if quote.is_some() {
             start += 1;
         }
         if starts_with_ignore_ascii_case(bytes, start, b"bearer") {
             start += b"bearer".len();
-            while start < bytes.len() && bytes[start].is_ascii_whitespace() {
-                start += 1;
-            }
+            start = skip_forward_whitespace(value, start);
         }
         let mut end = start;
-        while end < bytes.len() && !assignment_delimiter(bytes[end]) {
-            end += 1;
-        }
-        while end > start && matches!(bytes[end - 1], b'"' | b'\'' | b'`') {
-            end -= 1;
+        if let Some(quote) = quote {
+            while end < bytes.len() {
+                if bytes[end] == quote && (end == start || bytes[end - 1] != b'\\') {
+                    break;
+                }
+                end += 1;
+            }
+        } else {
+            while end < bytes.len() && !assignment_delimiter(bytes[end]) {
+                end += 1;
+            }
         }
         if should_redact_assignment(&label, &value[start..end]) {
             spans.push((start, end));
@@ -252,6 +251,32 @@ fn assignment_delimiter(byte: u8) -> bool {
         )
 }
 
+fn skip_forward_whitespace(value: &str, mut index: usize) -> usize {
+    while index < value.len() {
+        let Some(ch) = value[index..].chars().next() else {
+            break;
+        };
+        if !ch.is_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
+}
+
+fn skip_backward_label_spacing(value: &str, mut index: usize) -> usize {
+    while index > 0 {
+        let Some(ch) = value[..index].chars().next_back() else {
+            break;
+        };
+        if !ch.is_whitespace() && !matches!(ch, '"' | '\'' | '`') {
+            break;
+        }
+        index -= ch.len_utf8();
+    }
+    index
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +315,20 @@ mod tests {
         assert!(output.starts_with("fn main() {\n    let api_key=\""));
         assert!(output.ends_with("\";\n}\n"));
         assert!(!output.contains("sk-abcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn redacts_obfuscated_whitespace_credentials_in_quoted_assignments() {
+        for input in [
+            "let api_key = \"s k - a b c d e f g h i j k\";",
+            "token = \"h\tu\tn\nt\ne\tr\t2\"",
+            "\"password\" : \"p a s s w o r d value\"",
+            "api_key = \"\u{2003}s k - spaced unicode\"",
+            "api_key\u{2003}=\u{2003}\"spaced-secret-value\"",
+        ] {
+            let output = redact_sensitive_text(input);
+            assert!(output.contains("[REDACTED]"), "{input}");
+            assert!(contains_credential_material(input), "{input}");
+        }
     }
 }

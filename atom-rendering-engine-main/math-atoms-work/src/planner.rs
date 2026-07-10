@@ -102,7 +102,7 @@ fn validate_manifest(
     for entry in entries {
         require_exact_fields(entry, &["path", "purpose", "acceptance"])?;
         files.push(WorkFile {
-            path: required_string(entry, "path")?.trim().to_string(),
+            path: required_string(entry, "path")?.to_string(),
             purpose: required_string(entry, "purpose")?.trim().to_string(),
             acceptance: required_strings(entry, "acceptance", true)?,
         });
@@ -138,23 +138,78 @@ fn validate_file_artifact(
             packet.id
         )));
     }
-    for marker in [
-        "todo!",
-        "unimplemented!",
-        "FIXME",
-        "panic!(\"TODO\")",
-        "[placeholder]",
-    ] {
-        if trimmed.contains(marker) {
-            return Err(WorkError::InvalidOutput(format!(
-                "packet {} contains forbidden placeholder marker {marker}",
-                packet.id
-            )));
-        }
+    let content = &trimmed[first_newline + 1..content_end];
+    if let Some(marker) = incomplete_code_marker(content) {
+        return Err(WorkError::InvalidOutput(format!(
+            "packet {} contains forbidden incomplete-code marker {marker}",
+            packet.id
+        )));
     }
     Ok(ValidatedPacketOutput {
         context: trimmed.to_string(),
         files: Vec::new(),
+    })
+}
+
+fn incomplete_code_marker(content: &str) -> Option<&'static str> {
+    let lower = content.to_lowercase();
+    let compact = lower
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    for (needle, label) in [
+        ("todo!", "todo macro"),
+        ("unimplemented!", "unimplemented macro"),
+        ("panic!(\"todo\")", "todo panic"),
+        ("panic!('todo')", "todo panic"),
+        ("[placeholder]", "placeholder sentinel"),
+    ] {
+        if compact.contains(needle) {
+            return Some(label);
+        }
+    }
+    for line in lower.lines() {
+        let line = line.trim();
+        if line == "..." {
+            return Some("omitted-content ellipsis");
+        }
+        if [
+            "not implemented",
+            "not yet implemented",
+            "implementation omitted",
+            "code omitted",
+            "rest omitted",
+            "insert code here",
+            "same as above",
+        ]
+        .iter()
+        .any(|marker| line.contains(marker))
+        {
+            return Some("deferred implementation phrase");
+        }
+        let comment = line.starts_with("//")
+            || line.starts_with('#')
+            || line.starts_with("/*")
+            || line.starts_with('*')
+            || line.starts_with("<!--");
+        if comment
+            && ["todo", "fixme", "stub", "placeholder"]
+                .iter()
+                .any(|word| contains_word(line, word))
+        {
+            return Some("incomplete-code comment");
+        }
+    }
+    None
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let end = start + word.len();
+        let after = text[end..].chars().next();
+        !before.is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            && !after.is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
     })
 }
 
@@ -274,6 +329,11 @@ mod tests {
         let validated = validate_packet_output(&packet, &output).unwrap();
         assert_eq!(validated.files[0].path, "src/main.rs");
         assert!(validated.context.starts_with('{'));
+        let invalid =
+            validate_packet_output(&packet, &output.replace("src/main.rs", " src/main.rs"))
+                .unwrap();
+        assert_eq!(invalid.files[0].path, " src/main.rs");
+        assert!(crate::model::validate_files(&invalid.files).is_err());
     }
 
     #[test]
@@ -282,6 +342,17 @@ mod tests {
         assert!(validate_packet_output(&packet, "```rust\nfn main() {}\n```").is_ok());
         assert!(validate_packet_output(&packet, "fn main() {}").is_err());
         assert!(validate_packet_output(&packet, "```rust\ntodo!()\n```").is_err());
+        assert!(validate_packet_output(&packet, "```rust\nToDo ! ()\n```").is_err());
+        assert!(validate_packet_output(
+            &packet,
+            "```rust\n// FiXmE: finish this\nfn main() {}\n```"
+        )
+        .is_err());
+        assert!(validate_packet_output(
+            &packet,
+            "```html\n<input placeholder=\"Search\"><script>const rest = (...args) => args;</script>\n```"
+        )
+        .is_ok());
         assert!(validate_packet_output(&packet, "```rust\nfn main() {}\n```\nprose").is_err());
     }
 

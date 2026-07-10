@@ -4,11 +4,13 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 
 ## Current Surface
 
+- `atom-rendering-engine-main/math-atoms-attestation` owns allowlisted executable harness runs and immutable source/executable/output attestations for learning authority.
 - `atom-rendering-engine-main/math-atoms-bus` owns dependency-free L0-L3 Spiderweb Bus routing, ramps, intersections, backpressure, and fabric-thread evidence.
 - `atom-rendering-engine-main/math-atoms-core` owns provider adapters, recipe selection, proof state, and runtime orchestration over the bus.
 - `atom-rendering-engine-main/math-atoms-graph` owns graph-native wiki chunking, relationship retrieval, proof promotion, and bounded learning-node memory.
 - `atom-rendering-engine-main/math-atoms-hash` owns dependency-free SHA-256 hashing for recomputable provider and artifact evidence.
 - `atom-rendering-engine-main/math-atoms-learning` owns the append-only learning ledger, concurrent writer lock, artifact hashing, bounded memory, relevance ranking, redaction, and `learning_probe` CLI.
+- `atom-rendering-engine-main/math-atoms-lock` owns kernel-released cross-process leases and auditable process-start owner tokens for work, learning, and proof stores.
 - `atom-rendering-engine-main/math-atoms-json` fully parses provider and ledger JSON, including Unicode surrogate pairs, duplicate-key rejection, depth limits, and trailing-data rejection, without third-party dependencies.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `atom-rendering-engine-main/math-atoms-proof` owns the strict append-only proof ledger and backward-compatible proof-record schema.
@@ -37,7 +39,7 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 
 ## Durable Self-Learning
 
-Every terminal native or build-harness attempt appends a validated event to `learning.jsonl`. Failed events remain correction evidence and cannot promote a recipe as proof. Model completion remains `verification pending`; it is not a successful learning event. Schema-v3 provider successes require a real product harness, an existing SHA-256 artifact, a recomputable canonical expanded work manifest, and every model-bound packet artifact; native non-provider successes require a complete L0-L3 route. Immediate retries receive the current failure, while later runs retrieve related durable lessons through recipe and atom relationships before the provider request is prepared. Legacy schema-v1/v2 records remain readable audit history but cannot promote provider evidence.
+Every terminal native or build-harness attempt appends a validated event to `learning.jsonl`. Failed events remain correction evidence and cannot promote a recipe as proof. Model completion remains `verification pending`; it is not a successful learning event. Schema-v4 provider successes require an allowlisted executable harness attestation, existing SHA-256 source and executable artifacts, exact expected output, a recomputable canonical expanded work manifest, and every model-bound packet artifact; native non-provider successes require a complete L0-L3 route. Immediate retries receive the current failure, while later runs retrieve related durable lessons through recipe and atom relationships before the provider request is prepared. Legacy schema-v1/v2/v3 records remain readable audit history but cannot promote provider evidence.
 
 Learning events move through explicit L0 observation, L1 persistence, L2 graph joining, and L3 orchestration messages. The active graph memory is deduplicated and capped at 256 learning nodes; the append-only ledger remains the audit history. Provider prompts label retrieved evidence as untrusted historical data so stored text cannot become executable prompt instructions.
 

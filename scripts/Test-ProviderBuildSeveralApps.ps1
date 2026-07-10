@@ -208,8 +208,9 @@ try {
                 if ($actual -ne $spec.Expected) {
                     throw "output mismatch. Expected '$($spec.Expected)' but got '$actual'"
                 }
+                $attestation = New-AtomHarnessAttestation -HarnessId "rust-console-exact-v1" -Gate "app-$($spec.Name)" -Artifact $source -Executable $exe -ExpectedOutput $spec.Expected -AttestationPath (Join-Path $appDir "harness-attestation.json") -WorkingDirectory $appDir -WorkPlanId $work.PlanId -ProviderModel $work.Model
                 $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
+                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
                 $passed += "$($spec.Name)=$actual"
                 $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe`t"
                 $passedApp = $true

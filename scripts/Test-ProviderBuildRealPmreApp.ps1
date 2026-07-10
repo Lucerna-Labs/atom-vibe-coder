@@ -666,8 +666,9 @@ try {
             Assert-BmpArtifact $bmp
             $source = Join-Path $appDir "src\main.rs"
             Add-ManifestRow $spec.Slug $Expected $source $exe $bmp
+            $attestation = New-AtomHarnessAttestation -HarnessId "native-pmre-functional-v1" -Gate "natural-language-pmre-app" -Artifact $bmp -Executable $exe -ExpectedOutput $Expected -AttestationPath (Join-Path $appDir "harness-attestation.json") -WorkingDirectory $appDir -WorkPlanId $work.PlanId -ProviderModel $work.Model -ArtifactEnv "MATH_ATOMS_REAL_APP_BMP"
             $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $bmp -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
+            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $bmp -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount -HarnessAttestation $attestation.Path -HarnessAttestationHash $attestation.Hash
             Write-Host "provider natural-language PMRE app ok: spec generated, harness compiled, interacted, rendered: $Expected"
             return
         }

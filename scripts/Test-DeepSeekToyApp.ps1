@@ -67,7 +67,7 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $env:MATH_ATOMS_LEARNING_STORE)) {
-        throw "DeepSeek Pro gate did not persist schema-v3 learning evidence"
+        throw "DeepSeek Pro gate did not persist schema-v4 attested learning evidence"
     }
     $learning = @([System.IO.File]::ReadAllLines($env:MATH_ATOMS_LEARNING_STORE) | ForEach-Object { $_ | ConvertFrom-Json })
     $success = @($learning | Where-Object { $_.source -eq "provider-multi-app" -and $_.gate -eq "app-counter" -and $_.outcome -eq "succeeded" }) | Select-Object -Last 1

@@ -1,0 +1,9 @@
+[package]
+name = "math-atoms-lock"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Owner-safe cross-process file leases for Atom Vibe Coder stores."
+
+[dependencies]
+math-atoms-hash = { path = "../math-atoms-hash" }

@@ -4,26 +4,27 @@
 //! structured context to correct future attempts. Successful, gate-passing artifacts
 //! can be promoted as reusable graph evidence by the runtime.
 
+use math_atoms_attestation::{verify_harness_attestation, HarnessExpectation};
 use math_atoms_hash::{sha256_file, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
+use math_atoms_lock::{acquire_file_lease, FileLease};
 use math_atoms_secrets::redact_sensitive_text;
 use math_atoms_work::verify_work_plan_evidence;
 use std::collections::HashSet;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const LEARNING_SCHEMA_VERSION: u32 = 3;
+pub const LEARNING_SCHEMA_VERSION: u32 = 4;
 const LEGACY_LEARNING_SCHEMA_VERSION: u32 = 1;
 const LEGACY_SHA_SCHEMA_VERSION: u32 = 2;
+const LEGACY_WORK_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_GRAPH_MEMORY_LIMIT: usize = 256;
 const MAX_SHORT_FIELD: usize = 512;
 const MAX_LONG_FIELD: usize = 4_096;
-const LOCK_RETRIES: usize = 200;
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+const LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -70,6 +71,8 @@ pub struct LearningRecord {
     pub work_plan_id: String,
     pub work_plan_manifest: String,
     pub work_packet_count: usize,
+    pub harness_attestation_path: String,
+    pub harness_attestation_hash: String,
     pub route_len: usize,
 }
 
@@ -90,6 +93,8 @@ pub struct LearningRecordInput {
     pub work_plan_id: String,
     pub work_plan_manifest: String,
     pub work_packet_count: usize,
+    pub harness_attestation_path: String,
+    pub harness_attestation_hash: String,
     pub route_len: usize,
 }
 
@@ -115,15 +120,7 @@ pub struct LearningStore {
 }
 
 struct StoreLock {
-    path: PathBuf,
-    file: Option<File>,
-}
-
-impl Drop for StoreLock {
-    fn drop(&mut self) {
-        self.file.take();
-        let _ = fs::remove_file(&self.path);
-    }
+    _lease: FileLease,
 }
 
 impl LearningRecord {
@@ -162,6 +159,14 @@ impl LearningRecord {
             work_plan_id: sanitize_text(&input.work_plan_id, MAX_SHORT_FIELD),
             work_plan_manifest: sanitize_text(&input.work_plan_manifest, MAX_LONG_FIELD),
             work_packet_count: input.work_packet_count,
+            harness_attestation_path: sanitize_text(
+                &input.harness_attestation_path,
+                MAX_LONG_FIELD,
+            ),
+            harness_attestation_hash: sanitize_text(
+                &input.harness_attestation_hash,
+                MAX_SHORT_FIELD,
+            ),
             route_len: input.route_len,
         }
     }
@@ -169,7 +174,7 @@ impl LearningRecord {
     pub fn validate(&self) -> Result<(), String> {
         self.validate_structure()?;
         if self.outcome == LearningOutcome::Succeeded
-            && self.schema_version == LEARNING_SCHEMA_VERSION
+            && self.schema_version >= LEGACY_WORK_SCHEMA_VERSION
             && self.requires_work_evidence()
         {
             let verified = verify_work_plan_evidence(
@@ -184,13 +189,32 @@ impl LearningRecord {
                 );
             }
         }
+        if self.outcome == LearningOutcome::Succeeded
+            && self.schema_version == LEARNING_SCHEMA_VERSION
+            && self.requires_harness_evidence()
+        {
+            verify_harness_attestation(
+                &self.harness_attestation_path,
+                &self.harness_attestation_hash,
+                HarnessExpectation {
+                    gate: &self.gate,
+                    work_plan_id: &self.work_plan_id,
+                    provider_model: &self.provider_model,
+                    artifact_path: &self.artifact_path,
+                },
+            )
+            .map_err(|error| format!("harness attestation failed: {error}"))?;
+        }
         Ok(())
     }
 
     pub fn validate_structure(&self) -> Result<(), String> {
         if !matches!(
             self.schema_version,
-            LEGACY_LEARNING_SCHEMA_VERSION | LEGACY_SHA_SCHEMA_VERSION | LEARNING_SCHEMA_VERSION
+            LEGACY_LEARNING_SCHEMA_VERSION
+                | LEGACY_SHA_SCHEMA_VERSION
+                | LEGACY_WORK_SCHEMA_VERSION
+                | LEARNING_SCHEMA_VERSION
         ) {
             return Err(format!(
                 "unsupported learning schema version {}",
@@ -236,7 +260,7 @@ impl LearningRecord {
                             .to_string(),
                     );
                 }
-                if self.schema_version == LEARNING_SCHEMA_VERSION
+                if self.schema_version >= LEGACY_WORK_SCHEMA_VERSION
                     && self.requires_work_evidence()
                     && (self.work_plan_id.trim().is_empty()
                         || self.work_plan_manifest.trim().is_empty()
@@ -244,6 +268,16 @@ impl LearningRecord {
                 {
                     return Err(
                         "successful provider learning requires a verified meticulous work plan"
+                            .to_string(),
+                    );
+                }
+                if self.schema_version == LEARNING_SCHEMA_VERSION
+                    && self.requires_harness_evidence()
+                    && (self.harness_attestation_path.trim().is_empty()
+                        || !valid_sha256_tag(&self.harness_attestation_hash))
+                {
+                    return Err(
+                        "successful harness learning requires a typed harness attestation"
                             .to_string(),
                     );
                 }
@@ -277,6 +311,18 @@ impl LearningRecord {
             && sha256_file(&self.artifact_path)
                 .map(|actual| actual == self.artifact_hash)
                 .unwrap_or(false)
+            && (!self.requires_harness_evidence()
+                || verify_harness_attestation(
+                    &self.harness_attestation_path,
+                    &self.harness_attestation_hash,
+                    HarnessExpectation {
+                        gate: &self.gate,
+                        work_plan_id: &self.work_plan_id,
+                        provider_model: &self.provider_model,
+                        artifact_path: &self.artifact_path,
+                    },
+                )
+                .is_ok())
             && (!self.requires_work_evidence()
                 || verify_work_plan_evidence(
                     &self.work_plan_manifest,
@@ -372,6 +418,12 @@ impl LearningRecord {
             || self.source.starts_with("deepseek-")
     }
 
+    fn requires_harness_evidence(&self) -> bool {
+        !(self.source == "native-app"
+            && self.provider_model.trim().is_empty()
+            && self.route_len >= 4)
+    }
+
     pub fn to_json(&self) -> String {
         let prefix = format!(
             "{{\"schema_version\":{},\"id\":\"{}\",\"timestamp_ms\":{},\"source\":\"{}\",\"intent\":\"{}\",\"recipe_id\":\"{}\",\"atom_stack\":[{}],\"gate\":\"{}\",\"attempt\":{},\"outcome\":\"{}\",\"failure\":\"{}\",\"correction\":\"{}\",\"artifact_path\":\"{}\",\"artifact_hash\":\"{}\",\"provider_model\":\"{}\"",
@@ -391,14 +443,22 @@ impl LearningRecord {
             escape(&self.artifact_hash),
             escape(&self.provider_model)
         );
-        if self.schema_version < LEARNING_SCHEMA_VERSION {
+        if self.schema_version < LEGACY_WORK_SCHEMA_VERSION {
             return format!("{prefix},\"route_len\":{}}}", self.route_len);
         }
-        format!(
-            "{prefix},\"work_plan_id\":\"{}\",\"work_plan_manifest\":\"{}\",\"work_packet_count\":{},\"route_len\":{}}}",
+        let work = format!(
+            "{prefix},\"work_plan_id\":\"{}\",\"work_plan_manifest\":\"{}\",\"work_packet_count\":{}",
             escape(&self.work_plan_id),
             escape(&self.work_plan_manifest),
-            self.work_packet_count,
+            self.work_packet_count
+        );
+        if self.schema_version == LEGACY_WORK_SCHEMA_VERSION {
+            return format!("{work},\"route_len\":{}}}", self.route_len);
+        }
+        format!(
+            "{work},\"harness_attestation_path\":\"{}\",\"harness_attestation_hash\":\"{}\",\"route_len\":{}}}",
+            escape(&self.harness_attestation_path),
+            escape(&self.harness_attestation_hash),
             self.route_len
         )
     }
@@ -423,15 +483,20 @@ impl LearningRecord {
             "route_len",
         ];
         const WORK_FIELDS: [&str; 3] = ["work_plan_id", "work_plan_manifest", "work_packet_count"];
+        const HARNESS_FIELDS: [&str; 2] = ["harness_attestation_path", "harness_attestation_hash"];
         let root = parse_json(line).ok()?;
         let object = root.as_object()?;
         let schema_version = json_u32(&root, "schema_version")?;
-        let uses_work_schema = schema_version == LEARNING_SCHEMA_VERSION;
-        let expected_len = BASE_FIELDS.len() + usize::from(uses_work_schema) * WORK_FIELDS.len();
+        let uses_work_schema = schema_version >= LEGACY_WORK_SCHEMA_VERSION;
+        let uses_harness_schema = schema_version == LEARNING_SCHEMA_VERSION;
+        let expected_len = BASE_FIELDS.len()
+            + usize::from(uses_work_schema) * WORK_FIELDS.len()
+            + usize::from(uses_harness_schema) * HARNESS_FIELDS.len();
         if object.len() != expected_len
             || object.iter().any(|(name, _)| {
                 !BASE_FIELDS.contains(&name.as_str())
                     && (!uses_work_schema || !WORK_FIELDS.contains(&name.as_str()))
+                    && (!uses_harness_schema || !HARNESS_FIELDS.contains(&name.as_str()))
             })
         {
             return None;
@@ -455,6 +520,10 @@ impl LearningRecord {
             work_plan_id: json_string(&root, "work_plan_id").unwrap_or_default(),
             work_plan_manifest: json_string(&root, "work_plan_manifest").unwrap_or_default(),
             work_packet_count: json_usize(&root, "work_packet_count").unwrap_or(0),
+            harness_attestation_path: json_string(&root, "harness_attestation_path")
+                .unwrap_or_default(),
+            harness_attestation_hash: json_string(&root, "harness_attestation_hash")
+                .unwrap_or_default(),
             route_len: json_usize(&root, "route_len")?,
         };
         record.validate_structure().ok()?;
@@ -584,46 +653,8 @@ impl LearningStore {
 
     fn acquire_lock(&self) -> io::Result<StoreLock> {
         let lock_path = lock_path(&self.path);
-        if let Some(parent) = lock_path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)?;
-        }
-        for _ in 0..LOCK_RETRIES {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
-                Ok(file) => {
-                    return Ok(StoreLock {
-                        path: lock_path,
-                        file: Some(file),
-                    })
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::AlreadyExists
-                            | io::ErrorKind::PermissionDenied
-                            | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    if let Err(lock_error) = reclaim_stale_lock(&lock_path) {
-                        if lock_error.kind() != io::ErrorKind::PermissionDenied {
-                            return Err(lock_error);
-                        }
-                    }
-                    thread::sleep(LOCK_RETRY_DELAY);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::WouldBlock,
-            format!("learning store lock timed out at {}", lock_path.display()),
-        ))
+        let lease = acquire_file_lease(&lock_path, LOCK_TIMEOUT, STALE_LOCK_AGE)?;
+        Ok(StoreLock { _lease: lease })
     }
 }
 
@@ -762,27 +793,6 @@ fn lock_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}.lock"))
 }
 
-fn reclaim_stale_lock(path: &Path) -> io::Result<()> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    let stale = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age > STALE_LOCK_AGE);
-    if stale {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
 fn empty_as<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     if value.trim().is_empty() {
         fallback
@@ -850,6 +860,7 @@ fn json_usize(root: &JsonValue, key: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use math_atoms_attestation::{run_harness, HarnessRunSpec};
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -889,8 +900,56 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            harness_attestation_path: String::new(),
+            harness_attestation_hash: String::new(),
             route_len: 4,
         })
+    }
+
+    fn attach_real_attestation(
+        item: &mut LearningRecord,
+        artifact: Option<&Path>,
+        label: &str,
+    ) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "math-atoms-learning-attestation-{label}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("harness.rs");
+        let executable = root.join(format!("harness{}", std::env::consts::EXE_SUFFIX));
+        fs::write(&source, "fn main() { println!(\"ATTEST_OK\"); }\n").unwrap();
+        let status = std::process::Command::new("rustc")
+            .arg("--edition=2021")
+            .arg("-D")
+            .arg("warnings")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let artifact = artifact.unwrap_or(&source);
+        item.artifact_path = artifact.to_string_lossy().to_string();
+        item.artifact_hash = artifact_hash(artifact).unwrap();
+        let written = run_harness(&HarnessRunSpec {
+            harness_id: "rust-console-exact-v1".to_string(),
+            gate: item.gate.clone(),
+            work_plan_id: item.work_plan_id.clone(),
+            provider_model: item.provider_model.clone(),
+            artifact_path: artifact.to_path_buf(),
+            executable_path: executable,
+            working_directory: root.clone(),
+            expected_stdout: "ATTEST_OK".to_string(),
+            artifact_env: None,
+            timeout_seconds: 30,
+            attestation_path: root.join("attestation.json"),
+        })
+        .unwrap();
+        item.harness_attestation_path = written.path.to_string_lossy().to_string();
+        item.harness_attestation_hash = written.hash;
+        root
     }
 
     #[test]
@@ -898,11 +957,13 @@ mod tests {
         let path = temp_path("roundtrip");
         let store = LearningStore::new(&path);
         let failed = record(LearningOutcome::Failed, 1);
-        let succeeded = record(LearningOutcome::Succeeded, 2);
+        let mut succeeded = record(LearningOutcome::Succeeded, 2);
+        let attestation_root = attach_real_attestation(&mut succeeded, None, "roundtrip");
         store.append(&failed).unwrap();
         store.append(&succeeded).unwrap();
         let loaded = store.read_records().unwrap();
         fs::remove_file(&path).ok();
+        fs::remove_dir_all(attestation_root).ok();
         assert_eq!(loaded, vec![failed, succeeded]);
         assert_eq!(
             LearningSummary::from_records(&loaded),
@@ -966,6 +1027,8 @@ mod tests {
                 work_plan_id: String::new(),
                 work_plan_manifest: String::new(),
                 work_packet_count: 0,
+                harness_attestation_path: String::new(),
+                harness_attestation_hash: String::new(),
                 route_len: 4,
             }
         });
@@ -1000,6 +1063,8 @@ mod tests {
             work_plan_id: input.work_plan_id,
             work_plan_manifest: input.work_plan_manifest,
             work_packet_count: input.work_packet_count,
+            harness_attestation_path: input.harness_attestation_path,
+            harness_attestation_hash: input.harness_attestation_hash,
             route_len: input.route_len,
         });
         assert!(!sanitized.failure.contains("sk-123"));
@@ -1035,6 +1100,8 @@ mod tests {
             work_plan_id: format!("work-plan token={secret}"),
             work_plan_manifest: format!("C:/private/{secret}/plan-expanded.json"),
             work_packet_count: 13,
+            harness_attestation_path: format!("C:/private/{secret}/attestation.json"),
+            harness_attestation_hash: String::new(),
             route_len: 4,
         });
         let serialized = record.to_json();
@@ -1072,12 +1139,12 @@ mod tests {
         let path = temp_path("promotion-artifact");
         fs::write(&path, b"verified artifact").unwrap();
         let mut item = record(LearningOutcome::Succeeded, 1);
-        item.artifact_path = path.to_string_lossy().to_string();
-        item.artifact_hash = artifact_hash(&path).unwrap();
+        let attestation_root = attach_real_attestation(&mut item, Some(&path), "promotion");
         assert!(item.is_promotable_success());
         fs::write(&path, b"tampered artifact").unwrap();
         assert!(!item.is_promotable_success());
         fs::remove_file(path).ok();
+        fs::remove_dir_all(attestation_root).ok();
     }
 
     #[test]
@@ -1134,6 +1201,9 @@ mod tests {
         item.work_plan_id = plan.id;
         item.work_plan_manifest = manifest.to_string_lossy().to_string();
         item.work_packet_count = plan.packets.len();
+        assert!(item.validate().is_err());
+        assert!(!item.is_promotable_success());
+        let attestation_root = attach_real_attestation(&mut item, Some(&artifact), "provider-work");
         assert_eq!(item.validate(), Ok(()));
         assert!(item.is_promotable_success());
 
@@ -1152,6 +1222,7 @@ mod tests {
         assert!(historical.validate().is_err());
         assert!(!historical.is_promotable_success());
         fs::remove_file(artifact).ok();
+        fs::remove_dir_all(attestation_root).ok();
     }
 
     #[test]

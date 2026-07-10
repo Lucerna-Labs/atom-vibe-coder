@@ -6,8 +6,10 @@ license = "MIT"
 description = "Durable, dependency-free learning ledger for Atom Vibe Coder."
 
 [dependencies]
+math-atoms-attestation = { path = "../math-atoms-attestation" }
 math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
+math-atoms-lock = { path = "../math-atoms-lock" }
 math-atoms-secrets = { path = "../math-atoms-secrets" }
 math-atoms-work = { path = "../math-atoms-work" }
 
