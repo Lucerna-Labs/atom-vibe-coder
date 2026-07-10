@@ -37,6 +37,12 @@ impl HciTransport {
     }
 }
 
+impl Default for HciTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Advertisement {
     pub address: String,
@@ -98,6 +104,12 @@ impl BluetoothDriver {
     }
 }
 
+impl Default for BluetoothDriver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 const ATOM_STACK: [&str; 6] = ["scan", "project", "compose", "measure", "preserve", "order"];
 
 fn validate_atom_stack() -> bool {
@@ -122,12 +134,12 @@ fn main() {
 
     // Try to connect to unknown address
     let result = driver.connect("AA:BB:CC:DD:EE:99");
-    assert_eq!(result, false);
+    assert!(!result);
     assert_eq!(driver.connected_address, None);
 
     // Connect to known address
     let result = driver.connect("AA:BB:CC:DD:EE:01");
-    assert_eq!(result, true);
+    assert!(result);
     assert_eq!(driver.connected_address, Some("AA:BB:CC:DD:EE:01".to_string()));
     assert_eq!(driver.state, DriverState::Connected);
 

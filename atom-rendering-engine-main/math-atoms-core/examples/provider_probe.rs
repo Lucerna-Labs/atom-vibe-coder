@@ -64,6 +64,18 @@ fn main() {
                 report.resumed_packets
             );
             println!("provider work manifest: {}", report.work_plan_manifest);
+            let candidate = report.candidate_verification.as_ref().unwrap_or_else(|| {
+                eprintln!("provider proof blocked: candidate verification evidence is missing");
+                std::process::exit(8);
+            });
+            println!(
+                "provider candidate verification: manifest={} hash={} bundle={} attempts={} repairs={}",
+                candidate.manifest_path,
+                candidate.manifest_hash,
+                candidate.bundle_hash,
+                candidate.attempts,
+                candidate.repairs
+            );
             println!("provider output artifact: {}", evidence.path.display());
             println!("provider output hash: {}", evidence.hash);
             println!("{}", report.text.trim());

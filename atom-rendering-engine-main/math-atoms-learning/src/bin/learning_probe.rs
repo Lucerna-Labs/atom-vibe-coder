@@ -3,6 +3,7 @@ use math_atoms_learning::{
     artifact_hash, effective_records, rank_records, LearningOutcome, LearningRecord,
     LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
+use math_atoms_verification::CandidateVerificationEvidence;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,7 @@ fn record(args: &[String]) -> Result<(), String> {
         work_plan_id: optional(args, "--work-plan-id").unwrap_or_default(),
         work_plan_manifest: optional(args, "--work-plan-manifest").unwrap_or_default(),
         work_packet_count: parse_optional(args, "--work-packet-count")?.unwrap_or(0),
+        candidate_verification: candidate_verification(args)?,
         harness_attestation_path: optional(args, "--harness-attestation").unwrap_or_default(),
         harness_attestation_hash: optional(args, "--harness-attestation-hash").unwrap_or_default(),
         route_len: parse_optional(args, "--route-len")?.unwrap_or(0),
@@ -157,6 +159,28 @@ fn store_from(args: &[String]) -> LearningStore {
     optional(args, "--store")
         .map(LearningStore::new)
         .unwrap_or_else(|| LearningStore::new(LearningStore::default_path()))
+}
+
+fn candidate_verification(
+    args: &[String],
+) -> Result<Option<CandidateVerificationEvidence>, String> {
+    let names = [
+        "--candidate-verification-manifest",
+        "--candidate-verification-hash",
+        "--candidate-bundle-hash",
+        "--candidate-attempts",
+        "--candidate-repairs",
+    ];
+    if !names.iter().any(|name| optional(args, name).is_some()) {
+        return Ok(None);
+    }
+    Ok(Some(CandidateVerificationEvidence {
+        manifest_path: required(args, names[0])?,
+        manifest_hash: required(args, names[1])?,
+        bundle_hash: required(args, names[2])?,
+        attempts: parse_value(args, names[3])?,
+        repairs: parse_value(args, names[4])?,
+    }))
 }
 
 fn required(args: &[String], name: &str) -> Result<String, String> {

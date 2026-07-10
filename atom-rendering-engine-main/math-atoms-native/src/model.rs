@@ -644,6 +644,7 @@ impl NativeApp {
             work_plan_id: state.last_work_plan_id.clone(),
             work_plan_manifest: state.last_work_plan_manifest.clone(),
             work_packet_count: state.last_work_packet_count,
+            candidate_verification: state.last_candidate_verification.clone(),
             harness_attestation_path: String::new(),
             harness_attestation_hash: String::new(),
             route_len: state.last_route.len(),

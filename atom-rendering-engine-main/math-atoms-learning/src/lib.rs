@@ -9,6 +9,7 @@ use math_atoms_hash::{sha256_file, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
 use math_atoms_lock::{acquire_file_lease, FileLease};
 use math_atoms_secrets::redact_sensitive_text;
+use math_atoms_verification::{verify_candidate_evidence, CandidateVerificationEvidence};
 use math_atoms_work::verify_work_plan_evidence;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -17,10 +18,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const LEARNING_SCHEMA_VERSION: u32 = 4;
+pub const LEARNING_SCHEMA_VERSION: u32 = 5;
 const LEGACY_LEARNING_SCHEMA_VERSION: u32 = 1;
 const LEGACY_SHA_SCHEMA_VERSION: u32 = 2;
 const LEGACY_WORK_SCHEMA_VERSION: u32 = 3;
+const LEGACY_HARNESS_SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_GRAPH_MEMORY_LIMIT: usize = 256;
 const MAX_SHORT_FIELD: usize = 512;
 const MAX_LONG_FIELD: usize = 4_096;
@@ -71,6 +73,7 @@ pub struct LearningRecord {
     pub work_plan_id: String,
     pub work_plan_manifest: String,
     pub work_packet_count: usize,
+    pub candidate_verification: Option<CandidateVerificationEvidence>,
     pub harness_attestation_path: String,
     pub harness_attestation_hash: String,
     pub route_len: usize,
@@ -93,6 +96,7 @@ pub struct LearningRecordInput {
     pub work_plan_id: String,
     pub work_plan_manifest: String,
     pub work_packet_count: usize,
+    pub candidate_verification: Option<CandidateVerificationEvidence>,
     pub harness_attestation_path: String,
     pub harness_attestation_hash: String,
     pub route_len: usize,
@@ -159,6 +163,15 @@ impl LearningRecord {
             work_plan_id: sanitize_text(&input.work_plan_id, MAX_SHORT_FIELD),
             work_plan_manifest: sanitize_text(&input.work_plan_manifest, MAX_LONG_FIELD),
             work_packet_count: input.work_packet_count,
+            candidate_verification: input.candidate_verification.map(|evidence| {
+                CandidateVerificationEvidence {
+                    manifest_path: sanitize_text(&evidence.manifest_path, MAX_LONG_FIELD),
+                    manifest_hash: sanitize_text(&evidence.manifest_hash, MAX_SHORT_FIELD),
+                    bundle_hash: sanitize_text(&evidence.bundle_hash, MAX_SHORT_FIELD),
+                    attempts: evidence.attempts,
+                    repairs: evidence.repairs,
+                }
+            }),
             harness_attestation_path: sanitize_text(
                 &input.harness_attestation_path,
                 MAX_LONG_FIELD,
@@ -190,7 +203,7 @@ impl LearningRecord {
             }
         }
         if self.outcome == LearningOutcome::Succeeded
-            && self.schema_version == LEARNING_SCHEMA_VERSION
+            && self.schema_version >= LEGACY_HARNESS_SCHEMA_VERSION
             && self.requires_harness_evidence()
         {
             verify_harness_attestation(
@@ -205,6 +218,24 @@ impl LearningRecord {
             )
             .map_err(|error| format!("harness attestation failed: {error}"))?;
         }
+        if self.outcome == LearningOutcome::Succeeded
+            && self.schema_version == LEARNING_SCHEMA_VERSION
+            && self.requires_work_evidence()
+        {
+            let candidate = self.candidate_verification.as_ref().ok_or_else(|| {
+                "successful provider learning is missing candidate verification".to_string()
+            })?;
+            let verified = verify_candidate_evidence(
+                &candidate.manifest_path,
+                &candidate.manifest_hash,
+                &self.work_plan_id,
+                &candidate.bundle_hash,
+            )
+            .map_err(|error| format!("candidate verification failed: {error}"))?;
+            if verified.attempts != candidate.attempts || verified.repairs != candidate.repairs {
+                return Err("candidate verification accounting does not match evidence".to_string());
+            }
+        }
         Ok(())
     }
 
@@ -214,6 +245,7 @@ impl LearningRecord {
             LEGACY_LEARNING_SCHEMA_VERSION
                 | LEGACY_SHA_SCHEMA_VERSION
                 | LEGACY_WORK_SCHEMA_VERSION
+                | LEGACY_HARNESS_SCHEMA_VERSION
                 | LEARNING_SCHEMA_VERSION
         ) {
             return Err(format!(
@@ -265,7 +297,7 @@ impl LearningRecord {
                     && (self.work_plan_id.trim().is_empty()
                         || self.work_plan_manifest.trim().is_empty()
                         || self.work_packet_count
-                            < if self.schema_version == LEARNING_SCHEMA_VERSION {
+                            < if self.schema_version >= LEGACY_HARNESS_SCHEMA_VERSION {
                                 19
                             } else {
                                 13
@@ -276,7 +308,7 @@ impl LearningRecord {
                             .to_string(),
                     );
                 }
-                if self.schema_version == LEARNING_SCHEMA_VERSION
+                if self.schema_version >= LEGACY_HARNESS_SCHEMA_VERSION
                     && self.requires_harness_evidence()
                     && (self.harness_attestation_path.trim().is_empty()
                         || !valid_sha256_tag(&self.harness_attestation_hash))
@@ -285,6 +317,23 @@ impl LearningRecord {
                         "successful harness learning requires a typed harness attestation"
                             .to_string(),
                     );
+                }
+                if self.schema_version == LEARNING_SCHEMA_VERSION && self.requires_work_evidence() {
+                    let Some(candidate) = self.candidate_verification.as_ref() else {
+                        return Err(
+                            "successful provider learning requires candidate verification"
+                                .to_string(),
+                        );
+                    };
+                    if candidate.manifest_path.trim().is_empty()
+                        || !valid_sha256_tag(&candidate.manifest_hash)
+                        || !valid_sha256_tag(&candidate.bundle_hash)
+                        || candidate.attempts == 0
+                        || candidate.repairs != candidate.attempts - 1
+                    {
+                        return Err("successful provider learning candidate evidence is invalid"
+                            .to_string());
+                    }
                 }
             }
         }
@@ -338,6 +387,24 @@ impl LearningRecord {
                     self.provider_model.trim().is_empty() || plan.model == self.provider_model
                 })
                 .unwrap_or(false))
+            && (!self.requires_work_evidence()
+                || self
+                    .candidate_verification
+                    .as_ref()
+                    .and_then(|candidate| {
+                        verify_candidate_evidence(
+                            &candidate.manifest_path,
+                            &candidate.manifest_hash,
+                            &self.work_plan_id,
+                            &candidate.bundle_hash,
+                        )
+                        .ok()
+                        .map(|verified| {
+                            verified.attempts == candidate.attempts
+                                && verified.repairs == candidate.repairs
+                        })
+                    })
+                    .unwrap_or(false))
     }
 
     pub fn node_id(&self) -> String {
@@ -460,10 +527,21 @@ impl LearningRecord {
         if self.schema_version == LEGACY_WORK_SCHEMA_VERSION {
             return format!("{work},\"route_len\":{}}}", self.route_len);
         }
-        format!(
-            "{work},\"harness_attestation_path\":\"{}\",\"harness_attestation_hash\":\"{}\",\"route_len\":{}}}",
+        let harness = format!(
+            "{work},\"harness_attestation_path\":\"{}\",\"harness_attestation_hash\":\"{}\"",
             escape(&self.harness_attestation_path),
-            escape(&self.harness_attestation_hash),
+            escape(&self.harness_attestation_hash)
+        );
+        if self.schema_version == LEGACY_HARNESS_SCHEMA_VERSION {
+            return format!("{harness},\"route_len\":{}}}", self.route_len);
+        }
+        let candidate = self
+            .candidate_verification
+            .as_ref()
+            .map(candidate_verification_json)
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            "{harness},\"candidate_verification\":{candidate},\"route_len\":{}}}",
             self.route_len
         )
     }
@@ -489,19 +567,23 @@ impl LearningRecord {
         ];
         const WORK_FIELDS: [&str; 3] = ["work_plan_id", "work_plan_manifest", "work_packet_count"];
         const HARNESS_FIELDS: [&str; 2] = ["harness_attestation_path", "harness_attestation_hash"];
+        const CANDIDATE_FIELDS: [&str; 1] = ["candidate_verification"];
         let root = parse_json(line).ok()?;
         let object = root.as_object()?;
         let schema_version = json_u32(&root, "schema_version")?;
         let uses_work_schema = schema_version >= LEGACY_WORK_SCHEMA_VERSION;
-        let uses_harness_schema = schema_version == LEARNING_SCHEMA_VERSION;
+        let uses_harness_schema = schema_version >= LEGACY_HARNESS_SCHEMA_VERSION;
+        let uses_candidate_schema = schema_version == LEARNING_SCHEMA_VERSION;
         let expected_len = BASE_FIELDS.len()
             + usize::from(uses_work_schema) * WORK_FIELDS.len()
-            + usize::from(uses_harness_schema) * HARNESS_FIELDS.len();
+            + usize::from(uses_harness_schema) * HARNESS_FIELDS.len()
+            + usize::from(uses_candidate_schema) * CANDIDATE_FIELDS.len();
         if object.len() != expected_len
             || object.iter().any(|(name, _)| {
                 !BASE_FIELDS.contains(&name.as_str())
                     && (!uses_work_schema || !WORK_FIELDS.contains(&name.as_str()))
                     && (!uses_harness_schema || !HARNESS_FIELDS.contains(&name.as_str()))
+                    && (!uses_candidate_schema || !CANDIDATE_FIELDS.contains(&name.as_str()))
             })
         {
             return None;
@@ -525,6 +607,11 @@ impl LearningRecord {
             work_plan_id: json_string(&root, "work_plan_id").unwrap_or_default(),
             work_plan_manifest: json_string(&root, "work_plan_manifest").unwrap_or_default(),
             work_packet_count: json_usize(&root, "work_packet_count").unwrap_or(0),
+            candidate_verification: if uses_candidate_schema {
+                json_candidate_verification(&root)?
+            } else {
+                None
+            },
             harness_attestation_path: json_string(&root, "harness_attestation_path")
                 .unwrap_or_default(),
             harness_attestation_hash: json_string(&root, "harness_attestation_hash")
@@ -862,6 +949,46 @@ fn json_usize(root: &JsonValue, key: &str) -> Option<usize> {
     json_u64(root, key)?.try_into().ok()
 }
 
+fn candidate_verification_json(evidence: &CandidateVerificationEvidence) -> String {
+    format!(
+        "{{\"manifest_path\":\"{}\",\"manifest_hash\":\"{}\",\"bundle_hash\":\"{}\",\"attempts\":{},\"repairs\":{}}}",
+        escape(&evidence.manifest_path),
+        escape(&evidence.manifest_hash),
+        escape(&evidence.bundle_hash),
+        evidence.attempts,
+        evidence.repairs
+    )
+}
+
+fn json_candidate_verification(root: &JsonValue) -> Option<Option<CandidateVerificationEvidence>> {
+    let value = root.get("candidate_verification")?;
+    if matches!(value, JsonValue::Null) {
+        return Some(None);
+    }
+    let object = value.as_object()?;
+    let fields = [
+        "manifest_path",
+        "manifest_hash",
+        "bundle_hash",
+        "attempts",
+        "repairs",
+    ];
+    if object.len() != fields.len()
+        || object
+            .iter()
+            .any(|(name, _)| !fields.contains(&name.as_str()))
+    {
+        return None;
+    }
+    Some(Some(CandidateVerificationEvidence {
+        manifest_path: json_string(value, "manifest_path")?,
+        manifest_hash: json_string(value, "manifest_hash")?,
+        bundle_hash: json_string(value, "bundle_hash")?,
+        attempts: json_u32(value, "attempts")?,
+        repairs: json_u32(value, "repairs")?,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +1032,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             harness_attestation_path: String::new(),
             harness_attestation_hash: String::new(),
             route_len: 4,
@@ -1032,6 +1160,7 @@ mod tests {
                 work_plan_id: String::new(),
                 work_plan_manifest: String::new(),
                 work_packet_count: 0,
+                candidate_verification: None,
                 harness_attestation_path: String::new(),
                 harness_attestation_hash: String::new(),
                 route_len: 4,
@@ -1068,6 +1197,7 @@ mod tests {
             work_plan_id: input.work_plan_id,
             work_plan_manifest: input.work_plan_manifest,
             work_packet_count: input.work_packet_count,
+            candidate_verification: input.candidate_verification,
             harness_attestation_path: input.harness_attestation_path,
             harness_attestation_hash: input.harness_attestation_hash,
             route_len: input.route_len,
@@ -1105,13 +1235,24 @@ mod tests {
             work_plan_id: format!("work-plan token={secret}"),
             work_plan_manifest: format!("C:/private/{secret}/plan-expanded.json"),
             work_packet_count: 13,
+            candidate_verification: Some(CandidateVerificationEvidence {
+                manifest_path: format!("C:/private/{secret}/verification-final.json"),
+                manifest_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                bundle_hash:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                attempts: 1,
+                repairs: 0,
+            }),
             harness_attestation_path: format!("C:/private/{secret}/attestation.json"),
             harness_attestation_hash: String::new(),
             route_len: 4,
         });
         let serialized = record.to_json();
         assert!(!serialized.contains(secret));
-        assert!(serialized.matches("[REDACTED]").count() >= 9);
+        assert!(serialized.matches("[REDACTED]").count() >= 10);
     }
 
     #[test]
@@ -1196,6 +1337,27 @@ mod tests {
                 .unwrap();
         }
         drop(lease);
+        let verifier = math_atoms_verification::CandidateVerifier::new(
+            &work_root,
+            math_atoms_verification::VerificationPolicy::strict(120).unwrap(),
+        );
+        let candidate_files =
+            vec![math_atoms_verification::CandidateFile::new("main.rs", "fn main() {}\n").unwrap()];
+        let candidate_attempt = verifier
+            .verify_attempt(&plan.id, 1, &candidate_files)
+            .unwrap();
+        assert!(candidate_attempt.passed, "{}", candidate_attempt.failure);
+        let candidate_success = verifier.finalize(&candidate_attempt).unwrap();
+        let candidate_evidence = CandidateVerificationEvidence {
+            manifest_path: candidate_success
+                .manifest_path
+                .to_string_lossy()
+                .to_string(),
+            manifest_hash: candidate_success.manifest_hash,
+            bundle_hash: candidate_success.bundle_hash,
+            attempts: candidate_success.attempts,
+            repairs: candidate_success.repairs,
+        };
 
         let mut item = record(LearningOutcome::Succeeded, 1);
         item.source = "provider-test".to_string();
@@ -1209,8 +1371,30 @@ mod tests {
         assert!(item.validate().is_err());
         assert!(!item.is_promotable_success());
         let attestation_root = attach_real_attestation(&mut item, Some(&artifact), "provider-work");
+        assert!(item
+            .validate()
+            .unwrap_err()
+            .contains("candidate verification"));
+        item.candidate_verification = Some(candidate_evidence);
         assert_eq!(item.validate(), Ok(()));
         assert!(item.is_promotable_success());
+
+        let mut legacy_harness = item.clone();
+        legacy_harness.schema_version = LEGACY_HARNESS_SCHEMA_VERSION;
+        legacy_harness.candidate_verification = None;
+        let decoded_legacy = LearningRecord::from_json(&legacy_harness.to_json()).unwrap();
+        assert_eq!(decoded_legacy, legacy_harness);
+        assert_eq!(decoded_legacy.validate(), Ok(()));
+        assert!(!decoded_legacy.is_promotable_success());
+
+        let mut tampered_candidate = item.clone();
+        tampered_candidate
+            .candidate_verification
+            .as_mut()
+            .unwrap()
+            .manifest_hash =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+        assert!(!tampered_candidate.is_promotable_success());
 
         let packet_output = fs::read_dir(work_root.join(&item.work_plan_id).join("outputs"))
             .unwrap()

@@ -371,6 +371,7 @@ mod tests {
             while !server_stop.load(Ordering::SeqCst) && Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
                         server_requests.fetch_add(1, Ordering::SeqCst);
                         let body = read_request_body(&mut stream);
                         let response = scripted_response(&body, &server_saw_failure);

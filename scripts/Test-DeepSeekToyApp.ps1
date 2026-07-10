@@ -70,12 +70,18 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $env:MATH_ATOMS_LEARNING_STORE)) {
-        throw "DeepSeek Pro gate did not persist schema-v4 attested learning evidence"
+        throw "DeepSeek Pro gate did not persist schema-v5 attested candidate learning evidence"
     }
     $learning = @([System.IO.File]::ReadAllLines($env:MATH_ATOMS_LEARNING_STORE) | ForEach-Object { $_ | ConvertFrom-Json })
     $success = @($learning | Where-Object { $_.source -eq "provider-multi-app" -and $_.gate -eq "app-counter" -and $_.outcome -eq "succeeded" }) | Select-Object -Last 1
     if ($null -eq $success) {
         throw "DeepSeek Pro gate did not persist a successful counter learning record"
+    }
+    if ([int]$success.schema_version -ne 5 -or $null -eq $success.candidate_verification) {
+        throw "DeepSeek Pro learning record is missing schema-v5 candidate verification evidence"
+    }
+    if ([string]$success.candidate_verification.bundle_hash -ne [string]$success.artifact_hash) {
+        throw "DeepSeek Pro candidate bundle is not the learned source artifact"
     }
     $source = [string]$success.artifact_path
     if (-not (Test-Path -LiteralPath $source)) {

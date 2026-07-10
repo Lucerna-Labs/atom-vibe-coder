@@ -60,6 +60,11 @@ function Write-AtomLearningRecord {
         [string]$WorkPlanId = "",
         [string]$WorkPlanManifest = "",
         [int]$WorkPacketCount = 0,
+        [string]$CandidateVerificationManifest = "",
+        [string]$CandidateVerificationHash = "",
+        [string]$CandidateBundleHash = "",
+        [int]$CandidateAttempts = 0,
+        [int]$CandidateRepairs = 0,
         [string]$HarnessAttestation = "",
         [string]$HarnessAttestationHash = "",
         [int]$RouteLen = 4
@@ -107,6 +112,15 @@ function Write-AtomLearningRecord {
         }
         if ($WorkPacketCount -gt 0) {
             $arguments += @("--work-packet-count", $WorkPacketCount.ToString())
+        }
+        if (-not [string]::IsNullOrWhiteSpace($CandidateVerificationManifest)) {
+            $arguments += @(
+                "--candidate-verification-manifest", $CandidateVerificationManifest,
+                "--candidate-verification-hash", $CandidateVerificationHash,
+                "--candidate-bundle-hash", $CandidateBundleHash,
+                "--candidate-attempts", $CandidateAttempts.ToString(),
+                "--candidate-repairs", $CandidateRepairs.ToString()
+            )
         }
         if (-not [string]::IsNullOrWhiteSpace($HarnessAttestation)) {
             $arguments += @("--harness-attestation", $HarnessAttestation)
@@ -186,6 +200,7 @@ function Get-AtomWorkEvidence {
     param([Parameter(Mandatory = $true)][string]$ProviderText)
 
     $machineText = [regex]::Replace($ProviderText, '\r?\n[ \t]+', '')
+    $machineText = $machineText.Replace("`r`n", "`n").Replace("`r", "`n")
     if ($machineText -notmatch '(?m)^provider execution ok: .* model=(?<model>\S+) work_plan=(?<id>work-[0-9a-f]{24}) packets=(?<count>\d+) executed=\d+ resumed=\d+') {
         throw "provider output is missing meticulous work-plan execution evidence"
     }
@@ -202,12 +217,54 @@ function Get-AtomWorkEvidence {
     if (-not (Test-Path -LiteralPath $manifest)) {
         throw "provider work manifest does not exist: $manifest"
     }
+    if ($machineText -notmatch '(?m)^provider candidate verification: manifest=(?<manifest>.+?) hash=(?<hash>sha256:[0-9a-f]{64}) bundle=(?<bundle>sha256:[0-9a-f]{64}) attempts=(?<attempts>\d+) repairs=(?<repairs>\d+)$') {
+        throw "provider output is missing candidate verification evidence"
+    }
+    $candidateManifest = $Matches.manifest.Trim()
+    $candidateHash = $Matches.hash
+    $candidateBundle = $Matches.bundle
+    $candidateAttempts = [int]$Matches.attempts
+    $candidateRepairs = [int]$Matches.repairs
+    if (-not (Test-Path -LiteralPath $candidateManifest)) {
+        throw "provider candidate verification manifest does not exist: $candidateManifest"
+    }
+    $actualCandidateHash = "sha256:" + (Get-FileHash -LiteralPath $candidateManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualCandidateHash -ne $candidateHash) {
+        throw "provider candidate verification manifest hash mismatch: expected=$candidateHash actual=$actualCandidateHash"
+    }
+    if ($candidateAttempts -lt 1 -or $candidateRepairs -ne ($candidateAttempts - 1)) {
+        throw "provider candidate verification accounting is not closed: attempts=$candidateAttempts repairs=$candidateRepairs"
+    }
+    if ($machineText -notmatch '(?m)^provider output hash: (?<outputHash>sha256:[0-9a-f]{64})$') {
+        throw "provider output is missing its persisted output hash"
+    }
+    if ($candidateBundle -ne $Matches.outputHash) {
+        throw "provider candidate bundle does not match persisted output: bundle=$candidateBundle output=$($Matches.outputHash)"
+    }
     return [pscustomobject]@{
         PlanId = $planId
         Model = $model
         Manifest = $manifest
         PacketCount = $packetCount
+        CandidateManifest = $candidateManifest
+        CandidateHash = $candidateHash
+        CandidateBundleHash = $candidateBundle
+        CandidateAttempts = $candidateAttempts
+        CandidateRepairs = $candidateRepairs
     }
+}
+
+function Get-AtomProviderArtifactText {
+    param([Parameter(Mandatory = $true)][string]$ProviderText)
+
+    if ($ProviderText -notmatch '(?m)^provider output artifact: (?<artifact>.+)$') {
+        return ""
+    }
+    $artifact = $Matches.artifact.Trim()
+    if (-not (Test-Path -LiteralPath $artifact)) {
+        throw "provider output artifact does not exist: $artifact"
+    }
+    return [System.IO.File]::ReadAllText($artifact)
 }
 
 function Get-AtomLearningContext {

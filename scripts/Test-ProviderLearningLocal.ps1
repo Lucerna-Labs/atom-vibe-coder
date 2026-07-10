@@ -46,7 +46,7 @@ struct CounterApp {
 
 impl CounterApp {
     fn total(&self) -> usize {
-        self.atoms.iter().count()
+        self.atoms.len()
     }
 }
 
@@ -141,7 +141,7 @@ try {
                             @{ path = "main.rs"; purpose = "complete counter console application"; acceptance = @("compiles and prints the exact proof line") }
                         }
                         else {
-                            @{ path = "response.txt"; purpose = "provider proof response"; acceptance = @("contains non-empty provider evidence") }
+                            @{ path = "response.json"; purpose = "provider proof response"; acceptance = @("parses as audited provider JSON evidence") }
                         }
                         $content = @{
                             packet_id = $packetId
@@ -162,7 +162,7 @@ try {
                             $content = '```rust' + "`n" + $CounterSource + "`n" + '```'
                         }
                         else {
-                            $content = '```text' + "`nlocal provider proof`n" + '```'
+                            $content = '```json' + "`n{`"provider_proof`":`"local`"}`n" + '```'
                         }
                     }
                     else {
@@ -219,7 +219,24 @@ try {
     if ($learningText -match '"outcome":"failed"') {
         throw "local provider deterministic fixtures unexpectedly required a correction: $learningText"
     }
-    $counterLearning = @($records | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object source -eq "provider-multi-app") | Select-Object -Last 1
+    $parsedRecords = @($records | ForEach-Object { $_ | ConvertFrom-Json })
+    foreach ($record in $parsedRecords) {
+        if ([int]$record.schema_version -ne 5 -or $null -eq $record.candidate_verification) {
+            throw "local provider learning record is missing schema-v5 candidate evidence: $($record.source)"
+        }
+        $candidate = $record.candidate_verification
+        if (-not (Test-Path -LiteralPath ([string]$candidate.manifest_path))) {
+            throw "local provider candidate manifest is missing: $($candidate.manifest_path)"
+        }
+        $candidateHash = "sha256:" + (Get-FileHash -LiteralPath ([string]$candidate.manifest_path) -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($candidateHash -ne [string]$candidate.manifest_hash) {
+            throw "local provider candidate manifest hash mismatch for $($record.source)"
+        }
+        if ([int]$candidate.attempts -lt 1 -or [int]$candidate.repairs -ne ([int]$candidate.attempts - 1)) {
+            throw "local provider candidate chain is not closed for $($record.source)"
+        }
+    }
+    $counterLearning = @($parsedRecords | Where-Object source -eq "provider-multi-app") | Select-Object -Last 1
     $counterRootFull = [System.IO.Path]::GetFullPath($CounterOutputRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     $counterSourceFull = [System.IO.Path]::GetFullPath([string]$counterLearning.artifact_path)
     if (-not $counterSourceFull.StartsWith($counterRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {

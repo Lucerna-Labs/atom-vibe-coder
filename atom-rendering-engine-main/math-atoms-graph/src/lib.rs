@@ -935,6 +935,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             harness_attestation_path: String::new(),
             harness_attestation_hash: String::new(),
             route_len: 4,
