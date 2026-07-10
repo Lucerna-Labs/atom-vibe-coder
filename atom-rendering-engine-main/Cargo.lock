@@ -501,6 +501,7 @@ dependencies = [
  "math-atoms-hash",
  "math-atoms-learning",
  "math-atoms-proof",
+ "math-atoms-verification",
  "math-atoms-work",
 ]
 
@@ -547,6 +548,7 @@ dependencies = [
  "math-atoms-json",
  "math-atoms-lock",
  "math-atoms-secrets",
+ "math-atoms-verification",
 ]
 
 [[package]]

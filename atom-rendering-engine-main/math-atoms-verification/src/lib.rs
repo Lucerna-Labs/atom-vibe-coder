@@ -5,9 +5,10 @@ mod runner;
 mod store;
 
 pub use model::{
-    candidate_output, CandidateFile, CommandEvidence, RepairEvidence, VerificationAttempt,
-    VerificationError, VerificationPolicy, VerificationSuccess, VerifiedCandidate,
-    MAX_CANDIDATE_FILES, MAX_VERIFICATION_ATTEMPTS, VERIFICATION_SCHEMA_VERSION,
+    candidate_output, CandidateFile, CandidateVerificationEvidence, CommandEvidence,
+    RepairEvidence, VerificationAttempt, VerificationError, VerificationPolicy,
+    VerificationSuccess, VerifiedCandidate, MAX_CANDIDATE_FILES, MAX_VERIFICATION_ATTEMPTS,
+    VERIFICATION_SCHEMA_VERSION,
 };
 pub use runner::CandidateVerifier;
 pub use store::verify_candidate_evidence;

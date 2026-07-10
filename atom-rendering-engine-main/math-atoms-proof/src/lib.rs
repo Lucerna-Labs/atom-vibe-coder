@@ -3,6 +3,7 @@
 use math_atoms_json::{parse as parse_json, JsonValue};
 use math_atoms_lock::{acquire_file_lease, FileLease};
 use math_atoms_secrets::redact_sensitive_text;
+use math_atoms_verification::CandidateVerificationEvidence;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ pub struct ProofRecord {
     pub work_plan_id: String,
     pub work_plan_manifest: String,
     pub work_packet_count: usize,
+    pub candidate_verification: Option<CandidateVerificationEvidence>,
     pub route_len: usize,
 }
 
@@ -152,8 +154,13 @@ impl ProofRecord {
         let provider_output_hash = redact_sensitive_text(&self.provider_output_hash);
         let work_plan_id = redact_sensitive_text(&self.work_plan_id);
         let work_plan_manifest = redact_sensitive_text(&self.work_plan_manifest);
+        let candidate_verification = self
+            .candidate_verification
+            .as_ref()
+            .map(candidate_verification_json)
+            .unwrap_or_else(|| "null".to_string());
         format!(
-            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"provider_model\":\"{}\",\"provider_endpoint\":\"{}\",\"provider_output_artifact\":\"{}\",\"provider_output_hash\":\"{}\",\"provider_output_len\":{},\"work_plan_id\":\"{}\",\"work_plan_manifest\":\"{}\",\"work_packet_count\":{},\"route_len\":{}}}",
+            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"provider_model\":\"{}\",\"provider_endpoint\":\"{}\",\"provider_output_artifact\":\"{}\",\"provider_output_hash\":\"{}\",\"provider_output_len\":{},\"work_plan_id\":\"{}\",\"work_plan_manifest\":\"{}\",\"work_packet_count\":{},\"candidate_verification\":{},\"route_len\":{}}}",
             escape(&recipe_id),
             escape(&status),
             string_array(&atoms),
@@ -168,12 +175,13 @@ impl ProofRecord {
             escape(&work_plan_id),
             escape(&work_plan_manifest),
             self.work_packet_count,
+            candidate_verification,
             self.route_len
         )
     }
 
     pub fn from_json(line: &str) -> Option<Self> {
-        const ALLOWED_FIELDS: [&str; 15] = [
+        const ALLOWED_FIELDS: [&str; 16] = [
             "recipe_id",
             "status",
             "atoms",
@@ -188,6 +196,7 @@ impl ProofRecord {
             "work_plan_id",
             "work_plan_manifest",
             "work_packet_count",
+            "candidate_verification",
             "route_len",
         ];
         let root = parse_json(line).ok()?;
@@ -214,6 +223,7 @@ impl ProofRecord {
             work_plan_id: json_string(&root, "work_plan_id").unwrap_or_default(),
             work_plan_manifest: json_string(&root, "work_plan_manifest").unwrap_or_default(),
             work_packet_count: json_usize(&root, "work_packet_count").unwrap_or(0),
+            candidate_verification: json_candidate_verification(&root)?,
             route_len: json_usize(&root, "route_len")?,
         })
     }
@@ -259,6 +269,48 @@ fn json_usize(root: &JsonValue, key: &str) -> Option<usize> {
     root.get(key)?.as_u64()?.try_into().ok()
 }
 
+fn candidate_verification_json(evidence: &CandidateVerificationEvidence) -> String {
+    format!(
+        "{{\"manifest_path\":\"{}\",\"manifest_hash\":\"{}\",\"bundle_hash\":\"{}\",\"attempts\":{},\"repairs\":{}}}",
+        escape(&redact_sensitive_text(&evidence.manifest_path)),
+        escape(&redact_sensitive_text(&evidence.manifest_hash)),
+        escape(&redact_sensitive_text(&evidence.bundle_hash)),
+        evidence.attempts,
+        evidence.repairs
+    )
+}
+
+fn json_candidate_verification(root: &JsonValue) -> Option<Option<CandidateVerificationEvidence>> {
+    let Some(value) = root.get("candidate_verification") else {
+        return Some(None);
+    };
+    if matches!(value, JsonValue::Null) {
+        return Some(None);
+    }
+    let object = value.as_object()?;
+    let fields = [
+        "manifest_path",
+        "manifest_hash",
+        "bundle_hash",
+        "attempts",
+        "repairs",
+    ];
+    if object.len() != fields.len()
+        || object
+            .iter()
+            .any(|(name, _)| !fields.contains(&name.as_str()))
+    {
+        return None;
+    }
+    Some(Some(CandidateVerificationEvidence {
+        manifest_path: json_string(value, "manifest_path")?,
+        manifest_hash: json_string(value, "manifest_hash")?,
+        bundle_hash: json_string(value, "bundle_hash")?,
+        attempts: value.get("attempts")?.as_u64()?.try_into().ok()?,
+        repairs: value.get("repairs")?.as_u64()?.try_into().ok()?,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +343,17 @@ mod tests {
             work_plan_id: "work-proof-fixture".to_string(),
             work_plan_manifest: "C:/audit/plan-expanded.json".to_string(),
             work_packet_count: 13,
+            candidate_verification: Some(CandidateVerificationEvidence {
+                manifest_path: "C:/audit/verification-final.json".to_string(),
+                manifest_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                bundle_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                attempts: 2,
+                repairs: 1,
+            }),
             route_len: 4,
         };
         store.append(&record).unwrap();
@@ -302,6 +365,8 @@ mod tests {
         assert!(text.contains("\"provider_output_artifact\":\"C:/audit/provider.txt\""));
         assert!(text.contains("\"provider_output_hash\":\"sha256:0123456789abcdef"));
         assert!(text.contains("\"provider_output_len\":18"));
+        assert!(text.contains("\"candidate_verification\":{\"manifest_path\""));
+        assert!(text.contains("\"attempts\":2,\"repairs\":1"));
         assert!(!text.contains("hunter2"));
         assert!(text.contains("provider token = [REDACTED]"));
         assert!(text.ends_with('\n'));
@@ -335,6 +400,7 @@ mod tests {
             work_plan_id: "work-proof-read-fixture".to_string(),
             work_plan_manifest: "C:/audit/plan-expanded.json".to_string(),
             work_packet_count: 13,
+            candidate_verification: None,
             route_len: 5,
         };
         store.append(&record).unwrap();
@@ -375,6 +441,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             route_len: 4,
         };
         fs::write(&path, format!("{} trailing\n", valid.to_json())).unwrap();
@@ -397,6 +464,7 @@ mod tests {
         assert_eq!(record.work_plan_id, "");
         assert_eq!(record.work_plan_manifest, "");
         assert_eq!(record.work_packet_count, 0);
+        assert_eq!(record.candidate_verification, None);
         assert_eq!(record.route_len, 5);
     }
 
@@ -432,6 +500,7 @@ mod tests {
                             work_plan_id: String::new(),
                             work_plan_manifest: String::new(),
                             work_packet_count: 0,
+                            candidate_verification: None,
                             route_len: 4,
                         })
                         .unwrap();

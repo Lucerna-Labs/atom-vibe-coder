@@ -9,6 +9,7 @@ use math_atoms_provider_transport::{
     post_json, ProviderHttpRequest, ProviderTransportError, MAX_PROVIDER_OUTPUT_BYTES,
     MAX_PROVIDER_RESPONSE_BYTES,
 };
+pub use math_atoms_verification::CandidateVerificationEvidence as CandidateVerificationReport;
 use math_atoms_work::{
     validate_secure_packet_output, CompletedPacket, WorkError, WorkPlan, WorkPlanStore, WorkPrompt,
     WorkStage,
@@ -137,15 +138,6 @@ pub struct ProviderExecutionOutput {
     pub executed_packets: usize,
     pub resumed_packets: usize,
     pub candidate_verification: Option<CandidateVerificationReport>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CandidateVerificationReport {
-    pub manifest_path: String,
-    pub manifest_hash: String,
-    pub bundle_hash: String,
-    pub attempts: u32,
-    pub repairs: u32,
 }
 
 impl ProviderConfig {

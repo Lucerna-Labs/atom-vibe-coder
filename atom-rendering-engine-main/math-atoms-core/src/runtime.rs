@@ -1,7 +1,7 @@
 use crate::domain::{atom_by_key, atoms, mission, recipes, Recipe};
 use crate::provider::{
-    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderError,
-    ProviderExecutionOutput, ProviderWireFormat,
+    provider_output_hash, CandidateVerificationReport, PreparedProviderCall, ProviderConfig,
+    ProviderError, ProviderExecutionOutput, ProviderWireFormat,
 };
 use math_atoms_bus::{BusMessageKind, EnvelopeId, SpiderwebBus};
 use math_atoms_graph::{Evidence, WikiGraph};
@@ -54,6 +54,7 @@ pub struct RuntimeState {
     pub last_work_plan_id: String,
     pub last_work_plan_manifest: String,
     pub last_work_packet_count: usize,
+    pub last_candidate_verification: Option<CandidateVerificationReport>,
     pub last_route: Vec<EnvelopeId>,
 }
 
@@ -148,6 +149,7 @@ impl MathAtomsRuntime {
                 last_work_plan_id: String::new(),
                 last_work_plan_manifest: String::new(),
                 last_work_packet_count: 0,
+                last_candidate_verification: None,
                 last_route: Vec::new(),
             },
         }
@@ -183,6 +185,7 @@ impl MathAtomsRuntime {
         self.state.last_work_plan_id.clear();
         self.state.last_work_plan_manifest.clear();
         self.state.last_work_packet_count = 0;
+        self.state.last_candidate_verification = None;
         self.state.last_route.clear();
     }
 
@@ -384,6 +387,7 @@ impl MathAtomsRuntime {
             .unwrap_or_default();
         self.state.last_work_plan_manifest.clear();
         self.state.last_work_packet_count = 0;
+        self.state.last_candidate_verification = None;
         self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
         if status == RuntimeStatus::Proven {
             self.state.proof_count += 1;
@@ -507,6 +511,7 @@ impl MathAtomsRuntime {
         self.state.last_work_plan_id = report.work_plan_id.clone();
         self.state.last_work_plan_manifest = report.work_plan_manifest.clone();
         self.state.last_work_packet_count = report.packet_ids.len();
+        self.state.last_candidate_verification = report.candidate_verification.clone();
         let evidence_ids = self.provider_evidence_ids();
         let model = self
             .state
@@ -1345,6 +1350,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             route_len: 4,
         });
         let run = runtime.run_intent("Use stored proof for wiki graph rag");
@@ -1452,6 +1458,10 @@ mod tests {
             report.work_plan_manifest
         );
         assert_eq!(runtime.state().last_work_packet_count, 19);
+        assert_eq!(
+            runtime.state().last_candidate_verification,
+            report.candidate_verification
+        );
         assert!(runtime
             .bus()
             .envelopes()
@@ -1489,6 +1499,35 @@ mod tests {
         assert!(runtime
             .bus()
             .route_contains_all_layers(*runtime.state().last_route.last().unwrap()));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn tampered_candidate_verification_claim_blocks_runtime_completion() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Run provider api with wiki graph rag");
+        runtime.schedule_provider_execution().unwrap();
+        let source = "pub fn provider_output() -> &'static str { \"provider output\" }\n";
+        let (mut report, evidence, root) = verified_report(&runtime, "tampered-candidate", source);
+        report
+            .candidate_verification
+            .as_mut()
+            .unwrap()
+            .manifest_hash =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+        assert!(!runtime.mark_provider_execution_report(
+            &evidence.path.to_string_lossy(),
+            &evidence.hash,
+            evidence.len,
+            &report
+        ));
+        assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
+        assert!(runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("candidate final manifest does not recompute")));
         std::fs::remove_dir_all(root).ok();
     }
 

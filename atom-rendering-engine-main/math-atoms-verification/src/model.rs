@@ -145,6 +145,15 @@ pub struct VerificationSuccess {
     pub manifest_hash: String,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct CandidateVerificationEvidence {
+    pub manifest_path: String,
+    pub manifest_hash: String,
+    pub bundle_hash: String,
+    pub attempts: u32,
+    pub repairs: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedCandidate {
     pub plan_id: String,

@@ -695,6 +695,11 @@ impl NativeApp {
             } else {
                 0
             },
+            candidate_verification: if self.provider_title_state() == "provider:ran" {
+                state.last_candidate_verification.clone()
+            } else {
+                None
+            },
             route_len: state.last_route.len(),
         }
     }
@@ -1462,6 +1467,7 @@ mod tests {
         assert!(text.contains("\"provider_model\":"));
         assert!(text.contains("\"provider_output_artifact\":"));
         assert!(text.contains("\"provider_output_hash\":\"sha256:"));
+        assert!(text.contains("\"candidate_verification\":{\"manifest_path\""));
         assert!(text.contains(&format!(
             "\"provider_output_len\":{}",
             VERIFIED_PROVIDER_SOURCE.len()

@@ -732,6 +732,7 @@ fn proof_node_id(record: &ProofRecord, record_atoms: &[String]) -> String {
     record.work_plan_id.hash(&mut hasher);
     record.work_plan_manifest.hash(&mut hasher);
     record.work_packet_count.hash(&mut hasher);
+    record.candidate_verification.hash(&mut hasher);
     record.route_len.hash(&mut hasher);
     format!("proof:{:016x}", hasher.finish())
 }
@@ -753,6 +754,23 @@ fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
     if !recipe.requires_provider {
         return true;
     }
+    let candidate_verified = record
+        .candidate_verification
+        .as_ref()
+        .filter(|candidate| candidate.bundle_hash == record.provider_output_hash)
+        .and_then(|candidate| {
+            math_atoms_verification::verify_candidate_evidence(
+                &candidate.manifest_path,
+                &candidate.manifest_hash,
+                &record.work_plan_id,
+                &candidate.bundle_hash,
+            )
+            .ok()
+            .map(|verified| {
+                verified.attempts == candidate.attempts && verified.repairs == candidate.repairs
+            })
+        })
+        .unwrap_or(false);
     record.provider_state == "provider:ran"
         && !record.provider_model.trim().is_empty()
         && !record.provider_endpoint.trim().is_empty()
@@ -767,6 +785,7 @@ fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
         && record.provider_output_len > 0
         && record.work_plan_id.starts_with("work-")
         && record.work_packet_count >= 19
+        && candidate_verified
         && verify_work_plan_evidence(
             &record.work_plan_manifest,
             &record.work_plan_id,
@@ -823,7 +842,16 @@ mod tests {
         (path, hash)
     }
 
-    fn provider_work_evidence(label: &str) -> (PathBuf, PathBuf, String, usize) {
+    fn provider_work_evidence(
+        label: &str,
+        output: &str,
+    ) -> (
+        PathBuf,
+        PathBuf,
+        String,
+        usize,
+        math_atoms_verification::CandidateVerificationEvidence,
+    ) {
         let root = std::env::temp_dir().join(format!(
             "math-atoms-{label}-work-{}-{}",
             std::process::id(),
@@ -841,9 +869,9 @@ mod tests {
         )
         .unwrap();
         plan.expand_files(vec![WorkFile {
-            path: "proof.txt".to_string(),
+            path: "proof.json".to_string(),
             purpose: "provider proof".to_string(),
-            acceptance: vec!["proof exists".to_string()],
+            acceptance: vec!["JSON proof parses and passes strict gates".to_string()],
         }])
         .unwrap();
         let lease = store.acquire(&plan.id).unwrap();
@@ -855,19 +883,39 @@ mod tests {
                     packet.id
                 ),
                 math_atoms_work::PacketContract::FileManifest => format!(
-                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"proof.txt\",\"purpose\":\"provider proof\",\"acceptance\":[\"proof exists\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"proof.json\",\"purpose\":\"provider proof\",\"acceptance\":[\"JSON proof parses and passes strict gates\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
                     packet.id
                 ),
-                math_atoms_work::PacketContract::FileArtifact => {
-                    "```text\nprovider proof\n```".to_string()
-                }
+                math_atoms_work::PacketContract::FileArtifact => format!("```json\n{output}\n```"),
             };
             store
                 .store_packet(&plan, packet, &output, "gpt-test")
                 .unwrap();
         }
         drop(lease);
-        (root, manifest, plan.id.clone(), plan.packets.len())
+        let verifier = math_atoms_verification::CandidateVerifier::new(
+            &root,
+            math_atoms_verification::VerificationPolicy::strict(120).unwrap(),
+        );
+        let candidate =
+            vec![math_atoms_verification::CandidateFile::new("proof.json", output).unwrap()];
+        let attempt = verifier.verify_attempt(&plan.id, 1, &candidate).unwrap();
+        assert!(attempt.passed, "{}", attempt.failure);
+        let verified = verifier.finalize(&attempt).unwrap();
+        let evidence = math_atoms_verification::CandidateVerificationEvidence {
+            manifest_path: verified.manifest_path.to_string_lossy().to_string(),
+            manifest_hash: verified.manifest_hash,
+            bundle_hash: verified.bundle_hash,
+            attempts: verified.attempts,
+            repairs: verified.repairs,
+        };
+        (
+            root,
+            manifest,
+            plan.id.clone(),
+            plan.packets.len(),
+            evidence,
+        )
     }
 
     fn failed_learning(index: usize, intent: String) -> LearningRecord {
@@ -1048,6 +1096,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             route_len: 6,
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
@@ -1072,6 +1121,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             route_len: 6,
         });
         let hits = graph.retrieve(
@@ -1085,10 +1135,10 @@ mod tests {
     #[test]
     fn audited_provider_proof_records_become_rag_evidence() {
         let mut graph = WikiGraph::seeded();
-        let output = "provider proof";
+        let output = "{\"proof\":\"provider\"}";
         let (artifact, hash) = provider_artifact("audited-provider-proof", output);
-        let (work_root, work_manifest, work_plan_id, work_packet_count) =
-            provider_work_evidence("audited-provider-proof");
+        let (work_root, work_manifest, work_plan_id, work_packet_count, candidate_verification) =
+            provider_work_evidence("audited-provider-proof", output);
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -1104,6 +1154,7 @@ mod tests {
             work_plan_id,
             work_plan_manifest: work_manifest.to_string_lossy().to_string(),
             work_packet_count,
+            candidate_verification: Some(candidate_verification),
             route_len: 8,
         });
         let hits = graph.retrieve(
@@ -1112,6 +1163,36 @@ mod tests {
             12,
         );
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+        fs::remove_file(artifact).ok();
+        fs::remove_dir_all(work_root).ok();
+    }
+
+    #[test]
+    fn provider_proof_without_candidate_chain_cannot_become_rag_evidence() {
+        let mut graph = WikiGraph::seeded();
+        let output = "{\"proof\":\"provider\"}";
+        let (artifact, hash) = provider_artifact("missing-candidate-proof", output);
+        let (work_root, work_manifest, work_plan_id, work_packet_count, _) =
+            provider_work_evidence("missing-candidate-proof", output);
+        graph.add_proof_record(&ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["measure".to_string(), "flow".to_string()],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_artifact: artifact.to_string_lossy().to_string(),
+            provider_output_hash: hash,
+            provider_output_len: output.len(),
+            work_plan_id,
+            work_plan_manifest: work_manifest.to_string_lossy().to_string(),
+            work_packet_count,
+            candidate_verification: None,
+            route_len: 8,
+        });
+        assert!(!graph.nodes.iter().any(|node| node.id.starts_with("proof:")));
         fs::remove_file(artifact).ok();
         fs::remove_dir_all(work_root).ok();
     }
@@ -1135,6 +1216,7 @@ mod tests {
             work_plan_id: "work-tampered-provider".to_string(),
             work_plan_manifest: "C:/audit/plan-expanded.json".to_string(),
             work_packet_count: 13,
+            candidate_verification: None,
             route_len: 8,
         };
         fs::write(&artifact, "tampered provider output").unwrap();
@@ -1147,10 +1229,10 @@ mod tests {
     #[test]
     fn proof_record_atoms_are_limited_to_authored_recipe_stack() {
         let mut graph = WikiGraph::seeded();
-        let output = "provider proof";
+        let output = "{\"proof\":\"provider\"}";
         let (artifact, hash) = provider_artifact("atom-limited-provider-proof", output);
-        let (work_root, work_manifest, work_plan_id, work_packet_count) =
-            provider_work_evidence("atom-limited-provider-proof");
+        let (work_root, work_manifest, work_plan_id, work_packet_count, candidate_verification) =
+            provider_work_evidence("atom-limited-provider-proof", output);
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -1172,6 +1254,7 @@ mod tests {
             work_plan_id,
             work_plan_manifest: work_manifest.to_string_lossy().to_string(),
             work_packet_count,
+            candidate_verification: Some(candidate_verification),
             route_len: 8,
         });
 
@@ -1252,6 +1335,7 @@ mod tests {
             work_plan_id: String::new(),
             work_plan_manifest: String::new(),
             work_packet_count: 0,
+            candidate_verification: None,
             route_len: 6,
         });
         let hits = graph.retrieve(
@@ -1281,6 +1365,7 @@ mod tests {
                 work_plan_id: String::new(),
                 work_plan_manifest: String::new(),
                 work_packet_count: 0,
+                candidate_verification: None,
                 route_len: 5,
             });
         }
