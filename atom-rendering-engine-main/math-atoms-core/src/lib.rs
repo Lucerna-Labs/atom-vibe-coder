@@ -20,6 +20,10 @@ pub use domain::{
     RecipeStatus,
 };
 pub use graph::{Evidence, WikiGraph};
+pub use math_atoms_learning::{
+    artifact_hash, effective_records, rank_records, LearningHit, LearningOutcome, LearningRecord,
+    LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
+};
 pub use provider::{
     provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderConfigInput, ProviderError,
     ProviderKind, ProviderWireFormat,

@@ -51,6 +51,9 @@ pub enum BusMessageKind {
     StoreLearned,
     StoreObserved,
     StoreBlocked,
+    LearningObserved,
+    LearningPersisted,
+    LearningApplied,
     DriftFlagged,
 }
 

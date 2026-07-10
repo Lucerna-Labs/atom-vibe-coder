@@ -3,6 +3,9 @@ use crate::domain::{atom_by_key, mission, recipes, Recipe};
 use crate::graph::{Evidence, WikiGraph};
 use crate::provider::{PreparedProviderCall, ProviderConfig, ProviderError};
 use crate::store::{ProofRecord, ProofStore};
+use math_atoms_learning::{
+    effective_records, LearningOutcome, LearningRecord, LearningStore, DEFAULT_GRAPH_MEMORY_LIMIT,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
@@ -67,21 +70,45 @@ pub struct MathAtomsRuntime {
 
 impl MathAtomsRuntime {
     pub fn new(provider: ProviderConfig) -> Self {
-        Self::with_proof_store(provider, ProofStore::new(ProofStore::default_path()))
+        Self::with_stores(
+            provider,
+            ProofStore::new(ProofStore::default_path()),
+            LearningStore::new(LearningStore::default_path()),
+        )
     }
 
     pub fn with_proof_store(provider: ProviderConfig, proof_store: ProofStore) -> Self {
+        let learning_store = LearningStore::beside(proof_store.path());
+        Self::with_stores(provider, proof_store, learning_store)
+    }
+
+    pub fn with_stores(
+        provider: ProviderConfig,
+        proof_store: ProofStore,
+        learning_store: LearningStore,
+    ) -> Self {
         let mut graph = WikiGraph::from_default_dirs();
-        let store_path = proof_store.path().display().to_string();
-        let store_error = match proof_store.read_records() {
+        let mut store_errors = Vec::new();
+        match proof_store.read_records() {
             Ok(records) => {
                 graph.add_proof_records(&records);
-                None
             }
-            Err(error) => Some(format!("Proof store read failed at {store_path}: {error}")),
-        };
+            Err(error) => store_errors.push(format!(
+                "Proof store read failed at {}: {error}",
+                proof_store.path().display()
+            )),
+        }
+        match learning_store.read_records() {
+            Ok(records) => {
+                graph.add_learning_records(&effective_records(&records, DEFAULT_GRAPH_MEMORY_LIMIT))
+            }
+            Err(error) => store_errors.push(format!(
+                "Learning store read failed at {}: {error}",
+                learning_store.path().display()
+            )),
+        }
         let mut runtime = Self::with_graph(provider, graph);
-        if let Some(reason) = store_error {
+        for reason in store_errors {
             runtime.mark_startup_store_blocked(&reason);
         }
         runtime
@@ -156,12 +183,19 @@ impl MathAtomsRuntime {
         );
         let evidence = self.graph.retrieve(intent, &intent_atoms, 8);
         let evidence_ids: Vec<String> = evidence.iter().map(|item| item.node_id.clone()).collect();
+        let learning_hits = evidence
+            .iter()
+            .filter(|item| item.node_id.starts_with("learning:"))
+            .count();
+        let evidence_body = format!(
+            "graph evidence ranked from atom and recipe relationships; {learning_hits} durable learning records preloaded"
+        );
         let l2 = self.bus.l2_flow(
             l1,
             BusMessageKind::EvidenceRetrieved,
             "wiki-graph",
             "recipe-selector",
-            "graph evidence ranked from atom and recipe relationships",
+            &evidence_body,
             &evidence_ids,
         );
         let recipe = select_recipe(
@@ -551,6 +585,49 @@ impl MathAtomsRuntime {
                 &[],
             );
         }
+    }
+
+    pub fn learn_learning_record(&mut self, record: &LearningRecord) {
+        self.graph.add_learning_record(record);
+        let node_id = record.node_id();
+        let evidence_ids = vec![node_id];
+        let parent = self.state.last_route.last().copied();
+        let l0 = self.bus.l0_transport_from(
+            parent,
+            BusMessageKind::LearningObserved,
+            &record.source,
+            "learning-store",
+            &record.title(),
+        );
+        let l1 = self.bus.l1_message(
+            l0,
+            BusMessageKind::LearningPersisted,
+            "learning-store",
+            "wiki-graph",
+            "validated learning event persisted and read back",
+        );
+        let body = if record.outcome == LearningOutcome::Succeeded {
+            "gate-passing result promoted as reusable graph evidence"
+        } else {
+            "failure joined as correction evidence without proof promotion"
+        };
+        let l2 = self.bus.l2_flow(
+            l1,
+            BusMessageKind::LearningApplied,
+            "wiki-graph",
+            "recipe-selector",
+            body,
+            &evidence_ids,
+        );
+        let l3 = self.bus.l3_orchestrate(
+            l2,
+            BusMessageKind::LearningApplied,
+            "proof-loop",
+            "artifact-state",
+            body,
+            &evidence_ids,
+        );
+        self.state.last_route = self.bus.route_for(l3).iter().map(|env| env.id).collect();
     }
 
     fn provider_evidence_ids(&self) -> Vec<String> {

@@ -7,3 +7,4 @@ description = "Native Atom Vibe Coder runtime: Spiderweb Bus, graph retrieval, p
 
 [dependencies]
 math-atoms-doctrine = { path = "../math-atoms-doctrine" }
+math-atoms-learning = { path = "../math-atoms-learning" }

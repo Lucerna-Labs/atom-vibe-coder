@@ -1,5 +1,6 @@
 use crate::domain::{atoms, gates, mission, recipes};
 use crate::store::ProofRecord;
+use math_atoms_learning::{LearningOutcome, LearningRecord};
 use std::collections::{hash_map::DefaultHasher, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -331,6 +332,51 @@ impl WikiGraph {
         }
     }
 
+    pub fn add_learning_record(&mut self, record: &LearningRecord) {
+        if record.validate().is_err() {
+            return;
+        }
+        let id = record.node_id();
+        if self.nodes.iter().any(|node| node.id == id) {
+            return;
+        }
+        self.nodes.push(WikiNode {
+            id: id.clone(),
+            title: record.title(),
+            excerpt: record.excerpt(),
+            tags: record.tags(),
+        });
+        if self.nodes.iter().any(|node| node.id == record.recipe_id) {
+            self.edges.push(WikiEdge {
+                from: record.recipe_id.clone(),
+                to: id.clone(),
+                weight: 5,
+            });
+            if record.outcome == LearningOutcome::Succeeded {
+                self.edges.push(WikiEdge {
+                    from: id.clone(),
+                    to: record.recipe_id.clone(),
+                    weight: 6,
+                });
+            }
+        }
+        for atom in &record.atom_stack {
+            if atom_by_graph_id(self, atom) {
+                self.edges.push(WikiEdge {
+                    from: atom.clone(),
+                    to: id.clone(),
+                    weight: 4,
+                });
+            }
+        }
+    }
+
+    pub fn add_learning_records(&mut self, records: &[LearningRecord]) {
+        for record in records {
+            self.add_learning_record(record);
+        }
+    }
+
     fn load_markdown_dir(&mut self, dir: &Path) -> io::Result<()> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -422,6 +468,10 @@ fn direct_score(node: &WikiNode, terms: &[String], atom_keys: &[String]) -> i32 
         }
     }
     score
+}
+
+fn atom_by_graph_id(graph: &WikiGraph, id: &str) -> bool {
+    atoms().iter().any(|atom| atom.key == id) && graph.nodes.iter().any(|node| node.id == id)
 }
 
 fn tags(values: &[&str]) -> Vec<String> {

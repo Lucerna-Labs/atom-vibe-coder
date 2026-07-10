@@ -345,10 +345,16 @@ impl LearningStore {
 
     pub fn beside(path: impl AsRef<Path>) -> Self {
         let path = path.as_ref();
-        let learning_path = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("learning.jsonl");
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("proofs.jsonl");
+        let learning_name = if file_name.eq_ignore_ascii_case("proofs.jsonl") {
+            "learning.jsonl".to_string()
+        } else {
+            format!("{file_name}.learning.jsonl")
+        };
+        let learning_path = path.with_file_name(learning_name);
         Self::new(learning_path)
     }
 
@@ -872,5 +878,16 @@ mod tests {
         fs::remove_file(path).ok();
         assert_eq!(first, second);
         assert!(valid_fnv_hash(&first));
+    }
+
+    #[test]
+    fn custom_proof_stores_get_isolated_learning_siblings() {
+        let production = LearningStore::beside("C:/state/proofs.jsonl");
+        let isolated = LearningStore::beside("C:/temp/proof-test-42.jsonl");
+        assert_eq!(production.path(), Path::new("C:/state/learning.jsonl"));
+        assert_eq!(
+            isolated.path(),
+            Path::new("C:/temp/proof-test-42.jsonl.learning.jsonl")
+        );
     }
 }

@@ -465,6 +465,7 @@ name = "math-atoms-core"
 version = "0.1.0"
 dependencies = [
  "math-atoms-doctrine",
+ "math-atoms-learning",
 ]
 
 [[package]]
