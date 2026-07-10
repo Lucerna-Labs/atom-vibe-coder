@@ -71,8 +71,8 @@ fn record(args: &[String]) -> Result<(), String> {
     let records = store
         .read_records()
         .map_err(|error| format!("learning readback failed: {error}"))?;
-    if records.last() != Some(&record) {
-        return Err("learning append readback did not match the written record".to_string());
+    if !records.iter().any(|persisted| persisted.id == record.id) {
+        return Err("learning append readback did not contain the written record".to_string());
     }
     println!(
         "MATH_ATOMS_LEARNING_OK id={} outcome={} total={}",

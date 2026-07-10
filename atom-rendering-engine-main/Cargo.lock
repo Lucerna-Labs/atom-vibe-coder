@@ -461,16 +461,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "math-atoms-bus"
+version = "0.1.0"
+
+[[package]]
 name = "math-atoms-core"
 version = "0.1.0"
 dependencies = [
+ "math-atoms-bus",
  "math-atoms-doctrine",
+ "math-atoms-hash",
  "math-atoms-json",
  "math-atoms-learning",
+ "math-atoms-proof",
 ]
 
 [[package]]
 name = "math-atoms-doctrine"
+version = "0.1.0"
+
+[[package]]
+name = "math-atoms-hash"
 version = "0.1.0"
 
 [[package]]
@@ -480,6 +491,10 @@ version = "0.1.0"
 [[package]]
 name = "math-atoms-learning"
 version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-json",
+]
 
 [[package]]
 name = "math-atoms-native"
@@ -488,6 +503,13 @@ dependencies = [
  "math-atoms-core",
  "pmre-kit",
  "pmre-orchestrator",
+]
+
+[[package]]
+name = "math-atoms-proof"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-json",
 ]
 
 [[package]]

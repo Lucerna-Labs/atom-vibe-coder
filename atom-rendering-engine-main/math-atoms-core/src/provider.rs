@@ -1,8 +1,13 @@
 use crate::graph::Evidence;
-use math_atoms_json::string_field as read_json_string_field;
+use math_atoms_hash::{sha256_file, sha256_tagged};
+use math_atoms_json::{parse as parse_json, JsonValue};
 use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+
+const MAX_PROVIDER_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PROVIDER_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKind {
@@ -76,6 +81,7 @@ pub struct PreparedProviderCall {
     pub api_key_env: String,
     pub auth_header: String,
     pub auth_scheme: String,
+    pub wire_format: ProviderWireFormat,
     pub response_key: String,
     pub body: String,
 }
@@ -96,6 +102,15 @@ pub enum ProviderError {
         body: String,
     },
     ResponseTextMissing,
+    ResponseEnvelopeInvalid,
+    ResponseTooLarge,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PersistedProviderOutput {
+    pub path: PathBuf,
+    pub hash: String,
+    pub len: usize,
 }
 
 impl ProviderConfig {
@@ -283,6 +298,7 @@ impl ProviderConfig {
             api_key_env: self.api_key_env.clone(),
             auth_header: self.auth_header.clone(),
             auth_scheme: self.auth_scheme.clone(),
+            wire_format: self.wire_format,
             response_key: self.response_key.clone(),
             body: provider_body(self.wire_format, &self.model, &prompt, &self.body_template),
         })
@@ -335,40 +351,163 @@ impl PreparedProviderCall {
                 body: truncate_for_log(&redact_provider_body(&body, &api_key)),
             });
         }
-        parse_provider_text(&body, &self.response_key)
+        parse_provider_text(&body, self.wire_format, &self.response_key)
     }
 }
 
 pub fn parse_responses_text(body: &str) -> Result<String, ProviderError> {
-    parse_provider_text(body, default_response_key())
+    parse_provider_text(
+        body,
+        ProviderWireFormat::OpenAiResponses,
+        default_response_key(),
+    )
 }
 
-fn parse_provider_text(body: &str, preferred_key: &str) -> Result<String, ProviderError> {
-    let mut keys = Vec::new();
+fn parse_provider_text(
+    body: &str,
+    wire_format: ProviderWireFormat,
+    preferred_key: &str,
+) -> Result<String, ProviderError> {
+    if body.len() > MAX_PROVIDER_RESPONSE_BYTES {
+        return Err(ProviderError::ResponseTooLarge);
+    }
+    let root = parse_json(body).map_err(|_| ProviderError::ResponseEnvelopeInvalid)?;
+    let Some(object) = root.as_object() else {
+        return Err(ProviderError::ResponseEnvelopeInvalid);
+    };
+    if root
+        .get("error")
+        .is_some_and(|error| !matches!(error, JsonValue::Null))
+    {
+        return Err(ProviderError::ResponseEnvelopeInvalid);
+    }
     let preferred = normalize_response_key(preferred_key);
-    if !preferred.is_empty() {
-        keys.push(preferred);
-    }
-    for key in ["output_text", "text", "response", "content"] {
-        if !keys.iter().any(|item| item == key) {
-            keys.push(key.to_string());
+    if !preferred.is_empty() && preferred != default_response_key() {
+        if let Some(text) = root.get(&preferred).and_then(JsonValue::as_str) {
+            return validated_provider_text(text);
         }
     }
-    for key in keys {
-        if let Some(text) = read_json_string_field(body, &key) {
-            return Ok(text);
+    let text = match wire_format {
+        ProviderWireFormat::OpenAiResponses => responses_output_text(&root),
+        ProviderWireFormat::ChatCompletions => chat_completion_text(&root),
+        ProviderWireFormat::OllamaChat => ollama_chat_text(&root),
+    };
+    if object.is_empty() {
+        return Err(ProviderError::ResponseEnvelopeInvalid);
+    }
+    validated_provider_text(text.ok_or(ProviderError::ResponseTextMissing)?)
+}
+
+fn responses_output_text(root: &JsonValue) -> Option<&str> {
+    if let Some(text) = root.get("output_text").and_then(JsonValue::as_str) {
+        return Some(text);
+    }
+    for item in root.get("output")?.as_array()? {
+        for content in item.get("content")?.as_array()? {
+            let kind = content.get("type").and_then(JsonValue::as_str);
+            if matches!(kind, Some("output_text" | "text")) {
+                if let Some(text) = content.get("text").and_then(JsonValue::as_str) {
+                    return Some(text);
+                }
+            }
         }
     }
-    Err(ProviderError::ResponseTextMissing)
+    None
+}
+
+fn chat_completion_text(root: &JsonValue) -> Option<&str> {
+    root.get("choices")?
+        .as_array()?
+        .first()?
+        .get("message")?
+        .get("content")?
+        .as_str()
+}
+
+fn ollama_chat_text(root: &JsonValue) -> Option<&str> {
+    root.get("message")?.get("content")?.as_str()
+}
+
+fn validated_provider_text(text: &str) -> Result<String, ProviderError> {
+    if text.trim().is_empty() {
+        return Err(ProviderError::ResponseTextMissing);
+    }
+    if text.len() > MAX_PROVIDER_OUTPUT_BYTES {
+        return Err(ProviderError::ResponseTooLarge);
+    }
+    Ok(text.to_string())
 }
 
 pub fn provider_output_hash(text: &str) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in text.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+    sha256_tagged(text.as_bytes())
+}
+
+pub fn default_provider_output_dir() -> PathBuf {
+    let base = std::env::var("MATH_ATOMS_STORE_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("LOCALAPPDATA").map(PathBuf::from))
+        .unwrap_or_else(|_| std::env::temp_dir());
+    base.join("MathAtomsCoder").join("provider-outputs")
+}
+
+pub fn persist_provider_output(
+    text: &str,
+    directory: impl AsRef<Path>,
+) -> io::Result<PersistedProviderOutput> {
+    if text.trim().is_empty() || text.len() > MAX_PROVIDER_OUTPUT_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "provider output is empty or exceeds the evidence limit",
+        ));
     }
-    format!("fnv:{hash:016x}")
+    let hash = provider_output_hash(text);
+    let hex = hash.strip_prefix("sha256:").unwrap_or(&hash);
+    let directory = directory.as_ref();
+    fs::create_dir_all(directory)?;
+    let path = directory.join(format!("{hex}.txt"));
+    if path.exists() {
+        if sha256_file(&path)? != hash {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "content-addressed provider artifact hash mismatch",
+            ));
+        }
+    } else {
+        let temp = directory.join(format!(
+            "{hex}.{}.{}.tmp",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(text.as_bytes())?;
+        file.flush()?;
+        file.sync_data()?;
+        drop(file);
+        match fs::rename(&temp, &path) {
+            Ok(()) => {}
+            Err(_) if path.exists() => {
+                let _ = fs::remove_file(&temp);
+                if sha256_file(&path)? != hash {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "existing provider artifact failed hash verification",
+                    ));
+                }
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+        }
+    }
+    Ok(PersistedProviderOutput {
+        path,
+        hash,
+        len: text.len(),
+    })
 }
 
 fn curl_config(endpoint: &str, auth_header: &str, auth_scheme: &str, api_key: &str) -> String {
@@ -683,6 +822,7 @@ mod tests {
         assert!(call.body.contains("\"model\":\"gpt-5.5\""));
         assert!(call.body.contains("\"input\""));
         assert_eq!(config.wire_format, ProviderWireFormat::OpenAiResponses);
+        assert_eq!(call.wire_format, ProviderWireFormat::OpenAiResponses);
         assert!(!call.body.contains("secret"));
     }
 
@@ -690,6 +830,11 @@ mod tests {
     fn response_text_parser_reads_output_text() {
         let text = parse_responses_text(r#"{"output_text":"route proven\nnext"}"#).unwrap();
         assert_eq!(text, "route proven\nnext");
+        let nested = parse_responses_text(
+            r#"{"output":[{"type":"message","content":[{"type":"output_text","text":"nested route"}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(nested, "nested route");
     }
 
     #[test]
@@ -711,26 +856,52 @@ mod tests {
 
     #[test]
     fn response_text_parser_reads_ollama_content() {
-        let text =
-            parse_responses_text(r#"{"message":{"role":"assistant","content":"provider-ok"}}"#)
-                .unwrap();
+        let text = parse_provider_text(
+            r#"{"message":{"role":"assistant","content":"provider-ok"}}"#,
+            ProviderWireFormat::OllamaChat,
+            "content",
+        )
+        .unwrap();
         assert_eq!(text, "provider-ok");
     }
 
     #[test]
     fn response_text_parser_reads_chat_completion_content() {
-        let text = parse_responses_text(
+        let text = parse_provider_text(
             r#"{"choices":[{"message":{"role":"assistant","content":"mistral-ok"}}]}"#,
+            ProviderWireFormat::ChatCompletions,
+            "content",
         )
         .unwrap();
         assert_eq!(text, "mistral-ok");
     }
 
     #[test]
-    fn response_text_parser_skips_non_field_matches() {
-        let text =
-            parse_responses_text(r#"{"content":[{"type":"text","text":"anthropic-ok"}]}"#).unwrap();
-        assert_eq!(text, "anthropic-ok");
+    fn response_parser_rejects_wrong_paths_and_error_envelopes() {
+        assert_eq!(
+            parse_provider_text(
+                r#"{"error":{"content":"quota exceeded"}}"#,
+                ProviderWireFormat::ChatCompletions,
+                "content",
+            ),
+            Err(ProviderError::ResponseEnvelopeInvalid)
+        );
+        assert_eq!(
+            parse_provider_text(
+                r#"{"content":[{"type":"text","text":"wrong-path"}]}"#,
+                ProviderWireFormat::OpenAiResponses,
+                "output_text",
+            ),
+            Err(ProviderError::ResponseTextMissing)
+        );
+        assert_eq!(
+            parse_provider_text(
+                r#"{"choices":[{"message":{"content":""}}]}"#,
+                ProviderWireFormat::ChatCompletions,
+                "content",
+            ),
+            Err(ProviderError::ResponseTextMissing)
+        );
     }
 
     #[test]
@@ -830,7 +1001,12 @@ mod tests {
             .body
             .starts_with("{\"m\":\"vibe-model\",\"p\":\"Mission:"));
         assert_eq!(
-            parse_provider_text(r#"{"answer":"template-ok"}"#, &call.response_key).unwrap(),
+            parse_provider_text(
+                r#"{"answer":"template-ok"}"#,
+                call.wire_format,
+                &call.response_key,
+            )
+            .unwrap(),
             "template-ok"
         );
     }
@@ -890,7 +1066,23 @@ mod tests {
             provider_output_hash("provider proof"),
             provider_output_hash("provider proof")
         );
-        assert!(provider_output_hash("provider proof").starts_with("fnv:"));
+        assert!(provider_output_hash("provider proof").starts_with("sha256:"));
+    }
+
+    #[test]
+    fn provider_output_artifact_is_content_addressed_and_recomputable() {
+        let dir = std::env::temp_dir().join(format!(
+            "math-atoms-provider-output-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let stored = persist_provider_output("provider proof", &dir).unwrap();
+        assert_eq!(stored.hash, provider_output_hash("provider proof"));
+        assert_eq!(stored.len, "provider proof".len());
+        assert_eq!(sha256_file(&stored.path).unwrap(), stored.hash);
+        let duplicate = persist_provider_output("provider proof", &dir).unwrap();
+        assert_eq!(duplicate.path, stored.path);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -96,7 +96,13 @@ function Click-NativeControl([IntPtr]$Handle, [int]$X, [int]$Y) {
 }
 
 function Invoke-NativeCommand([IntPtr]$Handle, [int]$Command) {
-    [MathAtomsNativeFunctional]::PostMessage($Handle, 0x804A, [UIntPtr]::new($Command), [IntPtr]::Zero) | Out-Null
+    for ($attempt = 0; $attempt -lt 5; $attempt++) {
+        if ([MathAtomsNativeFunctional]::PostMessage($Handle, 0x804A, [UIntPtr]::new($Command), [IntPtr]::Zero)) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Native command $Command could not be posted to window $Handle"
 }
 
 function Send-WmChar([IntPtr]$Handle, [int]$Code) {
@@ -217,8 +223,22 @@ try {
         throw "Design Upload tab did not update native navigation state. Title: $title"
     }
 
-    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandBuildDesignUpload
-    $proc = Wait-ForTitlePattern "design:built" "Build Design Upload" 120
+    $designStartDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandBuildDesignUpload
+        Start-Sleep -Milliseconds 500
+        $proc = Refresh-NativeProcess "Build Design Upload acknowledgement"
+        $title = Get-AtomNativeWindowTitle -Process $proc
+    } while ($title -match "design:idle" -and [DateTime]::UtcNow -lt $designStartDeadline)
+    if ($title -match "design:idle") {
+        throw "Build Design Upload command was not acknowledged after retries. Title: $title"
+    }
+    if ($title -match "design:blocked") {
+        throw "Build Design Upload failed before artifact completion. Title: $title"
+    }
+    if ($title -notmatch "design:built") {
+        $proc = Wait-ForTitlePattern "design:built" "Build Design Upload" 120
+    }
     if (-not (Test-DesignArtifactRow)) {
         throw "Build Design Upload did not write the uploaded-design-app artifact manifest row"
     }

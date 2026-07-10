@@ -4,29 +4,28 @@
 //! graph-native retrieval, provider request setup, and proof-loop state. The PMRE app
 //! consumes this crate and renders the state; no browser-local state is required here.
 
-pub mod bus;
 pub mod domain;
 pub mod graph;
 pub mod provider;
 pub mod runtime;
-pub mod store;
 
-pub use bus::{
-    BackpressureSignal, BusLayer, BusMessageKind, Envelope, EnvelopeId, FabricSnapshot,
-    FabricThread, Intersection, PreloadPlan, Ramp, SpiderwebBus, ThreadId, TransferPolicy,
-};
 pub use domain::{
     atom_by_key, atoms, gates, mission, recipes, Atom, AtomLayer, Gate, Mission, Recipe,
     RecipeStatus,
 };
 pub use graph::{Evidence, WikiGraph};
+pub use math_atoms_bus::{
+    BackpressureSignal, BusLayer, BusMessageKind, Envelope, EnvelopeId, FabricSnapshot,
+    FabricThread, Intersection, PreloadPlan, Ramp, SpiderwebBus, ThreadId, TransferPolicy,
+};
 pub use math_atoms_learning::{
     artifact_hash, effective_records, rank_records, LearningHit, LearningOutcome, LearningRecord,
     LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
+pub use math_atoms_proof::{ProofRecord, ProofStore};
 pub use provider::{
-    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderConfigInput, ProviderError,
-    ProviderKind, ProviderWireFormat,
+    default_provider_output_dir, persist_provider_output, provider_output_hash,
+    PersistedProviderOutput, PreparedProviderCall, ProviderConfig, ProviderConfigInput,
+    ProviderError, ProviderKind, ProviderWireFormat,
 };
 pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};
-pub use store::{ProofRecord, ProofStore};

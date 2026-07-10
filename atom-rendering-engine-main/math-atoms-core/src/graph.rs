@@ -1,6 +1,7 @@
 use crate::domain::{atoms, gates, mission, recipes};
-use crate::store::ProofRecord;
-use math_atoms_learning::{LearningOutcome, LearningRecord};
+use math_atoms_hash::{sha256_file, valid_sha256_tag};
+use math_atoms_learning::{LearningOutcome, LearningRecord, DEFAULT_GRAPH_MEMORY_LIMIT};
+use math_atoms_proof::ProofRecord;
 use std::collections::{hash_map::DefaultHasher, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -41,6 +42,7 @@ struct WikiEdge {
 pub struct WikiGraph {
     nodes: Vec<WikiNode>,
     edges: Vec<WikiEdge>,
+    learning_nodes: VecDeque<(String, String)>,
 }
 
 impl WikiGraph {
@@ -171,7 +173,11 @@ impl WikiGraph {
             }
         }
 
-        Self { nodes, edges }
+        Self {
+            nodes,
+            edges,
+            learning_nodes: VecDeque::new(),
+        }
     }
 
     pub fn from_markdown_dir(dir: impl AsRef<Path>) -> io::Result<Self> {
@@ -340,6 +346,16 @@ impl WikiGraph {
         if self.nodes.iter().any(|node| node.id == id) {
             return;
         }
+        let memory_key = record.memory_key();
+        if let Some(index) = self
+            .learning_nodes
+            .iter()
+            .position(|(_, key)| key == &memory_key)
+        {
+            if let Some((superseded, _)) = self.learning_nodes.remove(index) {
+                self.remove_node(&superseded);
+            }
+        }
         self.nodes.push(WikiNode {
             id: id.clone(),
             title: record.title(),
@@ -352,12 +368,18 @@ impl WikiGraph {
                 to: id.clone(),
                 weight: 5,
             });
-            if record.outcome == LearningOutcome::Succeeded {
+            if record.outcome == LearningOutcome::Succeeded && record.is_promotable_success() {
                 self.edges.push(WikiEdge {
                     from: id.clone(),
                     to: record.recipe_id.clone(),
                     weight: 6,
                 });
+            }
+        }
+        self.learning_nodes.push_back((id.clone(), memory_key));
+        while self.learning_nodes.len() > DEFAULT_GRAPH_MEMORY_LIMIT {
+            if let Some((evicted, _)) = self.learning_nodes.pop_front() {
+                self.remove_node(&evicted);
             }
         }
         for atom in &record.atom_stack {
@@ -375,6 +397,11 @@ impl WikiGraph {
         for record in records {
             self.add_learning_record(record);
         }
+    }
+
+    fn remove_node(&mut self, id: &str) {
+        self.nodes.retain(|node| node.id != id);
+        self.edges.retain(|edge| edge.from != id && edge.to != id);
     }
 
     fn load_markdown_dir(&mut self, dir: &Path) -> io::Result<()> {
@@ -496,6 +523,11 @@ fn default_wiki_dirs() -> Vec<PathBuf> {
     }
     dirs.push(PathBuf::from("knowledge/wiki"));
     dirs.push(PathBuf::from("../knowledge/wiki"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(engine) = exe.parent().and_then(Path::parent).and_then(Path::parent) {
+            dirs.push(engine.join("..").join("knowledge").join("wiki"));
+        }
+    }
     dirs
 }
 
@@ -554,6 +586,7 @@ fn proof_node_id(record: &ProofRecord, record_atoms: &[String]) -> String {
     record.provider_state.hash(&mut hasher);
     record.provider_model.hash(&mut hasher);
     record.provider_endpoint.hash(&mut hasher);
+    record.provider_output_artifact.hash(&mut hasher);
     record.provider_output_hash.hash(&mut hasher);
     record.provider_output_len.hash(&mut hasher);
     record.route_len.hash(&mut hasher);
@@ -580,13 +613,14 @@ fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
     record.provider_state == "provider:ran"
         && !record.provider_model.trim().is_empty()
         && !record.provider_endpoint.trim().is_empty()
-        && record.provider_output_hash.starts_with("fnv:")
-        && record.provider_output_hash.len() == "fnv:0000000000000000".len()
-        && record
-            .provider_output_hash
-            .chars()
-            .skip(4)
-            .all(|ch| ch.is_ascii_hexdigit())
+        && !record.provider_output_artifact.trim().is_empty()
+        && valid_sha256_tag(&record.provider_output_hash)
+        && sha256_file(&record.provider_output_artifact)
+            .map(|actual| actual == record.provider_output_hash)
+            .unwrap_or(false)
+        && fs::metadata(&record.provider_output_artifact)
+            .map(|metadata| metadata.len() == record.provider_output_len as u64)
+            .unwrap_or(false)
         && record.provider_output_len > 0
 }
 
@@ -619,6 +653,42 @@ fn pin_mission_evidence(evidence: &mut Vec<Evidence>, graph: &WikiGraph, limit: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use math_atoms_hash::sha256_file;
+    use math_atoms_learning::{LearningRecordInput, LEARNING_SCHEMA_VERSION};
+
+    fn provider_artifact(label: &str, text: &str) -> (PathBuf, String) {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-{label}-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, text).unwrap();
+        let hash = sha256_file(&path).unwrap();
+        (path, hash)
+    }
+
+    fn failed_learning(index: usize, intent: String) -> LearningRecord {
+        let mut record = LearningRecord::new(LearningRecordInput {
+            source: "graph-test".to_string(),
+            intent,
+            recipe_id: "provider-model-loop".to_string(),
+            atom_stack: vec!["measure".to_string(), "flow".to_string()],
+            gate: format!("gate-{index}"),
+            attempt: 1,
+            outcome: LearningOutcome::Failed,
+            failure: format!("failure-{index}"),
+            correction: String::new(),
+            artifact_path: String::new(),
+            artifact_hash: String::new(),
+            provider_model: String::new(),
+            route_len: 4,
+        });
+        record.schema_version = LEARNING_SCHEMA_VERSION;
+        record
+    }
 
     #[test]
     fn markdown_wiki_nodes_are_retrieved() {
@@ -656,6 +726,7 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "fake-responsive-provider".to_string(),
             provider_endpoint: "http://127.0.0.1:1/v1/responses".to_string(),
+            provider_output_artifact: String::new(),
             provider_output_hash: "fnv:1111111111111111".to_string(),
             provider_output_len: 18,
             route_len: 6,
@@ -676,6 +747,7 @@ mod tests {
             provider_state: "provider:idle".to_string(),
             provider_model: String::new(),
             provider_endpoint: String::new(),
+            provider_output_artifact: String::new(),
             provider_output_hash: String::new(),
             provider_output_len: 0,
             route_len: 6,
@@ -691,6 +763,8 @@ mod tests {
     #[test]
     fn audited_provider_proof_records_become_rag_evidence() {
         let mut graph = WikiGraph::seeded();
+        let output = "provider proof";
+        let (artifact, hash) = provider_artifact("audited-provider-proof", output);
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -700,8 +774,9 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "gpt-test".to_string(),
             provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
-            provider_output_hash: "fnv:1234567890abcdef".to_string(),
-            provider_output_len: 14,
+            provider_output_artifact: artifact.to_string_lossy().to_string(),
+            provider_output_hash: hash,
+            provider_output_len: output.len(),
             route_len: 8,
         });
         let hits = graph.retrieve(
@@ -710,11 +785,39 @@ mod tests {
             12,
         );
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
+        fs::remove_file(artifact).ok();
+    }
+
+    #[test]
+    fn tampered_provider_artifact_cannot_become_proof_evidence() {
+        let output = "verified provider output";
+        let (artifact, hash) = provider_artifact("tampered-provider-proof", output);
+        let record = ProofRecord {
+            recipe_id: "provider-model-loop".to_string(),
+            status: "proven".to_string(),
+            atoms: vec!["measure".to_string(), "flow".to_string()],
+            evidence_count: 9,
+            blockers: Vec::new(),
+            provider_state: "provider:ran".to_string(),
+            provider_model: "gpt-test".to_string(),
+            provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_artifact: artifact.to_string_lossy().to_string(),
+            provider_output_hash: hash,
+            provider_output_len: output.len(),
+            route_len: 8,
+        };
+        fs::write(&artifact, "tampered provider output").unwrap();
+        let mut graph = WikiGraph::seeded();
+        graph.add_proof_record(&record);
+        assert!(!graph.nodes.iter().any(|node| node.id.starts_with("proof:")));
+        fs::remove_file(artifact).ok();
     }
 
     #[test]
     fn proof_record_atoms_are_limited_to_authored_recipe_stack() {
         let mut graph = WikiGraph::seeded();
+        let output = "provider proof";
+        let (artifact, hash) = provider_artifact("atom-limited-provider-proof", output);
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -730,8 +833,9 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "gpt-test".to_string(),
             provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
-            provider_output_hash: "fnv:abcdef1234567890".to_string(),
-            provider_output_len: 14,
+            provider_output_artifact: artifact.to_string_lossy().to_string(),
+            provider_output_hash: hash,
+            provider_output_len: output.len(),
             route_len: 8,
         });
 
@@ -745,6 +849,39 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.from == "combine" && edge.to == proof_node.id));
+        fs::remove_file(artifact).ok();
+    }
+
+    #[test]
+    fn live_learning_graph_is_bounded_and_deduplicated() {
+        let mut graph = WikiGraph::seeded();
+        let base_nodes = graph.nodes.len();
+        for index in 0..(DEFAULT_GRAPH_MEMORY_LIMIT + 17) {
+            graph.add_learning_record(&failed_learning(index, format!("intent-{index}")));
+        }
+        assert_eq!(graph.learning_nodes.len(), DEFAULT_GRAPH_MEMORY_LIMIT);
+        assert_eq!(
+            graph
+                .nodes
+                .iter()
+                .filter(|node| node.id.starts_with("learning:"))
+                .count(),
+            DEFAULT_GRAPH_MEMORY_LIMIT
+        );
+        assert_eq!(graph.nodes.len(), base_nodes + DEFAULT_GRAPH_MEMORY_LIMIT);
+
+        let original = failed_learning(999, "deduplicated intent".to_string());
+        let mut replacement = original.clone();
+        replacement.id = "replacement-learning-record".to_string();
+        replacement.timestamp_ms += 1;
+        graph.add_learning_record(&original);
+        graph.add_learning_record(&replacement);
+        assert!(!graph.nodes.iter().any(|node| node.id == original.node_id()));
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.id == replacement.node_id()));
+        assert_eq!(graph.learning_nodes.len(), DEFAULT_GRAPH_MEMORY_LIMIT);
     }
 
     #[test]
@@ -772,6 +909,7 @@ mod tests {
             provider_state: "provider:blocked".to_string(),
             provider_model: "gpt-test".to_string(),
             provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_artifact: String::new(),
             provider_output_hash: String::new(),
             provider_output_len: 0,
             route_len: 6,
@@ -797,6 +935,7 @@ mod tests {
                 provider_state: "provider:blocked".to_string(),
                 provider_model: String::new(),
                 provider_endpoint: String::new(),
+                provider_output_artifact: String::new(),
                 provider_output_hash: String::new(),
                 provider_output_len: 0,
                 route_len: 5,

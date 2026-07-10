@@ -4,15 +4,18 @@
 //! structured context to correct future attempts. Successful, gate-passing artifacts
 //! can be promoted as reusable graph evidence by the runtime.
 
+use math_atoms_hash::{sha256_file, valid_sha256_tag};
+use math_atoms_json::{parse as parse_json, JsonValue};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const LEARNING_SCHEMA_VERSION: u32 = 1;
+pub const LEARNING_SCHEMA_VERSION: u32 = 2;
+const LEGACY_LEARNING_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_GRAPH_MEMORY_LIMIT: usize = 256;
 const MAX_SHORT_FIELD: usize = 512;
 const MAX_LONG_FIELD: usize = 4_096;
@@ -104,11 +107,12 @@ pub struct LearningStore {
 
 struct StoreLock {
     path: PathBuf,
-    _file: File,
+    file: Option<File>,
 }
 
 impl Drop for StoreLock {
     fn drop(&mut self) {
+        self.file.take();
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -151,7 +155,10 @@ impl LearningRecord {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != LEARNING_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version,
+            LEGACY_LEARNING_SCHEMA_VERSION | LEARNING_SCHEMA_VERSION
+        ) {
             return Err(format!(
                 "unsupported learning schema version {}",
                 self.schema_version
@@ -176,18 +183,56 @@ impl LearningRecord {
         if self.outcome == LearningOutcome::Failed && self.failure.trim().is_empty() {
             return Err("failed learning record requires failure evidence".to_string());
         }
-        if self.outcome == LearningOutcome::Succeeded
-            && self.route_len < 4
-            && self.artifact_hash.is_empty()
-        {
-            return Err(
-                "successful learning record requires a full route or artifact hash".to_string(),
-            );
+        let native_route_success = self.source == "native-app" && self.route_len >= 4;
+        if self.outcome == LearningOutcome::Succeeded {
+            if self.schema_version == LEGACY_LEARNING_SCHEMA_VERSION {
+                if !native_route_success && self.artifact_hash.trim().is_empty() {
+                    return Err(
+                        "legacy successful learning requires a full route or checksum".to_string(),
+                    );
+                }
+            } else {
+                let native_non_provider_success =
+                    native_route_success && self.provider_model.trim().is_empty();
+                if !native_non_provider_success
+                    && (self.artifact_path.trim().is_empty()
+                        || self.artifact_hash.trim().is_empty())
+                {
+                    return Err(
+                        "successful provider or harness learning requires an artifact path and hash"
+                            .to_string(),
+                    );
+                }
+            }
         }
-        if !self.artifact_hash.is_empty() && !valid_fnv_hash(&self.artifact_hash) {
-            return Err("learning artifact hash must be fnv plus 16 hex digits".to_string());
+        if !self.artifact_hash.is_empty() {
+            let hash_valid = if self.schema_version == LEGACY_LEARNING_SCHEMA_VERSION {
+                valid_legacy_fnv_hash(&self.artifact_hash)
+            } else {
+                valid_sha256_tag(&self.artifact_hash)
+            };
+            if !hash_valid {
+                return Err("learning artifact hash does not match its schema".to_string());
+            }
         }
         Ok(())
+    }
+
+    pub fn is_promotable_success(&self) -> bool {
+        if self.validate().is_err() || self.outcome != LearningOutcome::Succeeded {
+            return false;
+        }
+        if self.source == "native-app"
+            && self.provider_model.trim().is_empty()
+            && self.route_len >= 4
+        {
+            return true;
+        }
+        self.schema_version == LEARNING_SCHEMA_VERSION
+            && valid_sha256_tag(&self.artifact_hash)
+            && sha256_file(&self.artifact_path)
+                .map(|actual| actual == self.artifact_hash)
+                .unwrap_or(false)
     }
 
     pub fn node_id(&self) -> String {
@@ -290,23 +335,50 @@ impl LearningRecord {
     }
 
     pub fn from_json(line: &str) -> Option<Self> {
+        const FIELDS: [&str; 16] = [
+            "schema_version",
+            "id",
+            "timestamp_ms",
+            "source",
+            "intent",
+            "recipe_id",
+            "atom_stack",
+            "gate",
+            "attempt",
+            "outcome",
+            "failure",
+            "correction",
+            "artifact_path",
+            "artifact_hash",
+            "provider_model",
+            "route_len",
+        ];
+        let root = parse_json(line).ok()?;
+        let object = root.as_object()?;
+        if object.len() != FIELDS.len()
+            || object
+                .iter()
+                .any(|(name, _)| !FIELDS.contains(&name.as_str()))
+        {
+            return None;
+        }
         let record = Self {
-            schema_version: u32_field(line, "schema_version")?,
-            id: string_field(line, "id")?,
-            timestamp_ms: u64_field(line, "timestamp_ms")?,
-            source: string_field(line, "source")?,
-            intent: string_field(line, "intent")?,
-            recipe_id: string_field(line, "recipe_id")?,
-            atom_stack: string_array_field(line, "atom_stack")?,
-            gate: string_field(line, "gate")?,
-            attempt: u32_field(line, "attempt")?,
-            outcome: LearningOutcome::parse(&string_field(line, "outcome")?)?,
-            failure: string_field(line, "failure")?,
-            correction: string_field(line, "correction")?,
-            artifact_path: string_field(line, "artifact_path")?,
-            artifact_hash: string_field(line, "artifact_hash")?,
-            provider_model: string_field(line, "provider_model")?,
-            route_len: usize_field(line, "route_len")?,
+            schema_version: json_u32(&root, "schema_version")?,
+            id: json_string(&root, "id")?,
+            timestamp_ms: json_u64(&root, "timestamp_ms")?,
+            source: json_string(&root, "source")?,
+            intent: json_string(&root, "intent")?,
+            recipe_id: json_string(&root, "recipe_id")?,
+            atom_stack: json_string_array(&root, "atom_stack")?,
+            gate: json_string(&root, "gate")?,
+            attempt: json_u32(&root, "attempt")?,
+            outcome: LearningOutcome::parse(&json_string(&root, "outcome")?)?,
+            failure: json_string(&root, "failure")?,
+            correction: json_string(&root, "correction")?,
+            artifact_path: json_string(&root, "artifact_path")?,
+            artifact_hash: json_string(&root, "artifact_hash")?,
+            provider_model: json_string(&root, "provider_model")?,
+            route_len: json_usize(&root, "route_len")?,
         };
         record.validate().ok()?;
         Some(record)
@@ -380,18 +452,31 @@ impl LearningStore {
         let _lock = self.acquire_lock()?;
         let mut file = OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{}", record.to_json())?;
+        let start = file.metadata()?.len();
+        let encoded = format!("{}\n", record.to_json());
+        file.write_all(encoded.as_bytes())?;
         file.flush()?;
-        file.sync_data()
+        file.sync_data()?;
+        file.seek(SeekFrom::Start(start))?;
+        let mut readback = vec![0; encoded.len()];
+        file.read_exact(&mut readback)?;
+        if readback != encoded.as_bytes() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "learning append verification did not match persisted bytes",
+            ));
+        }
+        Ok(())
     }
 
     pub fn read_to_string(&self) -> io::Result<String> {
+        let _lock = self.acquire_lock()?;
         if !self.path.exists() {
             return Ok(String::new());
         }
-        let _lock = self.acquire_lock()?;
         let mut file = match OpenOptions::new().read(true).open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
@@ -422,6 +507,12 @@ impl LearningStore {
 
     fn acquire_lock(&self) -> io::Result<StoreLock> {
         let lock_path = lock_path(&self.path);
+        if let Some(parent) = lock_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
         for _ in 0..LOCK_RETRIES {
             match OpenOptions::new()
                 .write(true)
@@ -431,11 +522,22 @@ impl LearningStore {
                 Ok(file) => {
                     return Ok(StoreLock {
                         path: lock_path,
-                        _file: file,
+                        file: Some(file),
                     })
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    reclaim_stale_lock(&lock_path)?;
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::AlreadyExists
+                            | io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    if let Err(lock_error) = reclaim_stale_lock(&lock_path) {
+                        if lock_error.kind() != io::ErrorKind::PermissionDenied {
+                            return Err(lock_error);
+                        }
+                    }
                     thread::sleep(LOCK_RETRY_DELAY);
                 }
                 Err(error) => return Err(error),
@@ -525,8 +627,7 @@ pub fn rank_records(
 }
 
 pub fn artifact_hash(path: impl AsRef<Path>) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(format!("fnv:{:016x}", fnv1a(&bytes)))
+    sha256_file(path)
 }
 
 fn now_ms() -> u64 {
@@ -547,7 +648,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn valid_fnv_hash(value: &str) -> bool {
+fn valid_legacy_fnv_hash(value: &str) -> bool {
     value.len() == "fnv:0000000000000000".len()
         && value.starts_with("fnv:")
         && value.chars().skip(4).all(|ch| ch.is_ascii_hexdigit())
@@ -580,13 +681,148 @@ fn redact_token_like_secrets(value: &str) -> String {
     let mut output = Vec::new();
     let mut redact_next = false;
     for part in value.split_whitespace() {
-        let lower = part.to_ascii_lowercase();
-        let secret = redact_next
-            || ((lower.starts_with("sk-") || lower.starts_with("key=")) && part.len() > 12);
-        output.push(if secret { "[REDACTED]" } else { part });
-        redact_next = lower == "bearer" || lower.ends_with("api_key:");
+        let normalized = normalize_secret_label(part);
+        if redact_next {
+            if normalized == "bearer" {
+                output.push(part.to_string());
+                continue;
+            }
+            output.push("[REDACTED]".to_string());
+            redact_next = false;
+            continue;
+        }
+        if let Some((redacted, needs_next)) = redact_assignment(part) {
+            output.push(redacted);
+            redact_next = needs_next;
+        } else if let Some(redacted) = redact_token_families(part) {
+            output.push(redacted);
+        } else {
+            output.push(part.to_string());
+            redact_next = normalized == "bearer";
+        }
     }
     output.join(" ")
+}
+
+fn redact_assignment(part: &str) -> Option<(String, bool)> {
+    let separator = part.find([':', '='])?;
+    let label = normalize_secret_label(&part[..separator]);
+    if !sensitive_label(&label) {
+        return None;
+    }
+    let prefix = &part[..=separator];
+    let value = &part[separator + 1..];
+    let trimmed = value.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '`' | '{' | '}' | '[' | ']' | '(' | ')' | ',' | ';'
+        )
+    });
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("bearer") {
+        return Some((part.to_string(), true));
+    }
+    let leading_len = value
+        .char_indices()
+        .take_while(|(_, ch)| matches!(ch, '"' | '\'' | '`' | '[' | '(' | '{'))
+        .last()
+        .map(|(index, ch)| index + ch.len_utf8())
+        .unwrap_or(0);
+    let trailing_start = value
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| matches!(ch, '"' | '\'' | '`' | ']' | ')' | '}' | ',' | ';'))
+        .last()
+        .map(|(index, _)| index)
+        .unwrap_or(value.len());
+    Some((
+        format!(
+            "{prefix}{}[REDACTED]{}",
+            &value[..leading_len.min(value.len())],
+            &value[trailing_start.max(leading_len)..]
+        ),
+        false,
+    ))
+}
+
+fn normalize_secret_label(value: &str) -> String {
+    value
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && !matches!(ch, '_' | '-'))
+        .to_ascii_lowercase()
+}
+
+fn sensitive_label(label: &str) -> bool {
+    matches!(
+        label,
+        "api_key"
+            | "apikey"
+            | "api-key"
+            | "x-api-key"
+            | "key"
+            | "token"
+            | "access_token"
+            | "access-token"
+            | "password"
+            | "passwd"
+            | "secret"
+            | "client_secret"
+            | "client-secret"
+            | "authorization"
+            | "auth"
+    )
+}
+
+fn redact_token_families(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    let prefixes = [
+        "sk-",
+        "ghp_",
+        "github_pat_",
+        "xoxb-",
+        "xoxp-",
+        "hf_",
+        "akia",
+        "aiza",
+    ];
+    let mut spans = Vec::new();
+    for start in lower.char_indices().map(|(index, _)| index) {
+        let boundary = start == 0
+            || !lower.as_bytes()[start - 1].is_ascii_alphanumeric()
+                && lower.as_bytes()[start - 1] != b'_';
+        if !boundary {
+            continue;
+        }
+        let Some(prefix) = prefixes
+            .iter()
+            .find(|prefix| lower[start..].starts_with(**prefix))
+        else {
+            continue;
+        };
+        let mut end = start + prefix.len();
+        while end < lower.len()
+            && matches!(lower.as_bytes()[end], b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.')
+        {
+            end += 1;
+        }
+        if end - start > 12 {
+            spans.push((start, end));
+        }
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    spans.sort_unstable();
+    let mut output = String::new();
+    let mut cursor = 0;
+    for (start, end) in spans {
+        if start < cursor {
+            continue;
+        }
+        output.push_str(&value[cursor..start]);
+        output.push_str("[REDACTED]");
+        cursor = end;
+    }
+    output.push_str(&value[cursor..]);
+    Some(output)
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -658,81 +894,28 @@ fn escape(value: &str) -> String {
     out
 }
 
-fn string_field(line: &str, key: &str) -> Option<String> {
-    let marker = format!("\"{key}\":\"");
-    let start = line.find(&marker)? + marker.len();
-    read_json_string_content(&line[start..]).map(|(value, _)| value)
+fn json_string(root: &JsonValue, key: &str) -> Option<String> {
+    root.get(key)?.as_str().map(str::to_string)
 }
 
-fn string_array_field(line: &str, key: &str) -> Option<Vec<String>> {
-    let marker = format!("\"{key}\":[");
-    let mut rest = &line[line.find(&marker)? + marker.len()..];
-    let mut values = Vec::new();
-    loop {
-        rest = rest.trim_start();
-        if rest.starts_with(']') {
-            return Some(values);
-        }
-        let content = rest.strip_prefix('"')?;
-        let (value, used) = read_json_string_content(content)?;
-        values.push(value);
-        rest = &content[used + 1..];
-        rest = rest.trim_start();
-        if let Some(next) = rest.strip_prefix(',') {
-            rest = next;
-        } else if rest.starts_with(']') {
-            return Some(values);
-        } else {
-            return None;
-        }
-    }
+fn json_string_array(root: &JsonValue, key: &str) -> Option<Vec<String>> {
+    root.get(key)?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_string))
+        .collect()
 }
 
-fn usize_field(line: &str, key: &str) -> Option<usize> {
-    unsigned_field(line, key)?.try_into().ok()
+fn json_u64(root: &JsonValue, key: &str) -> Option<u64> {
+    root.get(key)?.as_u64()
 }
 
-fn u32_field(line: &str, key: &str) -> Option<u32> {
-    unsigned_field(line, key)?.try_into().ok()
+fn json_u32(root: &JsonValue, key: &str) -> Option<u32> {
+    json_u64(root, key)?.try_into().ok()
 }
 
-fn u64_field(line: &str, key: &str) -> Option<u64> {
-    unsigned_field(line, key)
-}
-
-fn unsigned_field(line: &str, key: &str) -> Option<u64> {
-    let marker = format!("\"{key}\":");
-    let rest = &line[line.find(&marker)? + marker.len()..];
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-fn read_json_string_content(input: &str) -> Option<(String, usize)> {
-    let mut out = String::new();
-    let mut escaped = false;
-    for (index, ch) in input.char_indices() {
-        if escaped {
-            match ch {
-                '"' => out.push('"'),
-                '\\' => out.push('\\'),
-                '/' => out.push('/'),
-                'b' => out.push('\u{0008}'),
-                'f' => out.push('\u{000c}'),
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                _ => out.push(ch),
-            }
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            return Some((out, index));
-        } else {
-            out.push(ch);
-        }
-    }
-    None
+fn json_usize(root: &JsonValue, key: &str) -> Option<usize> {
+    json_u64(root, key)?.try_into().ok()
 }
 
 #[cfg(test)]
@@ -768,7 +951,8 @@ mod tests {
             },
             artifact_path: "driver.rs".to_string(),
             artifact_hash: if outcome == LearningOutcome::Succeeded {
-                "fnv:1234567890abcdef".to_string()
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string()
             } else {
                 String::new()
             },
@@ -786,7 +970,7 @@ mod tests {
         store.append(&failed).unwrap();
         store.append(&succeeded).unwrap();
         let loaded = store.read_records().unwrap();
-        fs::remove_file(path).ok();
+        fs::remove_file(&path).ok();
         assert_eq!(loaded, vec![failed, succeeded]);
         assert_eq!(
             LearningSummary::from_records(&loaded),
@@ -803,9 +987,18 @@ mod tests {
         let path = temp_path("corrupt");
         fs::write(&path, "not-json\n").unwrap();
         let error = LearningStore::new(&path).read_records().unwrap_err();
-        fs::remove_file(path).ok();
+        fs::remove_file(&path).ok();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("line 1"));
+
+        let mut corrupt = record(LearningOutcome::Failed, 1).to_json();
+        corrupt.push_str(" trailing-garbage\n");
+        fs::write(&path, corrupt).unwrap();
+        assert_eq!(
+            LearningStore::new(&path).read_records().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        fs::remove_file(path).ok();
     }
 
     #[test]
@@ -855,8 +1048,7 @@ mod tests {
     #[test]
     fn token_like_secrets_are_redacted_before_persistence() {
         let mut input = record(LearningOutcome::Failed, 1);
-        input.failure =
-            "provider rejected sk-12345678901234567890 Bearer abcdefghijklmnop".to_string();
+        input.failure = "provider rejected sk-12345678901234567890 Bearer abcdefghijklmnop ghp_abcdefghijklmnopqrstuvwxyz token=tokenvalue123456 password: passwordvalue123456 \"api_key\":\"jsonvalue123456\" x-api-key: headervalue123456".to_string();
         let sanitized = LearningRecord::new(LearningRecordInput {
             source: input.source,
             intent: input.intent,
@@ -874,7 +1066,39 @@ mod tests {
         });
         assert!(!sanitized.failure.contains("sk-123"));
         assert!(!sanitized.failure.contains("abcdefghijklmnop"));
-        assert_eq!(sanitized.failure.matches("[REDACTED]").count(), 2);
+        for secret in [
+            "ghp_abc",
+            "tokenvalue",
+            "passwordvalue",
+            "jsonvalue",
+            "headervalue",
+        ] {
+            assert!(!sanitized.failure.contains(secret), "{secret}");
+        }
+        assert_eq!(sanitized.failure.matches("[REDACTED]").count(), 7);
+    }
+
+    #[test]
+    fn every_persisted_text_surface_redacts_credentials() {
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz";
+        let record = LearningRecord::new(LearningRecordInput {
+            source: format!("source token={secret}"),
+            intent: format!("intent password={secret}"),
+            recipe_id: format!("recipe api_key={secret}"),
+            atom_stack: vec![format!("atom Bearer {secret}")],
+            gate: format!("gate x-api-key:{secret}"),
+            attempt: 1,
+            outcome: LearningOutcome::Failed,
+            failure: format!("failure secret={secret}"),
+            correction: format!("correction token={secret}"),
+            artifact_path: format!("C:/private/{secret}/artifact"),
+            artifact_hash: String::new(),
+            provider_model: format!("model auth={secret}"),
+            route_len: 4,
+        });
+        let serialized = record.to_json();
+        assert!(!serialized.contains(secret));
+        assert!(serialized.matches("[REDACTED]").count() >= 9);
     }
 
     #[test]
@@ -885,7 +1109,45 @@ mod tests {
         let second = artifact_hash(&path).unwrap();
         fs::remove_file(path).ok();
         assert_eq!(first, second);
-        assert!(valid_fnv_hash(&first));
+        assert!(valid_sha256_tag(&first));
+    }
+
+    #[test]
+    fn successful_harness_record_requires_hash_evidence() {
+        let mut item = record(LearningOutcome::Succeeded, 1);
+        item.artifact_hash.clear();
+        assert!(item
+            .validate()
+            .unwrap_err()
+            .contains("requires an artifact"));
+        item.source = "native-app".to_string();
+        item.provider_model.clear();
+        item.artifact_path.clear();
+        assert_eq!(item.validate(), Ok(()));
+    }
+
+    #[test]
+    fn successful_artifact_must_recompute_before_promotion() {
+        let path = temp_path("promotion-artifact");
+        fs::write(&path, b"verified artifact").unwrap();
+        let mut item = record(LearningOutcome::Succeeded, 1);
+        item.artifact_path = path.to_string_lossy().to_string();
+        item.artifact_hash = artifact_hash(&path).unwrap();
+        assert!(item.is_promotable_success());
+        fs::write(&path, b"tampered artifact").unwrap();
+        assert!(!item.is_promotable_success());
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn legacy_checksum_records_remain_readable_but_not_promotable() {
+        let mut item = record(LearningOutcome::Succeeded, 1);
+        item.schema_version = LEGACY_LEARNING_SCHEMA_VERSION;
+        item.artifact_path.clear();
+        item.artifact_hash = "fnv:1234567890abcdef".to_string();
+        let decoded = LearningRecord::from_json(&item.to_json()).unwrap();
+        assert_eq!(decoded, item);
+        assert!(!decoded.is_promotable_success());
     }
 
     #[test]

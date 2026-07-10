@@ -1,11 +1,11 @@
-use crate::bus::{BusMessageKind, EnvelopeId, SpiderwebBus};
-use crate::domain::{atom_by_key, mission, recipes, Recipe};
+use crate::domain::{atom_by_key, atoms, mission, recipes, Recipe};
 use crate::graph::{Evidence, WikiGraph};
-use crate::provider::{PreparedProviderCall, ProviderConfig, ProviderError};
-use crate::store::{ProofRecord, ProofStore};
+use crate::provider::{PreparedProviderCall, ProviderConfig, ProviderError, ProviderWireFormat};
+use math_atoms_bus::{BusMessageKind, EnvelopeId, SpiderwebBus};
 use math_atoms_learning::{
     effective_records, LearningOutcome, LearningRecord, LearningStore, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
+use math_atoms_proof::{ProofRecord, ProofStore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
@@ -38,6 +38,7 @@ pub struct RuntimeState {
     pub evidence: Vec<Evidence>,
     pub blockers: Vec<String>,
     pub last_provider_call: Option<PreparedProviderCall>,
+    pub last_provider_output_artifact: String,
     pub last_provider_output_hash: String,
     pub last_provider_output_len: usize,
     pub last_route: Vec<EnvelopeId>,
@@ -128,6 +129,7 @@ impl MathAtomsRuntime {
                 evidence: Vec::new(),
                 blockers: Vec::new(),
                 last_provider_call: None,
+                last_provider_output_artifact: String::new(),
                 last_provider_output_hash: String::new(),
                 last_provider_output_len: 0,
                 last_route: Vec::new(),
@@ -159,6 +161,7 @@ impl MathAtomsRuntime {
         self.state.evidence.clear();
         self.state.blockers.clear();
         self.state.last_provider_call = None;
+        self.state.last_provider_output_artifact.clear();
         self.state.last_provider_output_hash.clear();
         self.state.last_provider_output_len = 0;
         self.state.last_route.clear();
@@ -215,6 +218,7 @@ impl MathAtomsRuntime {
                 api_key_env: String::new(),
                 auth_header: String::new(),
                 auth_scheme: String::new(),
+                wire_format: ProviderWireFormat::OpenAiResponses,
                 response_key: String::new(),
                 body: String::new(),
             })
@@ -328,6 +332,7 @@ impl MathAtomsRuntime {
         self.state.evidence = evidence.clone();
         self.state.blockers = blockers.clone();
         self.state.last_provider_call = provider_call.clone();
+        self.state.last_provider_output_artifact.clear();
         self.state.last_provider_output_hash.clear();
         self.state.last_provider_output_len = 0;
         self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
@@ -411,9 +416,15 @@ impl MathAtomsRuntime {
         })
     }
 
-    pub fn mark_provider_executed(&mut self, output_hash: &str, output_len: usize) {
+    pub fn mark_provider_executed(
+        &mut self,
+        output_artifact: &str,
+        output_hash: &str,
+        output_len: usize,
+    ) {
         self.state.status = RuntimeStatus::Proven;
         self.state.proof_count += 1;
+        self.state.last_provider_output_artifact = output_artifact.to_string();
         self.state.last_provider_output_hash = output_hash.to_string();
         self.state.last_provider_output_len = output_len;
         let evidence_ids = self.provider_evidence_ids();
@@ -642,7 +653,7 @@ impl MathAtomsRuntime {
 fn classify_intent(intent: &str) -> Vec<String> {
     let tokens = intent_tokens(intent);
     let provider_route = provider_route_required_from_tokens(&tokens, &[]);
-    let mut scored: Vec<(&str, i32)> = crate::domain::atoms()
+    let mut scored: Vec<(&str, i32)> = atoms()
         .iter()
         .map(|atom| {
             let score = atom
@@ -711,7 +722,7 @@ fn provider_signature_atoms(atoms: &[String]) -> usize {
 }
 
 fn classify_intent_without_provider_forcing(tokens: &[String]) -> Vec<String> {
-    let mut scored: Vec<(&str, i32)> = crate::domain::atoms()
+    let mut scored: Vec<(&str, i32)> = atoms()
         .iter()
         .map(|atom| {
             let score = atom
@@ -884,7 +895,7 @@ fn stack_quality(observed: &[String], canonical: &[&str]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::BusLayer;
+    use math_atoms_bus::BusLayer;
 
     #[test]
     fn run_intent_routes_through_all_spiderweb_layers() {
@@ -1058,6 +1069,7 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "gpt-test".to_string(),
             provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
+            provider_output_artifact: String::new(),
             provider_output_hash: "fnv:0011223344556677".to_string(),
             provider_output_len: 24,
             route_len: 4,
@@ -1107,9 +1119,13 @@ mod tests {
         assert!(!task.route.is_empty());
         assert!(task.route.starts_with(&pending_route));
         assert_eq!(task.call.model, "gpt-5.5");
-        runtime.mark_provider_executed("fnv:abc", 17);
+        runtime.mark_provider_executed("C:/audit/output.txt", "sha256:abc", 17);
         assert_eq!(runtime.state().status, RuntimeStatus::Proven);
-        assert_eq!(runtime.state().last_provider_output_hash, "fnv:abc");
+        assert_eq!(
+            runtime.state().last_provider_output_artifact,
+            "C:/audit/output.txt"
+        );
+        assert_eq!(runtime.state().last_provider_output_hash, "sha256:abc");
         assert_eq!(runtime.state().last_provider_output_len, 17);
         assert!(runtime
             .bus()

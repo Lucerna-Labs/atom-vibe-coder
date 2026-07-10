@@ -1,0 +1,6 @@
+[package]
+name = "math-atoms-hash"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-free SHA-256 evidence hashing for Atom Vibe Coder."

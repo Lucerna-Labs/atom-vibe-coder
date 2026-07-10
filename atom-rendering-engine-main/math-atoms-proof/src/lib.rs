@@ -1,3 +1,6 @@
+//! Strict proof records and durable JSONL persistence.
+
+use math_atoms_json::{parse as parse_json, JsonValue};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +15,7 @@ pub struct ProofRecord {
     pub provider_state: String,
     pub provider_model: String,
     pub provider_endpoint: String,
+    pub provider_output_artifact: String,
     pub provider_output_hash: String,
     pub provider_output_len: usize,
     pub route_len: usize,
@@ -47,7 +51,9 @@ impl ProofStore {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{}", record.to_json())
+        writeln!(file, "{}", record.to_json())?;
+        file.flush()?;
+        file.sync_data()
     }
 
     pub fn read_to_string(&self) -> io::Result<String> {
@@ -83,7 +89,7 @@ impl ProofStore {
 impl ProofRecord {
     pub fn to_json(&self) -> String {
         format!(
-            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"provider_model\":\"{}\",\"provider_endpoint\":\"{}\",\"provider_output_hash\":\"{}\",\"provider_output_len\":{},\"route_len\":{}}}",
+            "{{\"recipe_id\":\"{}\",\"status\":\"{}\",\"atoms\":[{}],\"evidence_count\":{},\"blockers\":[{}],\"provider_state\":\"{}\",\"provider_model\":\"{}\",\"provider_endpoint\":\"{}\",\"provider_output_artifact\":\"{}\",\"provider_output_hash\":\"{}\",\"provider_output_len\":{},\"route_len\":{}}}",
             escape(&self.recipe_id),
             escape(&self.status),
             string_array(&self.atoms),
@@ -92,6 +98,7 @@ impl ProofRecord {
             escape(&self.provider_state),
             escape(&self.provider_model),
             escape(&self.provider_endpoint),
+            escape(&self.provider_output_artifact),
             escape(&self.provider_output_hash),
             self.provider_output_len,
             self.route_len
@@ -99,18 +106,42 @@ impl ProofRecord {
     }
 
     pub fn from_json(line: &str) -> Option<Self> {
+        const ALLOWED_FIELDS: [&str; 12] = [
+            "recipe_id",
+            "status",
+            "atoms",
+            "evidence_count",
+            "blockers",
+            "provider_state",
+            "provider_model",
+            "provider_endpoint",
+            "provider_output_artifact",
+            "provider_output_hash",
+            "provider_output_len",
+            "route_len",
+        ];
+        let root = parse_json(line).ok()?;
+        let object = root.as_object()?;
+        if object
+            .iter()
+            .any(|(name, _)| !ALLOWED_FIELDS.contains(&name.as_str()))
+        {
+            return None;
+        }
         Some(Self {
-            recipe_id: string_field(line, "recipe_id")?,
-            status: string_field(line, "status")?,
-            atoms: string_array_field(line, "atoms")?,
-            evidence_count: usize_field(line, "evidence_count")?,
-            blockers: string_array_field(line, "blockers")?,
-            provider_state: string_field(line, "provider_state")?,
-            provider_model: string_field(line, "provider_model").unwrap_or_default(),
-            provider_endpoint: string_field(line, "provider_endpoint").unwrap_or_default(),
-            provider_output_hash: string_field(line, "provider_output_hash").unwrap_or_default(),
-            provider_output_len: usize_field(line, "provider_output_len").unwrap_or(0),
-            route_len: usize_field(line, "route_len")?,
+            recipe_id: json_string(&root, "recipe_id")?,
+            status: json_string(&root, "status")?,
+            atoms: json_string_array(&root, "atoms")?,
+            evidence_count: json_usize(&root, "evidence_count")?,
+            blockers: json_string_array(&root, "blockers")?,
+            provider_state: json_string(&root, "provider_state")?,
+            provider_model: json_string(&root, "provider_model").unwrap_or_default(),
+            provider_endpoint: json_string(&root, "provider_endpoint").unwrap_or_default(),
+            provider_output_artifact: json_string(&root, "provider_output_artifact")
+                .unwrap_or_default(),
+            provider_output_hash: json_string(&root, "provider_output_hash").unwrap_or_default(),
+            provider_output_len: json_usize(&root, "provider_output_len").unwrap_or(0),
+            route_len: json_usize(&root, "route_len")?,
         })
     }
 }
@@ -139,71 +170,20 @@ fn escape(value: &str) -> String {
     out
 }
 
-fn string_field(line: &str, key: &str) -> Option<String> {
-    let marker = format!("\"{key}\":\"");
-    let start = line.find(&marker)? + marker.len();
-    read_json_string_content(&line[start..]).map(|(value, _)| value)
+fn json_string(root: &JsonValue, key: &str) -> Option<String> {
+    root.get(key)?.as_str().map(str::to_string)
 }
 
-fn string_array_field(line: &str, key: &str) -> Option<Vec<String>> {
-    let marker = format!("\"{key}\":[");
-    let mut rest = &line[line.find(&marker)? + marker.len()..];
-    let mut values = Vec::new();
-    loop {
-        rest = rest.trim_start();
-        if rest.starts_with(']') {
-            return Some(values);
-        }
-        if !rest.starts_with('"') {
-            return None;
-        }
-        let (value, used) = read_json_string_content(&rest[1..])?;
-        values.push(value);
-        rest = &rest[used + 2..];
-        rest = rest.trim_start();
-        if rest.starts_with(',') {
-            rest = &rest[1..];
-        } else if rest.starts_with(']') {
-            return Some(values);
-        } else {
-            return None;
-        }
-    }
+fn json_string_array(root: &JsonValue, key: &str) -> Option<Vec<String>> {
+    root.get(key)?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_string))
+        .collect()
 }
 
-fn usize_field(line: &str, key: &str) -> Option<usize> {
-    let marker = format!("\"{key}\":");
-    let rest = &line[line.find(&marker)? + marker.len()..];
-    let digits: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
-fn read_json_string_content(input: &str) -> Option<(String, usize)> {
-    let mut out = String::new();
-    let mut escaped = false;
-    for (idx, ch) in input.char_indices() {
-        if escaped {
-            match ch {
-                '"' => out.push('"'),
-                '\\' => out.push('\\'),
-                '/' => out.push('/'),
-                'b' => out.push('\u{0008}'),
-                'f' => out.push('\u{000c}'),
-                'n' => out.push('\n'),
-                'r' => out.push('\r'),
-                't' => out.push('\t'),
-                _ => out.push(ch),
-            }
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            return Some((out, idx));
-        } else {
-            out.push(ch);
-        }
-    }
-    None
+fn json_usize(root: &JsonValue, key: &str) -> Option<usize> {
+    root.get(key)?.as_u64()?.try_into().ok()
 }
 
 #[cfg(test)]
@@ -230,7 +210,10 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "gpt-test".to_string(),
             provider_endpoint: "https://api.openai.com/v1/responses".to_string(),
-            provider_output_hash: "fnv:0123456789abcdef".to_string(),
+            provider_output_artifact: "C:/audit/provider.txt".to_string(),
+            provider_output_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
             provider_output_len: 18,
             route_len: 4,
         };
@@ -240,7 +223,8 @@ mod tests {
         assert!(text.contains("\"recipe_id\":\"production-app-runtime\""));
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
         assert!(text.contains("\"provider_model\":\"gpt-test\""));
-        assert!(text.contains("\"provider_output_hash\":\"fnv:0123456789abcdef\""));
+        assert!(text.contains("\"provider_output_artifact\":\"C:/audit/provider.txt\""));
+        assert!(text.contains("\"provider_output_hash\":\"sha256:0123456789abcdef"));
         assert!(text.contains("\"provider_output_len\":18"));
         assert!(text.ends_with('\n'));
     }
@@ -265,7 +249,10 @@ mod tests {
             provider_state: "provider:ran".to_string(),
             provider_model: "fake-responsive-provider".to_string(),
             provider_endpoint: "http://127.0.0.1:1/v1/responses".to_string(),
-            provider_output_hash: "fnv:fedcba9876543210".to_string(),
+            provider_output_artifact: "C:/audit/provider.txt".to_string(),
+            provider_output_hash:
+                "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+                    .to_string(),
             provider_output_len: 16,
             route_len: 5,
         };
@@ -291,6 +278,27 @@ mod tests {
         fs::remove_file(&path).ok();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("line 1"));
+
+        let valid = ProofRecord {
+            recipe_id: "wiki-graph-rag".to_string(),
+            status: "blocked".to_string(),
+            atoms: vec!["scan".to_string()],
+            evidence_count: 1,
+            blockers: vec!["test".to_string()],
+            provider_state: "provider:blocked".to_string(),
+            provider_model: String::new(),
+            provider_endpoint: String::new(),
+            provider_output_artifact: String::new(),
+            provider_output_hash: String::new(),
+            provider_output_len: 0,
+            route_len: 4,
+        };
+        fs::write(&path, format!("{} trailing\n", valid.to_json())).unwrap();
+        assert_eq!(
+            store.read_records().unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        fs::remove_file(&path).ok();
     }
 
     #[test]
@@ -299,6 +307,7 @@ mod tests {
         let record = ProofRecord::from_json(line).unwrap();
         assert_eq!(record.provider_model, "");
         assert_eq!(record.provider_endpoint, "");
+        assert_eq!(record.provider_output_artifact, "");
         assert_eq!(record.provider_output_hash, "");
         assert_eq!(record.provider_output_len, 0);
         assert_eq!(record.route_len, 5);

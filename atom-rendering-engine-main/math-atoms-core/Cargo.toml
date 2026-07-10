@@ -6,6 +6,9 @@ license = "MIT"
 description = "Native Atom Vibe Coder runtime: Spiderweb Bus, graph retrieval, provider setup, and proof state."
 
 [dependencies]
+math-atoms-bus = { path = "../math-atoms-bus" }
 math-atoms-doctrine = { path = "../math-atoms-doctrine" }
+math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
 math-atoms-learning = { path = "../math-atoms-learning" }
+math-atoms-proof = { path = "../math-atoms-proof" }

@@ -4,11 +4,14 @@
 [workspace]
 resolver = "2"
 members = [
+    "math-atoms-bus",
     "math-atoms-core",
     "math-atoms-doctrine",
+    "math-atoms-hash",
     "math-atoms-json",
     "math-atoms-learning",
     "math-atoms-native",
+    "math-atoms-proof",
     "pmre-font",
     "pmre-html",
     "pmre-kit",

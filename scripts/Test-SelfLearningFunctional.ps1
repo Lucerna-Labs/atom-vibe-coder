@@ -30,7 +30,7 @@ try {
     if ($text -notmatch '"outcome":"failed"' -or $text -notmatch '"outcome":"succeeded"') {
         throw "self-learning ledger is missing a terminal outcome: $text"
     }
-    if ($text -notmatch '"artifact_hash":"fnv:[0-9a-f]{16}"') {
+    if ($text -notmatch '"artifact_hash":"sha256:[0-9a-f]{64}"') {
         throw "self-learning success is missing an artifact hash: $text"
     }
     if ($text -match 'sk-functional-secret') {

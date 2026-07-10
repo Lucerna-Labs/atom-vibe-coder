@@ -55,6 +55,7 @@ function Write-AtomLearningRecord {
         [string]$Failure = "",
         [string]$Correction = "",
         [string]$Artifact = "",
+        [string]$ArtifactHash = "",
         [string]$ProviderModel = "",
         [int]$RouteLen = 4
     )
@@ -86,6 +87,9 @@ function Write-AtomLearningRecord {
         }
         if (-not [string]::IsNullOrWhiteSpace($Artifact)) {
             $arguments += @("--artifact", $Artifact)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ArtifactHash)) {
+            $arguments += @("--artifact-hash", $ArtifactHash)
         }
         if (-not [string]::IsNullOrWhiteSpace($ProviderModel)) {
             $arguments += @("--provider-model", $ProviderModel)

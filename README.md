@@ -4,8 +4,13 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 
 ## Current Surface
 
-- `atom-rendering-engine-main/math-atoms-core` owns the Spiderweb Bus, wiki graph RAG, provider adapters, recipes, and proof state.
+- `atom-rendering-engine-main/math-atoms-bus` owns dependency-free L0-L3 Spiderweb Bus routing, ramps, intersections, backpressure, and fabric-thread evidence.
+- `atom-rendering-engine-main/math-atoms-core` owns wiki graph RAG, provider adapters, recipes, and runtime orchestration over the bus.
+- `atom-rendering-engine-main/math-atoms-hash` owns dependency-free SHA-256 hashing for recomputable provider and artifact evidence.
+- `atom-rendering-engine-main/math-atoms-learning` owns the append-only learning ledger, concurrent writer lock, artifact hashing, bounded memory, relevance ranking, redaction, and `learning_probe` CLI.
+- `atom-rendering-engine-main/math-atoms-json` fully parses provider and ledger JSON, including Unicode surrogate pairs, duplicate-key rejection, depth limits, and trailing-data rejection, without third-party dependencies.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
+- `atom-rendering-engine-main/math-atoms-proof` owns the strict append-only proof ledger and backward-compatible proof-record schema.
 - `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
 - `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
 - `scripts/Test-NativeFunctional.ps1` launches the real native window against an isolated temp proof store and exercises typed intent routing, Run, Capture, Provider, and Drift.
@@ -13,12 +18,23 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-ProviderBuildSeveralApps.ps1` asks the configured provider to generate several tiny Rust fixtures, compiles them, runs them, and writes side-window artifact rows.
 - `scripts/Test-ProviderBuildRealPmreApp.ps1` gives the configured provider only a natural-language app request, validates the returned product spec, compiles that spec through the harness-owned PMRE scaffold, drives UI events, writes a BMP artifact, and adds it to the native side artifact window.
+- `scripts/Test-ProviderBuildBluetoothDriver.ps1` generates, compiles, runs, and statically reviews a dependency-free Bluetooth HCI driver core.
 - `scripts/Test-DesignUploadBuild.ps1` accepts uploaded HTML/CSS file paths, compiles a PMRE app that embeds the design, renders it through `render_html`, validates the BMP, and adds it to the native side artifact window.
 - `scripts/Test-RustCrateLineCaps.ps1` enforces the 4,000 Rust source-line cap per crate.
-- `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app.
+- `scripts/Test-SelfLearningFunctional.ps1` proves failed and corrected attempts survive separate processes, redact token-like secrets, hash artifacts, and re-enter Wiki Graph RAG after restart.
+- `scripts/Test-ProviderLearningLocal.ps1` runs the real provider adapter, console-app, PMRE-app, Bluetooth, and learning gates against an isolated local endpoint.
+- `scripts/Test-NativeLaunchEnvironment.ps1` proves the detached Win32 launcher inherits session-only provider and store settings.
+- `scripts/Test-NativeIdleCpu.ps1` measures the real minimized native process and rejects background rerender loops.
+- `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app through an environment-preserving detached Win32 process, preferring job breakaway when Windows permits it, with an explicit working directory.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 - The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
 - Atom stack order is a production gate. Recipes are scored by canonical stack order, proof state records the selected stack, and provider app-build gates reject shuffled or missing stacks.
+
+## Durable Self-Learning
+
+Every terminal native or build-harness attempt appends a validated event to `learning.jsonl`. Failed events remain correction evidence and cannot promote a recipe as proof. Schema-v2 provider and harness successes require an existing artifact plus a recomputable SHA-256 hash; native non-provider successes require a complete L0-L3 route. Immediate retries receive the current failure, while later runs retrieve related durable lessons through recipe and atom relationships before the provider request is prepared. Legacy schema-v1 checksum records remain readable audit history but cannot promote provider evidence.
+
+Learning events move through explicit L0 observation, L1 persistence, L2 graph joining, and L3 orchestration messages. The active graph memory is deduplicated and capped at 256 learning nodes; the append-only ledger remains the audit history. Provider prompts label retrieved evidence as untrusted historical data so stored text cannot become executable prompt instructions.
 
 ## Product Mission
 
@@ -57,7 +73,7 @@ $env:MATH_ATOMS_PROVIDER_URL="https://provider.example/v1/chat/completions"
 $env:MATH_ATOMS_PROVIDER_KEY_ENV="MY_PROVIDER_API_KEY"
 $env:MATH_ATOMS_PROVIDER_AUTH_HEADER="Authorization"
 $env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style headers
-$env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="output_text" # output_text | text | response | content | custom key
+$env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="answer" # optional top-level response key for a custom provider
 $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{prompt_json}}}'
 ```
 

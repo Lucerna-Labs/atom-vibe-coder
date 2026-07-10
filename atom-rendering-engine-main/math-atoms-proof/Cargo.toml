@@ -1,0 +1,9 @@
+[package]
+name = "math-atoms-proof"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Strict durable proof records and JSONL persistence for Atom Vibe Coder."
+
+[dependencies]
+math-atoms-json = { path = "../math-atoms-json" }

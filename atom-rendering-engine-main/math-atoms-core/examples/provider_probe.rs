@@ -1,4 +1,7 @@
-use math_atoms_core::{provider_output_hash, MathAtomsRuntime, ProviderConfig, RuntimeStatus};
+use math_atoms_core::{
+    default_provider_output_dir, persist_provider_output, MathAtomsRuntime, ProviderConfig,
+    RuntimeStatus,
+};
 
 fn main() {
     let mut runtime = MathAtomsRuntime::new(ProviderConfig::from_process_env());
@@ -32,9 +35,21 @@ fn main() {
     };
     match task.call.execute_with_curl() {
         Ok(text) if !text.trim().is_empty() => {
-            let output_hash = provider_output_hash(&text);
-            runtime.mark_provider_executed(&output_hash, text.len());
+            let evidence = persist_provider_output(&text, default_provider_output_dir())
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "provider proof blocked: output evidence persistence failed: {error}"
+                    );
+                    std::process::exit(6);
+                });
+            runtime.mark_provider_executed(
+                &evidence.path.to_string_lossy(),
+                &evidence.hash,
+                evidence.len,
+            );
             println!("provider execution ok: {} chars", text.chars().count());
+            println!("provider output artifact: {}", evidence.path.display());
+            println!("provider output hash: {}", evidence.hash);
             println!("{}", text.trim());
         }
         Ok(_) => {

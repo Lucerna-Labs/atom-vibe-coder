@@ -13,9 +13,41 @@ if ($DurableCorrection -match 'hits=0') { $DurableCorrection = "" }
 Push-Location $Engine
 try {
     $env:RUSTFLAGS = "-D warnings"
-    cargo run -p math-atoms-core --example provider_probe --release
-    if ($LASTEXITCODE -ne 0) { throw "provider execution gate failed with exit code $LASTEXITCODE" }
-    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -ProviderModel $env:MATH_ATOMS_PROVIDER_MODEL
+    $oldErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $oldNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    try {
+        $providerOutput = & cargo run --quiet -p math-atoms-core --example provider_probe --release 2>&1
+        $providerExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $PSNativeCommandUseErrorActionPreference = $oldNativeErrorPreference
+        }
+    }
+    $providerText = ($providerOutput | Out-String).Trim()
+    Write-Host $providerText
+    if ($providerExit -ne 0) { throw "provider execution gate failed with exit code $providerExit" }
+    if ($providerText -notmatch '(?m)^provider output artifact: (.+)$') {
+        throw "provider execution gate did not return an output artifact path"
+    }
+    $providerArtifact = $Matches[1].Trim()
+    if (-not (Test-Path -LiteralPath $providerArtifact)) {
+        throw "provider execution artifact does not exist: $providerArtifact"
+    }
+    if ($providerText -notmatch 'provider output hash: (sha256:[0-9a-f]{64})') {
+        throw "provider execution gate did not return an audited output hash"
+    }
+    $providerHash = $Matches[1]
+    $actualHash = "sha256:" + (Get-FileHash -LiteralPath $providerArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $providerHash) {
+        throw "provider execution artifact hash mismatch"
+    }
+    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $providerArtifact -ArtifactHash $providerHash -ProviderModel $env:MATH_ATOMS_PROVIDER_MODEL
 }
 catch {
     $failure = $_.Exception.Message

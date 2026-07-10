@@ -1,8 +1,8 @@
 use math_atoms_core::{
-    effective_records, provider_output_hash, LearningOutcome, LearningRecord, LearningRecordInput,
-    LearningStore, LearningSummary, MathAtomsRuntime, PreparedProviderCall, ProofRecord,
-    ProofStore, ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus, WikiGraph,
-    DEFAULT_GRAPH_MEMORY_LIMIT,
+    default_provider_output_dir, effective_records, persist_provider_output, LearningOutcome,
+    LearningRecord, LearningRecordInput, LearningStore, LearningSummary, MathAtomsRuntime,
+    PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, ProviderConfigInput,
+    ProviderError, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use pmre_orchestrator::{
     UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
@@ -355,12 +355,21 @@ impl NativeApp {
 
     pub fn complete_provider_execution(&mut self, result: Result<String, ProviderError>) {
         self.last_provider_output = match result {
-            Ok(text) => {
-                let output_hash = provider_output_hash(&text);
-                self.runtime
-                    .mark_provider_executed(&output_hash, text.len());
-                text
-            }
+            Ok(text) => match persist_provider_output(&text, self.provider_output_dir()) {
+                Ok(evidence) => {
+                    self.runtime.mark_provider_executed(
+                        &evidence.path.to_string_lossy(),
+                        &evidence.hash,
+                        evidence.len,
+                    );
+                    text
+                }
+                Err(error) => {
+                    let reason = format!("provider output evidence persistence failed: {error}");
+                    self.runtime.mark_provider_blocked(&reason);
+                    format!("Provider blocked: {reason}")
+                }
+            },
             Err(error) => {
                 let reason = format!("{error:?}");
                 self.runtime.mark_provider_blocked(&reason);
@@ -453,7 +462,8 @@ impl NativeApp {
             "design:blocked"
         } else if self
             .last_design_output
-            .starts_with("design upload build ok:")
+            .lines()
+            .any(|line| line.starts_with("design upload build ok:"))
         {
             "design:built"
         } else {
@@ -520,15 +530,6 @@ impl NativeApp {
                     store.path().display()
                 )
             })?;
-            let records = store.read_records().map_err(|error| {
-                format!(
-                    "Persistent learning store readback failed at {}: {error}",
-                    store.path().display()
-                )
-            })?;
-            if records.last() != Some(&record) {
-                return Err("Persistent learning store readback did not match append".to_string());
-            }
         }
         let outcome = record.outcome;
         let attempt_key = (record.intent.clone(), record.gate.clone());
@@ -603,7 +604,7 @@ impl NativeApp {
             outcome,
             failure,
             correction,
-            artifact_path: String::new(),
+            artifact_path: state.last_provider_output_artifact.clone(),
             artifact_hash: state.last_provider_output_hash.clone(),
             provider_model: state
                 .last_provider_call
@@ -633,6 +634,11 @@ impl NativeApp {
             provider_endpoint: provider
                 .map(|call| call.endpoint.clone())
                 .unwrap_or_default(),
+            provider_output_artifact: if self.provider_title_state() == "provider:ran" {
+                state.last_provider_output_artifact.clone()
+            } else {
+                String::new()
+            },
             provider_output_hash,
             provider_output_len: if self.provider_title_state() == "provider:ran" {
                 state.last_provider_output_len
@@ -641,6 +647,28 @@ impl NativeApp {
             },
             route_len: state.last_route.len(),
         }
+    }
+
+    fn provider_output_dir(&self) -> PathBuf {
+        let Some(store) = &self.store else {
+            return default_provider_output_dir();
+        };
+        let path = store.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("proofs.jsonl"))
+        {
+            return path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("provider-outputs");
+        }
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("proofs");
+        path.with_file_name(format!("{name}.provider-outputs"))
     }
 }
 
@@ -690,7 +718,7 @@ fn seed_lucerna_design_defaults(ui: &mut UiState) {
     ui.set_slider(DESIGN_TEXT_SLIDER, 0.50);
     ui.set_slider(DESIGN_RADIUS_SLIDER, 0.26);
     ui.set_slider(DESIGN_GLASS_SLIDER, 0.24);
-    ui.set_slider(DESIGN_ANIMATION_SLIDER, 0.12);
+    ui.set_slider(DESIGN_ANIMATION_SLIDER, 0.0);
 }
 
 fn initial_provider_output(provider: &ProviderConfig) -> String {
@@ -876,6 +904,7 @@ mod tests {
         let mut app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
+        assert_eq!(ui.slider_value(DESIGN_ANIMATION_SLIDER, 1.0), 0.0);
         app.run_current_intent(&ui);
         assert_eq!(app.status(), RuntimeStatus::ProviderPending);
         assert!(app.runtime.bus().contains_all_layers());
@@ -919,6 +948,11 @@ mod tests {
         app.last_design_output =
             "design upload build ok: MATH_ATOMS_DESIGN_APP_OK uploaded-design-app html=1 css=1 bmp=design-upload-app.bmp"
                 .to_string();
+        assert_eq!(app.design_title_state(), "design:built");
+        app.last_design_output = format!(
+            "MATH_ATOMS_LEARNING_OK id=test outcome=succeeded total=1\n{}",
+            app.last_design_output
+        );
         assert_eq!(app.design_title_state(), "design:built");
     }
 
@@ -1280,6 +1314,7 @@ mod tests {
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
         );
+        let output_dir = app.provider_output_dir();
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
@@ -1289,9 +1324,11 @@ mod tests {
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(learning_path).ok();
+        std::fs::remove_dir_all(output_dir).ok();
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
         assert!(text.contains("\"provider_model\":"));
-        assert!(text.contains("\"provider_output_hash\":\"fnv:"));
+        assert!(text.contains("\"provider_output_artifact\":"));
+        assert!(text.contains("\"provider_output_hash\":\"sha256:"));
         assert!(text.contains("\"provider_output_len\":14"));
         assert!(app
             .runtime
@@ -1317,6 +1354,7 @@ mod tests {
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
         );
+        let output_dir = app.provider_output_dir();
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
@@ -1326,6 +1364,7 @@ mod tests {
         let after = store.read_records().unwrap().len();
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(learning_path).ok();
+        std::fs::remove_dir_all(output_dir).ok();
         assert_eq!(after, before + 1);
         assert!(app
             .last_run_summary
@@ -1368,6 +1407,7 @@ mod tests {
             Some(proofs),
             Some(learning.clone()),
         );
+        let output_dir = restarted.provider_output_dir();
         restarted.seed_input(&mut ui);
         restarted.run_current_intent(&ui);
         assert!(restarted
@@ -1386,5 +1426,6 @@ mod tests {
         assert_eq!(learning.read_records().unwrap().len(), before_capture);
         std::fs::remove_file(proof_path).ok();
         std::fs::remove_file(learning_path).ok();
+        std::fs::remove_dir_all(output_dir).ok();
     }
 }

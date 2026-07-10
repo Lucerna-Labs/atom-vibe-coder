@@ -167,8 +167,16 @@ public static class MathAtomsProviderResponsive {
     if ($tail -notmatch '"provider_model":"fake-responsive-provider"') {
         throw "Slow provider proof did not record provider model. Tail: $tail"
     }
-    if ($tail -notmatch '"provider_output_hash":"fnv:[0-9a-f]{16}"') {
+    $proof = $tail | ConvertFrom-Json
+    if ($proof.provider_output_hash -notmatch '^sha256:[0-9a-f]{64}$') {
         throw "Slow provider proof did not record output hash. Tail: $tail"
+    }
+    if (-not (Test-Path -LiteralPath $proof.provider_output_artifact)) {
+        throw "Slow provider proof artifact does not exist: $($proof.provider_output_artifact)"
+    }
+    $actualHash = "sha256:" + (Get-FileHash -LiteralPath $proof.provider_output_artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $proof.provider_output_hash) {
+        throw "Slow provider proof artifact hash does not recompute. Tail: $tail"
     }
     if ($tail -notmatch '"provider_output_len":16') {
         throw "Slow provider proof did not record output length. Tail: $tail"

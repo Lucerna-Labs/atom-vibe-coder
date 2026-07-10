@@ -6,7 +6,9 @@ use crate::model::{
 use crate::ui;
 use core::ffi::c_void;
 use pmre_kit::ux::UxNode;
-use pmre_orchestrator::{handle_event, render_ui_quality, Quality, UiEvent, UiState};
+use pmre_orchestrator::{
+    handle_event, render_ui_quality, Quality, UiEvent, UiState, DESIGN_ANIMATION_SLIDER,
+};
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -102,6 +104,7 @@ struct TrackMouseEventOpts {
 #[link(name = "user32")]
 extern "system" {
     fn SetWindowTextW(hwnd: Hwnd, text: *const u16) -> i32;
+    fn SetPropW(hwnd: Hwnd, name: *const u16, data: *mut c_void) -> i32;
     fn SetProcessDpiAwarenessContext(ctx: isize) -> i32;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
     fn GetKeyState(key: i32) -> i16;
@@ -188,6 +191,7 @@ const WM_CHAR: u32 = 0x0102;
 const WM_DPICHANGED: u32 = 0x02E0;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_MATH_ATOMS_COMMAND: u32 = 0x804A;
+const SIZE_MINIMIZED: usize = 1;
 const TME_LEAVE: u32 = 0x0000_0002;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
@@ -223,6 +227,24 @@ struct App {
     provider_rx: Option<Receiver<Result<String, math_atoms_core::ProviderError>>>,
     design_rx: Option<Receiver<Result<String, String>>>,
     suppress_ctrl_char: Option<u32>,
+    visual_generation: u64,
+    frame_cache: [Option<CachedFrame>; 2],
+    last_render_ms: f64,
+    render_count: u64,
+}
+
+struct CachedFrame {
+    generation: u64,
+    width: u32,
+    height: u32,
+    pixels: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnimationChange {
+    None,
+    Caret,
+    Full,
 }
 
 thread_local! {
@@ -264,6 +286,10 @@ pub fn run() {
                 provider_rx: None,
                 design_rx: None,
                 suppress_ctrl_char: None,
+                visual_generation: 0,
+                frame_cache: [None, None],
+                last_render_ms: 0.0,
+                render_count: 0,
             });
         });
 
@@ -304,7 +330,7 @@ pub fn run() {
             );
         }
         SetTimer(hwnd, ANIMATION_TIMER_ID, 33, std::ptr::null());
-        InvalidateRect(hwnd, std::ptr::null(), 0);
+        invalidate_visual(hwnd);
         let mut msg: Msg = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
@@ -320,6 +346,9 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
             0
         }
         WM_SIZE => {
+            if wp == SIZE_MINIMIZED {
+                return 0;
+            }
             let w = (lp & 0xFFFF) as u32;
             let h = ((lp >> 16) & 0xFFFF) as u32;
             APP.with(|cell| {
@@ -329,7 +358,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                 }
             });
             dispatch(hwnd, UiEvent::Resize(w.max(1), h.max(1)));
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            invalidate_visual(hwnd);
             0
         }
         WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
@@ -366,7 +395,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                 },
             );
             if dirty {
-                InvalidateRect(hwnd, std::ptr::null(), 0);
+                invalidate_visual(hwnd);
             }
             0
         }
@@ -377,7 +406,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                 }
             });
             if dispatch(hwnd, UiEvent::PointerMove(-1e6, -1e6)) {
-                InvalidateRect(hwnd, std::ptr::null(), 0);
+                invalidate_visual(hwnd);
             }
             0
         }
@@ -390,7 +419,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     .unwrap_or((0.0, 0.0))
             });
             dispatch(hwnd, UiEvent::Wheel(cursor.0, cursor.1, -delta * 48.0));
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            invalidate_visual(hwnd);
             0
         }
         WM_DPICHANGED => {
@@ -413,7 +442,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            invalidate_visual(hwnd);
             0
         }
         WM_CHAR => {
@@ -444,13 +473,13 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
             };
             if let Some(ev) = ev {
                 dispatch(hwnd, ev);
-                InvalidateRect(hwnd, std::ptr::null(), 0);
+                invalidate_visual(hwnd);
             }
             0
         }
         WM_MATH_ATOMS_COMMAND => {
             dispatch_command(hwnd, wp as u32);
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            invalidate_visual(hwnd);
             0
         }
         WM_TIMER => {
@@ -458,17 +487,22 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                 let complete = poll_provider();
                 if complete {
                     KillTimer(hwnd, PROVIDER_TIMER_ID);
+                    invalidate_visual(hwnd);
                 }
-                InvalidateRect(hwnd, std::ptr::null(), 0);
             } else if wp == DESIGN_TIMER_ID {
                 let complete = poll_design_upload();
                 if complete {
                     KillTimer(hwnd, DESIGN_TIMER_ID);
+                    invalidate_visual(hwnd);
                 }
-                InvalidateRect(hwnd, std::ptr::null(), 0);
             } else if wp == ANIMATION_TIMER_ID {
-                dispatch(hwnd, UiEvent::Tick(1.0 / 30.0));
-                InvalidateRect(hwnd, std::ptr::null(), 0);
+                match advance_animation_clock() {
+                    AnimationChange::None => {}
+                    AnimationChange::Caret => {
+                        InvalidateRect(hwnd, std::ptr::null(), 0);
+                    }
+                    AnimationChange::Full => invalidate_visual(hwnd),
+                };
             }
             0
         }
@@ -494,7 +528,7 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     };
                 }
             });
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            invalidate_visual(hwnd);
             0
         }
         WM_PAINT => {
@@ -642,6 +676,36 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
     })
 }
 
+fn advance_animation_clock() -> AnimationChange {
+    APP.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(app) = borrow.as_mut() else {
+            return AnimationChange::None;
+        };
+        let before_caret = (app.ui.animation_time * 2.0).floor() as u32;
+        app.ui.animation_time = (app.ui.animation_time + 1.0 / 30.0).rem_euclid(3600.0);
+        let after_caret = (app.ui.animation_time * 2.0).floor() as u32;
+        if app.ui.slider_value(DESIGN_ANIMATION_SLIDER, 0.0) > 0.01 {
+            AnimationChange::Full
+        } else if app.ui.focused.is_some() && before_caret != after_caret {
+            AnimationChange::Caret
+        } else {
+            AnimationChange::None
+        }
+    })
+}
+
+fn invalidate_visual(hwnd: Hwnd) {
+    APP.with(|cell| {
+        if let Some(app) = cell.borrow_mut().as_mut() {
+            app.visual_generation = app.visual_generation.wrapping_add(1);
+        }
+    });
+    unsafe {
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+    }
+}
+
 fn dispatch_command(hwnd: Hwnd, id: u32) {
     APP.with(|cell| {
         if let Some(app) = cell.borrow_mut().as_mut() {
@@ -746,11 +810,39 @@ fn paint(hwnd: Hwnd) {
         let hdc = BeginPaint(hwnd, &mut ps);
         APP.with(|cell| {
             if let Some(app) = cell.borrow_mut().as_mut() {
-                let started = std::time::Instant::now();
-                let build: &dyn Fn(&UiState) -> UxNode = &|state| ui::build(&app.model, state);
-                let fb = render_ui_quality(build, &app.ui, ui::background(), app.quality);
-                let ms = started.elapsed().as_secs_f64() * 1000.0;
-                let px = fb.to_u32(ui::background());
+                let cache_slot = if app.ui.focused.is_some() {
+                    ((app.ui.animation_time * 2.0).floor() as usize) % 2
+                } else {
+                    0
+                };
+                let cache_valid = app.frame_cache[cache_slot].as_ref().is_some_and(|frame| {
+                    frame.generation == app.visual_generation
+                        && frame.width == app.width
+                        && frame.height == app.height
+                });
+                if !cache_valid {
+                    let started = std::time::Instant::now();
+                    let build: &dyn Fn(&UiState) -> UxNode = &|state| ui::build(&app.model, state);
+                    let fb = render_ui_quality(build, &app.ui, ui::background(), app.quality);
+                    let pixels = fb.to_u32(ui::background());
+                    app.last_render_ms = started.elapsed().as_secs_f64() * 1000.0;
+                    app.render_count = app.render_count.saturating_add(1);
+                    SetPropW(
+                        hwnd,
+                        wide("MathAtomsRenderCount").as_ptr(),
+                        (app.render_count.saturating_add(1) as usize) as *mut c_void,
+                    );
+                    app.frame_cache[cache_slot] = Some(CachedFrame {
+                        generation: app.visual_generation,
+                        width: app.width,
+                        height: app.height,
+                        pixels,
+                    });
+                }
+                let pixels = &app.frame_cache[cache_slot]
+                    .as_ref()
+                    .expect("validated frame cache")
+                    .pixels;
                 let width = app.width as i32;
                 let height = app.height as i32;
                 let bmi = BitmapInfo {
@@ -779,14 +871,14 @@ fn paint(hwnd: Hwnd) {
                     0,
                     width,
                     height,
-                    px.as_ptr() as *const c_void,
+                    pixels.as_ptr() as *const c_void,
                     &bmi,
                     DIB_RGB_COLORS,
                     SRCCOPY,
                 );
                 let title = format!(
                     "Atom Vibe Coder by Lucerna Labs - Native PMRE [{:.1}ms {} {} {} {} {} {}]",
-                    ms,
+                    app.last_render_ms,
                     app.model.status().as_str(),
                     app.model.provider_title_state(),
                     app.model.design_title_state(),
