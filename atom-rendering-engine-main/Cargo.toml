@@ -17,6 +17,7 @@ members = [
     "math-atoms-proof",
     "math-atoms-provider-transport",
     "math-atoms-secrets",
+    "math-atoms-verification",
     "math-atoms-work",
     "pmre-font",
     "pmre-html",

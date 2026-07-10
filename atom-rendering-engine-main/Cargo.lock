@@ -561,6 +561,16 @@ name = "math-atoms-secrets"
 version = "0.1.0"
 
 [[package]]
+name = "math-atoms-verification"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
+
+[[package]]
 name = "math-atoms-work"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+[package]
+name = "math-atoms-verification"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fail-closed executable candidate verification and durable evidence for Atom Vibe Coder."
+
+[dependencies]
+math-atoms-hash = { path = "../math-atoms-hash" }
+math-atoms-json = { path = "../math-atoms-json" }
+math-atoms-lock = { path = "../math-atoms-lock" }
+math-atoms-secrets = { path = "../math-atoms-secrets" }
