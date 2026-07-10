@@ -7,6 +7,7 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
 $TestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-local-provider-" + [Guid]::NewGuid().ToString("N"))
 $LearningStore = Join-Path $TestDir "learning.jsonl"
+$CounterOutputRoot = Join-Path $TestDir "generated-counter"
 $BluetoothSource = Join-Path $Root "artifacts\bluetooth-driver\bluetooth_driver.rs"
 $SavedEnvironment = @{}
 $EnvironmentNames = @(
@@ -194,7 +195,7 @@ try {
 
     powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
     if ($LASTEXITCODE -ne 0) { throw "local provider execution gate failed with exit code $LASTEXITCODE" }
-    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildSeveralApps.ps1") -AppsRequired 1 -MaxAttempts 1
+    powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildSeveralApps.ps1") -AppsRequired 1 -MaxAttempts 1 -OutputRoot $CounterOutputRoot
     if ($LASTEXITCODE -ne 0) { throw "local provider counter gate failed with exit code $LASTEXITCODE" }
     powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildRealPmreApp.ps1") -MaxAttempts 1
     if ($LASTEXITCODE -ne 0) { throw "local provider PMRE gate failed with exit code $LASTEXITCODE" }
@@ -217,6 +218,12 @@ try {
     }
     if ($learningText -match '"outcome":"failed"') {
         throw "local provider deterministic fixtures unexpectedly required a correction: $learningText"
+    }
+    $counterLearning = @($records | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object source -eq "provider-multi-app") | Select-Object -Last 1
+    $counterRootFull = [System.IO.Path]::GetFullPath($CounterOutputRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $counterSourceFull = [System.IO.Path]::GetFullPath([string]$counterLearning.artifact_path)
+    if (-not $counterSourceFull.StartsWith($counterRootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "local provider counter escaped its isolated output root: $counterSourceFull"
     }
     Write-Host "local provider learning ok: adapter=1 console-app=1 pmre-app=1 bluetooth-driver=1 learned=4"
 }

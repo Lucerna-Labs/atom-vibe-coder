@@ -13,6 +13,7 @@ use math_atoms_work::{
     validate_secure_packet_output, CompletedPacket, WorkError, WorkPlan, WorkPlanStore, WorkPrompt,
     WorkStage,
 };
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKind {
@@ -66,6 +67,7 @@ pub struct ProviderConfig {
     pub api_key_present: bool,
     pub credential_scope_hash: String,
     pub request_timeout_seconds: u64,
+    pub plan_timeout_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +97,7 @@ pub struct PreparedProviderCall {
     pub evidence_context: String,
     pub body_template: String,
     pub request_timeout_seconds: u64,
+    pub plan_timeout_seconds: u64,
     pub credential_scope_hash: String,
 }
 
@@ -162,6 +165,10 @@ impl ProviderConfig {
             &model,
             non_empty_env("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS").as_deref(),
         );
+        let plan_timeout_seconds = provider_plan_timeout_seconds(
+            request_timeout_seconds,
+            non_empty_env("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -175,6 +182,7 @@ impl ProviderConfig {
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
+            plan_timeout_seconds,
         }
     }
 
@@ -218,6 +226,10 @@ impl ProviderConfig {
             &model,
             lookup("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS").as_deref(),
         );
+        let plan_timeout_seconds = provider_plan_timeout_seconds(
+            request_timeout_seconds,
+            lookup("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -231,6 +243,7 @@ impl ProviderConfig {
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
+            plan_timeout_seconds,
         }
     }
 
@@ -277,6 +290,10 @@ impl ProviderConfig {
             &model,
             non_empty_env("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS").as_deref(),
         );
+        let plan_timeout_seconds = provider_plan_timeout_seconds(
+            request_timeout_seconds,
+            non_empty_env("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -290,6 +307,7 @@ impl ProviderConfig {
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
+            plan_timeout_seconds,
         }
     }
 
@@ -364,6 +382,7 @@ impl ProviderConfig {
             evidence_context: context,
             body_template: self.body_template.clone(),
             request_timeout_seconds: self.request_timeout_seconds,
+            plan_timeout_seconds: self.plan_timeout_seconds,
             credential_scope_hash: self.credential_scope_hash.clone(),
         })
     }
@@ -401,6 +420,7 @@ impl PreparedProviderCall {
         let mut index = 0;
         let mut executed_packets = 0;
         let mut resumed_packets = 0;
+        let deadline = Instant::now() + Duration::from_secs(self.plan_timeout_seconds);
         while index < plan.packets.len() {
             let packet = plan.packets[index].clone();
             let validated = if let Some(stored) = store
@@ -410,17 +430,27 @@ impl PreparedProviderCall {
                 resumed_packets += 1;
                 validate_secure_packet_output(&packet, &stored.output).map_err(work_error)?
             } else {
+                if Instant::now() >= deadline {
+                    return Err(ProviderError::WorkPacketFailed(format!(
+                        "plan {} exceeded its {} second total execution budget",
+                        plan.id, self.plan_timeout_seconds
+                    )));
+                }
                 let prompt = plan
                     .prompt(&packet, &completed, &self.evidence_context)
                     .map_err(work_error)?;
                 let body =
                     provider_body(self.wire_format, &self.model, &prompt, &self.body_template);
-                let raw = self.execute_body_with_curl(&body).map_err(|error| {
-                    ProviderError::WorkPacketFailed(format!(
-                        "plan {} packet {} provider call failed: {error:?}",
-                        plan.id, packet.id
-                    ))
-                })?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let packet_timeout = self.request_timeout_seconds.min(remaining.as_secs().max(1));
+                let raw = self
+                    .execute_body_with_curl_timeout(&body, packet_timeout)
+                    .map_err(|error| {
+                        ProviderError::WorkPacketFailed(format!(
+                            "plan {} packet {} provider call failed: {error:?}",
+                            plan.id, packet.id
+                        ))
+                    })?;
                 let validated = validate_secure_packet_output(&packet, &raw).map_err(work_error)?;
                 if packet.stage == WorkStage::FileManifest {
                     plan.expand_files(validated.files.clone())
@@ -460,6 +490,14 @@ impl PreparedProviderCall {
     }
 
     fn execute_body_with_curl(&self, body_json: &str) -> Result<String, ProviderError> {
+        self.execute_body_with_curl_timeout(body_json, self.request_timeout_seconds)
+    }
+
+    fn execute_body_with_curl_timeout(
+        &self,
+        body_json: &str,
+        timeout_seconds: u64,
+    ) -> Result<String, ProviderError> {
         let api_key = self.execution_api_key()?;
         let body = post_json(ProviderHttpRequest {
             endpoint: &self.endpoint,
@@ -467,7 +505,7 @@ impl PreparedProviderCall {
             auth_scheme: &self.auth_scheme,
             api_key: &api_key,
             body_json,
-            timeout_seconds: self.request_timeout_seconds,
+            timeout_seconds,
         })
         .map_err(provider_transport_error)?;
         parse_provider_text(&body, self.wire_format, &self.response_key)
@@ -618,7 +656,7 @@ fn non_empty_value(value: &str) -> Option<String> {
 
 fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
     let mut value = format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         config.kind.as_str(),
         config.model,
         config.endpoint,
@@ -628,7 +666,8 @@ fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
         config.response_key,
         sha256_tagged(config.body_template.as_bytes()),
         config.credential_scope_hash,
-        config.request_timeout_seconds
+        config.request_timeout_seconds,
+        config.plan_timeout_seconds
     );
     for item in evidence.iter().take(8) {
         value.push('\0');
@@ -659,6 +698,13 @@ fn provider_timeout_seconds(kind: ProviderKind, model: &str, configured: Option<
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| (10..=1_800).contains(value))
         .unwrap_or(fallback)
+}
+
+fn provider_plan_timeout_seconds(request_timeout: u64, configured: Option<&str>) -> u64 {
+    configured
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| (60..=86_400).contains(value))
+        .unwrap_or_else(|| request_timeout.saturating_mul(96).clamp(600, 86_400))
 }
 
 fn provider_transport_error(error: ProviderTransportError) -> ProviderError {
@@ -1177,14 +1223,18 @@ mod tests {
             ("MATH_ATOMS_PROVIDER_KIND", "deepseek"),
             ("DEEPSEEK_API_KEY", "secret"),
             ("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS", "1200"),
+            ("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS", "7200"),
         ]);
         assert_eq!(configured.request_timeout_seconds, 1200);
+        assert_eq!(configured.plan_timeout_seconds, 7200);
         let invalid = ProviderConfig::from_pairs(&[
             ("MATH_ATOMS_PROVIDER_KIND", "deepseek"),
             ("DEEPSEEK_API_KEY", "secret"),
             ("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS", "999999"),
+            ("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS", "10"),
         ]);
         assert_eq!(invalid.request_timeout_seconds, 900);
+        assert_eq!(invalid.plan_timeout_seconds, 86_400);
     }
 
     #[test]

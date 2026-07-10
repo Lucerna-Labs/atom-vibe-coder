@@ -9,14 +9,16 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
-$OutDir = Join-Path $Engine "target\provider-built-apps\bluetooth-driver"
-$Manifest = Join-Path $Engine "target\provider-built-apps\artifact-window.tsv"
+$ArtifactRoot = Join-Path $Engine "target\provider-built-apps"
+$OutDir = Join-Path $ArtifactRoot ("runs\bluetooth-" + [Guid]::NewGuid().ToString("N"))
+$Manifest = Join-Path $ArtifactRoot "artifact-window.tsv"
 $Source = Join-Path $OutDir "bluetooth_driver.rs"
 $Exe = Join-Path $OutDir "bluetooth_driver.exe"
 $Review = Join-Path $OutDir "driver-review.md"
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 . (Join-Path $PSScriptRoot "Learning-Loop.ps1")
+. (Join-Path $PSScriptRoot "Artifact-Manifest.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -191,24 +193,7 @@ function Invoke-Rustc([string]$SourcePath, [string]$ExePath, [string]$AttemptDir
 }
 
 function Update-ArtifactManifest([string]$Actual) {
-    $manifestDir = Split-Path -Parent $Manifest
-    New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
-    $row = "bluetooth-driver`tcompiled`t$Actual`t$Source`t$Exe`t"
-    if (-not (Test-Path -LiteralPath $Manifest)) {
-        [System.IO.File]::WriteAllLines($Manifest, @("name`tstatus`toutput`tsource`texe`tartifact", $row))
-        return
-    }
-    $lines = New-Object System.Collections.Generic.List[string]
-    foreach ($line in [System.IO.File]::ReadLines($Manifest)) {
-        if ($line -notmatch '^bluetooth-driver\t') {
-            $lines.Add($line)
-        }
-    }
-    if ($lines.Count -eq 0) {
-        $lines.Add("name`tstatus`toutput`tsource`texe`tartifact")
-    }
-    $lines.Add($row)
-    [System.IO.File]::WriteAllLines($Manifest, $lines)
+    Update-AtomArtifactManifest -Path $Manifest -Name "bluetooth-driver" -Status "compiled" -Output $Actual -Source $Source -Exe $Exe
 }
 
 try {

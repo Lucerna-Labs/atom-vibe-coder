@@ -14,7 +14,7 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `atom-rendering-engine-main/math-atoms-json` fully parses provider and ledger JSON, including Unicode surrogate pairs, duplicate-key rejection, depth limits, and trailing-data rejection, without third-party dependencies.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `atom-rendering-engine-main/math-atoms-proof` owns the strict append-only proof ledger and backward-compatible proof-record schema.
-- `atom-rendering-engine-main/math-atoms-provider-transport` owns bounded credential-safe HTTP execution, retry policy, and content-addressed provider output evidence.
+- `atom-rendering-engine-main/math-atoms-provider-transport` owns bounded credential-safe single-submit HTTP execution and content-addressed provider output evidence.
 - `atom-rendering-engine-main/math-atoms-secrets` owns format-preserving credential redaction for every durable evidence boundary.
 - `atom-rendering-engine-main/math-atoms-work` owns strict, resumable, content-addressed provider work packets and expanded-plan verification.
 - `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
@@ -93,6 +93,7 @@ $env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style
 $env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="answer" # optional top-level response key for a custom provider
 $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"system":{{instructions_json}},"data":{{data_json}}}'
 $env:MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS="900" # optional, bounded to 10..1800 seconds
+$env:MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS="21600" # optional total plan budget, bounded to 60..86400 seconds
 ```
 
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.

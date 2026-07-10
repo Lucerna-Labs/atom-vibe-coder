@@ -245,6 +245,7 @@ impl MathAtomsRuntime {
                 evidence_context: String::new(),
                 body_template: String::new(),
                 request_timeout_seconds: 120,
+                plan_timeout_seconds: 11_520,
                 credential_scope_hash: String::new(),
             })
         };

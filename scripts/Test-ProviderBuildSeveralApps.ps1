@@ -1,6 +1,7 @@
 param(
     [int]$AppsRequired = 3,
-    [int]$MaxAttempts = 6
+    [int]$MaxAttempts = 6,
+    [string]$OutputRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,11 +11,26 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
-$OutDir = Join-Path $Engine "target\provider-built-apps"
-$Manifest = Join-Path $OutDir "artifact-window.tsv"
+$SharedOutDir = [System.IO.Path]::GetFullPath((Join-Path $Engine "target\provider-built-apps"))
+$IsolatedOutput = -not [string]::IsNullOrWhiteSpace($OutputRoot)
+if ($IsolatedOutput) {
+    $OutDir = [System.IO.Path]::GetFullPath($OutputRoot)
+    if ($OutDir -eq [System.IO.Path]::GetPathRoot($OutDir)) {
+        throw "OutputRoot cannot be a filesystem root"
+    }
+    if ((Test-Path -LiteralPath $OutDir) -and @(Get-ChildItem -LiteralPath $OutDir -Force).Count -gt 0) {
+        throw "OutputRoot must be new or empty: $OutDir"
+    }
+    $Manifest = Join-Path $OutDir "artifact-window.tsv"
+}
+else {
+    $OutDir = Join-Path $SharedOutDir ("runs\run-" + [Guid]::NewGuid().ToString("N"))
+    $Manifest = Join-Path $SharedOutDir "artifact-window.tsv"
+}
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 . (Join-Path $PSScriptRoot "Learning-Loop.ps1")
+. (Join-Path $PSScriptRoot "Artifact-Manifest.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -168,8 +184,8 @@ try {
         $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = ""
     }
 
-    Remove-Item -LiteralPath $OutDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Manifest) | Out-Null
 
     $passed = @()
     $manifestRows = @("name`tstatus`toutput`tsource`texe`tartifact")
@@ -229,7 +245,15 @@ try {
         }
     }
 
-    [System.IO.File]::WriteAllLines($Manifest, $manifestRows)
+    if ($IsolatedOutput) {
+        [System.IO.File]::WriteAllLines($Manifest, $manifestRows)
+    }
+    else {
+        foreach ($row in $manifestRows | Select-Object -Skip 1) {
+            $fields = $row -split "`t", 6
+            Update-AtomArtifactManifest -Path $Manifest -Name $fields[0] -Status $fields[1] -Output $fields[2] -Source $fields[3] -Exe $fields[4] -Artifact $fields[5]
+        }
+    }
     Write-Host "provider multi-app build ok: $($passed -join '; ')"
 }
 finally {

@@ -10,13 +10,15 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
-$OutDir = Join-Path $Engine "target\provider-built-apps"
-$Manifest = Join-Path $OutDir "artifact-window.tsv"
+$ArtifactRoot = Join-Path $Engine "target\provider-built-apps"
+$OutDir = Join-Path $ArtifactRoot ("runs\pmre-" + [Guid]::NewGuid().ToString("N"))
+$Manifest = Join-Path $ArtifactRoot "artifact-window.tsv"
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 $OriginalRustFlags = $env:RUSTFLAGS
 $OriginalBmpPath = $env:MATH_ATOMS_REAL_APP_BMP
 . (Join-Path $PSScriptRoot "Learning-Loop.ps1")
+. (Join-Path $PSScriptRoot "Artifact-Manifest.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -608,35 +610,8 @@ function Assert-BmpArtifact($BmpPath) {
     }
 }
 
-function Upsert-ManifestHeader() {
-    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-    if (-not (Test-Path -LiteralPath $Manifest)) {
-        [System.IO.File]::WriteAllLines($Manifest, @("name`tstatus`toutput`tsource`texe`tartifact"))
-        return
-    }
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in [System.IO.File]::ReadLines($Manifest)) {
-        $lines.Add($line)
-    }
-    if ($lines.Count -eq 0) {
-        $lines.Add("name`tstatus`toutput`tsource`texe`tartifact")
-    }
-    elseif ($lines[0] -ne "name`tstatus`toutput`tsource`texe`tartifact") {
-        $lines[0] = "name`tstatus`toutput`tsource`texe`tartifact"
-    }
-    [System.IO.File]::WriteAllLines($Manifest, $lines)
-}
-
 function Add-ManifestRow($Name, $Output, $Source, $Exe, $Artifact) {
-    Upsert-ManifestHeader
-    $lines = [System.Collections.Generic.List[string]]::new()
-    foreach ($line in [System.IO.File]::ReadLines($Manifest)) {
-        if ($line -notmatch "^$([regex]::Escape($Name))\t") {
-            $lines.Add($line)
-        }
-    }
-    $lines.Add("$Name`tcompiled`t$Output`t$Source`t$Exe`t$Artifact")
-    [System.IO.File]::WriteAllLines($Manifest, $lines)
+    Update-AtomArtifactManifest -Path $Manifest -Name $Name -Status "compiled" -Output $Output -Source $Source -Exe $Exe -Artifact $Artifact
 }
 
 try {
