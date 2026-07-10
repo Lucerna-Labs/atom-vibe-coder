@@ -57,6 +57,9 @@ function Write-AtomLearningRecord {
         [string]$Artifact = "",
         [string]$ArtifactHash = "",
         [string]$ProviderModel = "",
+        [string]$WorkPlanId = "",
+        [string]$WorkPlanManifest = "",
+        [int]$WorkPacketCount = 0,
         [int]$RouteLen = 4
     )
 
@@ -94,6 +97,15 @@ function Write-AtomLearningRecord {
         if (-not [string]::IsNullOrWhiteSpace($ProviderModel)) {
             $arguments += @("--provider-model", $ProviderModel)
         }
+        if (-not [string]::IsNullOrWhiteSpace($WorkPlanId)) {
+            $arguments += @("--work-plan-id", $WorkPlanId)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($WorkPlanManifest)) {
+            $arguments += @("--work-plan-manifest", $WorkPlanManifest)
+        }
+        if ($WorkPacketCount -gt 0) {
+            $arguments += @("--work-packet-count", $WorkPacketCount.ToString())
+        }
         $result = Invoke-AtomLearningProbe -Arguments $arguments
         if ($result -notmatch '^MATH_ATOMS_LEARNING_OK ') {
             throw "learning probe returned an unexpected result: $result"
@@ -102,6 +114,34 @@ function Write-AtomLearningRecord {
     }
     finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-AtomWorkEvidence {
+    param([Parameter(Mandatory = $true)][string]$ProviderText)
+
+    $machineText = [regex]::Replace($ProviderText, '\r?\n[ \t]+', '')
+    if ($machineText -notmatch '(?m)^provider execution ok: .* model=(?<model>\S+) work_plan=(?<id>work-[0-9a-f]{24}) packets=(?<count>\d+) executed=\d+ resumed=\d+') {
+        throw "provider output is missing meticulous work-plan execution evidence"
+    }
+    $planId = $Matches.id
+    $model = $Matches.model
+    $packetCount = [int]$Matches.count
+    if ($packetCount -lt 13) {
+        throw "provider work plan is too coarse: $packetCount packets"
+    }
+    if ($machineText -notmatch '(?m)^provider work manifest: (?<manifest>.+)$') {
+        throw "provider output is missing the expanded work manifest path"
+    }
+    $manifest = $Matches.manifest.Trim()
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        throw "provider work manifest does not exist: $manifest"
+    }
+    return [pscustomobject]@{
+        PlanId = $planId
+        Model = $model
+        Manifest = $manifest
+        PacketCount = $packetCount
     }
 }
 

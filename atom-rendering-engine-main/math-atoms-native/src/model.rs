@@ -2,7 +2,7 @@ use math_atoms_core::{
     default_provider_output_dir, effective_records, persist_provider_output, LearningOutcome,
     LearningRecord, LearningRecordInput, LearningStore, LearningSummary, MathAtomsRuntime,
     PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, ProviderConfigInput,
-    ProviderError, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
+    ProviderError, ProviderExecutionOutput, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use pmre_orchestrator::{
     UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
@@ -325,7 +325,9 @@ impl NativeApp {
         };
     }
 
-    pub fn begin_provider_execution(&mut self) -> Option<Receiver<Result<String, ProviderError>>> {
+    pub fn begin_provider_execution(
+        &mut self,
+    ) -> Option<Receiver<Result<ProviderExecutionOutput, ProviderError>>> {
         if self.provider_running {
             self.last_provider_output = "Provider request already running.".to_string();
             return None;
@@ -353,16 +355,43 @@ impl NativeApp {
         Some(rx)
     }
 
+    #[cfg(test)]
     pub fn complete_provider_execution(&mut self, result: Result<String, ProviderError>) {
+        let report = result.map(|text| ProviderExecutionOutput {
+            text,
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            packet_ids: Vec::new(),
+            executed_packets: 1,
+            resumed_packets: 0,
+        });
+        self.complete_provider_execution_report(report);
+    }
+
+    pub fn complete_provider_execution_report(
+        &mut self,
+        result: Result<ProviderExecutionOutput, ProviderError>,
+    ) {
         self.last_provider_output = match result {
-            Ok(text) => match persist_provider_output(&text, self.provider_output_dir()) {
+            Ok(report) => match persist_provider_output(&report.text, self.provider_output_dir()) {
                 Ok(evidence) => {
-                    self.runtime.mark_provider_executed(
+                    if self.runtime.mark_provider_execution_report(
                         &evidence.path.to_string_lossy(),
                         &evidence.hash,
                         evidence.len,
-                    );
-                    text
+                        &report,
+                    ) {
+                        report.text
+                    } else {
+                        let reason = self
+                            .runtime
+                            .state()
+                            .blockers
+                            .last()
+                            .cloned()
+                            .unwrap_or_else(|| "provider report verification failed".to_string());
+                        format!("Provider blocked: {reason}")
+                    }
                 }
                 Err(error) => {
                     let reason = format!("provider output evidence persistence failed: {error}");
@@ -429,8 +458,8 @@ impl NativeApp {
             return;
         };
         match rx.recv() {
-            Ok(result) => self.complete_provider_execution(result),
-            Err(error) => self.complete_provider_execution(Err(ProviderError::Io(format!(
+            Ok(result) => self.complete_provider_execution_report(result),
+            Err(error) => self.complete_provider_execution_report(Err(ProviderError::Io(format!(
                 "provider worker disconnected: {error}"
             )))),
         }
@@ -611,6 +640,9 @@ impl NativeApp {
                 .as_ref()
                 .map(|call| call.model.clone())
                 .unwrap_or_default(),
+            work_plan_id: state.last_work_plan_id.clone(),
+            work_plan_manifest: state.last_work_plan_manifest.clone(),
+            work_packet_count: state.last_work_packet_count,
             route_len: state.last_route.len(),
         }))
     }
@@ -642,6 +674,21 @@ impl NativeApp {
             provider_output_hash,
             provider_output_len: if self.provider_title_state() == "provider:ran" {
                 state.last_provider_output_len
+            } else {
+                0
+            },
+            work_plan_id: if self.provider_title_state() == "provider:ran" {
+                state.last_work_plan_id.clone()
+            } else {
+                String::new()
+            },
+            work_plan_manifest: if self.provider_title_state() == "provider:ran" {
+                state.last_work_plan_manifest.clone()
+            } else {
+                String::new()
+            },
+            work_packet_count: if self.provider_title_state() == "provider:ran" {
+                state.last_work_packet_count
             } else {
                 0
             },
@@ -747,8 +794,10 @@ fn current_intent(ui: &UiState) -> String {
     }
 }
 
-fn execute_call(call: PreparedProviderCall) -> Result<String, math_atoms_core::ProviderError> {
-    call.execute_with_curl()
+fn execute_call(
+    call: PreparedProviderCall,
+) -> Result<ProviderExecutionOutput, math_atoms_core::ProviderError> {
+    call.execute_with_curl_report()
 }
 
 fn run_design_upload_script(
@@ -897,6 +946,66 @@ mod tests {
             UxNode::Text { content, .. } => content.clone(),
             UxNode::Rich { spans, .. } => spans.iter().map(|span| span.text.as_str()).collect(),
         }
+    }
+
+    fn verified_provider_report(
+        app: &NativeApp,
+        label: &str,
+        text: &str,
+    ) -> (ProviderExecutionOutput, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "math-atoms-native-work-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = math_atoms_core::WorkPlanStore::new(&root);
+        let call = app.runtime.state().last_provider_call.as_ref().unwrap();
+        let mut plan = call.work_plan.clone().unwrap();
+        plan.expand_files(vec![math_atoms_core::WorkFile {
+            path: "response.txt".to_string(),
+            purpose: "provider response".to_string(),
+            acceptance: vec!["response verified".to_string()],
+        }])
+        .unwrap();
+        let lease = store.acquire(&plan.id).unwrap();
+        let manifest = store.write_plan_manifest(&plan).unwrap();
+        for packet in &plan.packets {
+            let output = match packet.contract {
+                math_atoms_core::PacketContract::Envelope => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"result\":\"complete\",\"checks\":[\"verified\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_core::PacketContract::FileManifest => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"response.txt\",\"purpose\":\"provider response\",\"acceptance\":[\"response verified\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_core::PacketContract::FileArtifact => {
+                    "```text\nprovider proof\n```".to_string()
+                }
+            };
+            store
+                .store_packet(&plan, packet, &output, &call.model)
+                .unwrap();
+        }
+        drop(lease);
+        (
+            ProviderExecutionOutput {
+                text: text.to_string(),
+                work_plan_id: plan.id,
+                work_plan_manifest: manifest.to_string_lossy().to_string(),
+                packet_ids: plan
+                    .packets
+                    .iter()
+                    .map(|packet| packet.id.clone())
+                    .collect(),
+                executed_packets: plan.packets.len(),
+                resumed_packets: 0,
+            },
+            root,
+        )
     }
 
     #[test]
@@ -1197,7 +1306,7 @@ mod tests {
         let result = rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("local refused provider should return quickly");
-        app.complete_provider_execution(result);
+        app.complete_provider_execution_report(result);
         std::env::remove_var(&key);
         assert_eq!(app.provider_title_state(), "provider:blocked");
 
@@ -1319,12 +1428,14 @@ mod tests {
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
         app.provider_running = true;
-        app.complete_provider_execution(Ok("provider proof".to_string()));
-        assert_eq!(app.status(), RuntimeStatus::Proven);
+        let (report, work_root) = verified_provider_report(&app, "output-audit", "provider proof");
+        app.complete_provider_execution_report(Ok(report));
+        assert_eq!(app.status(), RuntimeStatus::VerificationPending);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(learning_path).ok();
         std::fs::remove_dir_all(output_dir).ok();
+        std::fs::remove_dir_all(work_root).ok();
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
         assert!(text.contains("\"provider_model\":"));
         assert!(text.contains("\"provider_output_artifact\":"));
@@ -1358,13 +1469,15 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
-        app.complete_provider_execution(Ok("provider proof".to_string()));
+        let (report, work_root) = verified_provider_report(&app, "capture", "provider proof");
+        app.complete_provider_execution_report(Ok(report));
         let before = store.read_records().unwrap().len();
         app.capture_current_proof();
         let after = store.read_records().unwrap().len();
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(learning_path).ok();
         std::fs::remove_dir_all(output_dir).ok();
+        std::fs::remove_dir_all(work_root).ok();
         assert_eq!(after, before + 1);
         assert!(app
             .last_run_summary
@@ -1416,16 +1529,22 @@ mod tests {
             .evidence
             .iter()
             .any(|item| item.node_id.starts_with("learning:failed:")));
-        restarted.complete_provider_execution(Ok("corrected provider output".to_string()));
+        let (report, work_root) = verified_provider_report(
+            &restarted,
+            "restart-correction",
+            "corrected provider output",
+        );
+        restarted.complete_provider_execution_report(Ok(report));
         let records = learning.read_records().unwrap();
         assert_eq!(LearningSummary::from_records(&records).failed, 1);
-        assert_eq!(LearningSummary::from_records(&records).succeeded, 1);
-        assert!(records.last().unwrap().correction.contains("credential"));
+        assert_eq!(LearningSummary::from_records(&records).succeeded, 0);
+        assert_eq!(restarted.status(), RuntimeStatus::VerificationPending);
         let before_capture = records.len();
         restarted.capture_current_proof();
         assert_eq!(learning.read_records().unwrap().len(), before_capture);
         std::fs::remove_file(proof_path).ok();
         std::fs::remove_file(learning_path).ok();
         std::fs::remove_dir_all(output_dir).ok();
+        std::fs::remove_dir_all(work_root).ok();
     }
 }

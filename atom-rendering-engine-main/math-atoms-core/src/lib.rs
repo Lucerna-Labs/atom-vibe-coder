@@ -5,7 +5,6 @@
 //! consumes this crate and renders the state; no browser-local state is required here.
 
 pub mod domain;
-pub mod graph;
 pub mod provider;
 pub mod runtime;
 
@@ -13,19 +12,22 @@ pub use domain::{
     atom_by_key, atoms, gates, mission, recipes, Atom, AtomLayer, Gate, Mission, Recipe,
     RecipeStatus,
 };
-pub use graph::{Evidence, WikiGraph};
 pub use math_atoms_bus::{
     BackpressureSignal, BusLayer, BusMessageKind, Envelope, EnvelopeId, FabricSnapshot,
     FabricThread, Intersection, PreloadPlan, Ramp, SpiderwebBus, ThreadId, TransferPolicy,
 };
+pub use math_atoms_graph::{Evidence, WikiGraph};
 pub use math_atoms_learning::{
     artifact_hash, effective_records, rank_records, LearningHit, LearningOutcome, LearningRecord,
     LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 pub use math_atoms_proof::{ProofRecord, ProofStore};
+pub use math_atoms_work::{
+    verify_work_plan_evidence, PacketContract, WorkFile, WorkPlan, WorkPlanStore, WorkStage,
+};
 pub use provider::{
     default_provider_output_dir, persist_provider_output, provider_output_hash,
     PersistedProviderOutput, PreparedProviderCall, ProviderConfig, ProviderConfigInput,
-    ProviderError, ProviderKind, ProviderWireFormat,
+    ProviderError, ProviderExecutionOutput, ProviderKind, ProviderWireFormat,
 };
 pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};

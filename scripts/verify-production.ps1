@@ -70,6 +70,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "self-learning functional gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderLearningLocal.ps1")
         if ($LASTEXITCODE -ne 0) { throw "local provider app-build learning gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-WorkPacketResume.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "work packet resume gate failed with exit code $LASTEXITCODE" }
         Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, native provider responsiveness gate, restart-level self-learning gate, and local provider adapter/app/PMRE/Bluetooth learning gate"
     }
     else {
@@ -95,6 +97,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-SelfLearningFunctional.ps1")
         if ($LASTEXITCODE -ne 0) { throw "self-learning functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-WorkPacketResume.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "work packet resume gate failed with exit code $LASTEXITCODE" }
         Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, native provider responsiveness gate, provider execution gate, provider multi-app build gate, provider real PMRE app gate, provider Bluetooth driver gate, design upload build gate, and restart-level self-learning gate"
     }
 }

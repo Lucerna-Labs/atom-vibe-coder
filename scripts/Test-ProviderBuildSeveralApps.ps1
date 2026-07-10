@@ -18,11 +18,6 @@ $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
-if ($ProviderKind -match "deepseek" -and $ProviderModel -match "pro") {
-    throw "Provider app-build gate is configured for a DeepSeek Pro model; expected Flash"
-}
-
-$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You generate small, dependency-free Rust programs. Return exactly one fenced rust code block and no prose. The code must compile with rustc --edition=2021 -D warnings and print the required exact line. If you define a field, method, import, variable, enum, or struct, the program must read or call it in executable logic."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
 
 $Specs = @(
     @{
@@ -170,7 +165,7 @@ function Invoke-Rustc($Source, $Exe, $AppDir) {
 
 try {
     if ($ProviderKind -match "deepseek") {
-        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = $DeepSeekTemplate
+        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = ""
     }
 
     Remove-Item -LiteralPath $OutDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -191,6 +186,7 @@ try {
             $attemptIntent = New-AppIntent $spec $lastFailure
             try {
                 $providerText = Invoke-ProviderProbe $attemptIntent $appDir
+                $work = Get-AtomWorkEvidence -ProviderText $providerText
                 $code = Get-RustCode $providerText
                 if ($code -notmatch "fn\s+main\s*\(") {
                     throw "$($spec.Name) app is missing fn main"
@@ -213,7 +209,7 @@ try {
                     throw "output mismatch. Expected '$($spec.Expected)' but got '$actual'"
                 }
                 $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $source -ProviderModel $ProviderModel
+                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
                 $passed += "$($spec.Name)=$actual"
                 $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe`t"
                 $passedApp = $true

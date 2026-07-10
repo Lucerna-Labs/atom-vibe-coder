@@ -20,9 +20,6 @@ $OriginalBmpPath = $env:MATH_ATOMS_REAL_APP_BMP
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
-if ($ProviderKind -match "deepseek" -and $ProviderModel -match "pro") {
-    throw "Provider real-app gate is configured for a DeepSeek Pro model; expected Flash"
-}
 if ([string]::IsNullOrWhiteSpace($UserIntent)) {
     throw "UserIntent must be natural language, not an empty prompt"
 }
@@ -34,8 +31,6 @@ if ($MaxAttempts -lt 1) {
 }
 
 $Expected = "MATH_ATOMS_REAL_APP_OK pmre-task-board tasks=5 done=2 open=3 filtered=3 stack=canonical bmp=pmre-task-board.bmp"
-$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You convert plain user app requests into compact JSON product specs. Do not write code. Return exactly one fenced json code block and no prose."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
-
 function Convert-ToTomlPath([string]$Path) {
     return $Path.Replace("\", "/")
 }
@@ -646,7 +641,7 @@ function Add-ManifestRow($Name, $Output, $Source, $Exe, $Artifact) {
 
 try {
     if ($ProviderKind -match "deepseek") {
-        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = $DeepSeekTemplate
+        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = ""
     }
     $env:RUSTFLAGS = "-D warnings"
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -661,6 +656,7 @@ try {
         $attemptIntent = New-AppSpecIntent $UserIntent $lastFailure
         try {
             $providerText = Invoke-ProviderProbe $attemptIntent $appDir
+            $work = Get-AtomWorkEvidence -ProviderText $providerText
             $json = Get-FencedJson $providerText
             [System.IO.File]::WriteAllText((Join-Path $appDir "app-spec.json"), $json)
             $spec = Get-AppSpec $json
@@ -671,7 +667,7 @@ try {
             $source = Join-Path $appDir "src\main.rs"
             Add-ManifestRow $spec.Slug $Expected $source $exe $bmp
             $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $bmp -ProviderModel $ProviderModel
+            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $bmp -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
             Write-Host "provider natural-language PMRE app ok: spec generated, harness compiled, interacted, rendered: $Expected"
             return
         }

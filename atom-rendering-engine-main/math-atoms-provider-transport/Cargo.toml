@@ -1,0 +1,11 @@
+[package]
+name = "math-atoms-provider-transport"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Credential-safe bounded provider HTTP transport and output evidence for Atom Vibe Coder."
+
+[dependencies]
+math-atoms-hash = { path = "../math-atoms-hash" }
+math-atoms-secrets = { path = "../math-atoms-secrets" }
+

@@ -8,7 +8,11 @@ description = "Native Atom Vibe Coder runtime: Spiderweb Bus, graph retrieval, p
 [dependencies]
 math-atoms-bus = { path = "../math-atoms-bus" }
 math-atoms-doctrine = { path = "../math-atoms-doctrine" }
+math-atoms-graph = { path = "../math-atoms-graph" }
 math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
 math-atoms-learning = { path = "../math-atoms-learning" }
 math-atoms-proof = { path = "../math-atoms-proof" }
+math-atoms-provider-transport = { path = "../math-atoms-provider-transport" }
+math-atoms-secrets = { path = "../math-atoms-secrets" }
+math-atoms-work = { path = "../math-atoms-work" }

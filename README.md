@@ -5,12 +5,16 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 ## Current Surface
 
 - `atom-rendering-engine-main/math-atoms-bus` owns dependency-free L0-L3 Spiderweb Bus routing, ramps, intersections, backpressure, and fabric-thread evidence.
-- `atom-rendering-engine-main/math-atoms-core` owns wiki graph RAG, provider adapters, recipes, and runtime orchestration over the bus.
+- `atom-rendering-engine-main/math-atoms-core` owns provider adapters, recipe selection, proof state, and runtime orchestration over the bus.
+- `atom-rendering-engine-main/math-atoms-graph` owns graph-native wiki chunking, relationship retrieval, proof promotion, and bounded learning-node memory.
 - `atom-rendering-engine-main/math-atoms-hash` owns dependency-free SHA-256 hashing for recomputable provider and artifact evidence.
 - `atom-rendering-engine-main/math-atoms-learning` owns the append-only learning ledger, concurrent writer lock, artifact hashing, bounded memory, relevance ranking, redaction, and `learning_probe` CLI.
 - `atom-rendering-engine-main/math-atoms-json` fully parses provider and ledger JSON, including Unicode surrogate pairs, duplicate-key rejection, depth limits, and trailing-data rejection, without third-party dependencies.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
 - `atom-rendering-engine-main/math-atoms-proof` owns the strict append-only proof ledger and backward-compatible proof-record schema.
+- `atom-rendering-engine-main/math-atoms-provider-transport` owns bounded credential-safe HTTP execution, retry policy, and content-addressed provider output evidence.
+- `atom-rendering-engine-main/math-atoms-secrets` owns format-preserving credential redaction for every durable evidence boundary.
+- `atom-rendering-engine-main/math-atoms-work` owns strict, resumable, content-addressed provider work packets and expanded-plan verification.
 - `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
 - `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
 - `scripts/Test-NativeFunctional.ps1` launches the real native window against an isolated temp proof store and exercises typed intent routing, Run, Capture, Provider, and Drift.
@@ -25,6 +29,7 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `scripts/Test-ProviderLearningLocal.ps1` runs the real provider adapter, console-app, PMRE-app, Bluetooth, and learning gates against an isolated local endpoint.
 - `scripts/Test-NativeLaunchEnvironment.ps1` proves the detached Win32 launcher inherits session-only provider and store settings.
 - `scripts/Test-NativeIdleCpu.ps1` measures the real minimized native process and rejects background rerender loops.
+- `scripts/Test-WorkPacketResume.ps1` executes 13 provider packets, takes the endpoint offline, then requires the identical plan to resume all 13 packets from revalidated evidence without a network request.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app through an environment-preserving detached Win32 process, preferring job breakaway when Windows permits it, with an explicit working directory.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 - The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
@@ -32,9 +37,19 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 
 ## Durable Self-Learning
 
-Every terminal native or build-harness attempt appends a validated event to `learning.jsonl`. Failed events remain correction evidence and cannot promote a recipe as proof. Schema-v2 provider and harness successes require an existing artifact plus a recomputable SHA-256 hash; native non-provider successes require a complete L0-L3 route. Immediate retries receive the current failure, while later runs retrieve related durable lessons through recipe and atom relationships before the provider request is prepared. Legacy schema-v1 checksum records remain readable audit history but cannot promote provider evidence.
+Every terminal native or build-harness attempt appends a validated event to `learning.jsonl`. Failed events remain correction evidence and cannot promote a recipe as proof. Model completion remains `verification pending`; it is not a successful learning event. Schema-v3 provider successes require a real product harness, an existing SHA-256 artifact, a recomputable canonical expanded work manifest, and every model-bound packet artifact; native non-provider successes require a complete L0-L3 route. Immediate retries receive the current failure, while later runs retrieve related durable lessons through recipe and atom relationships before the provider request is prepared. Legacy schema-v1/v2 records remain readable audit history but cannot promote provider evidence.
 
 Learning events move through explicit L0 observation, L1 persistence, L2 graph joining, and L3 orchestration messages. The active graph memory is deduplicated and capped at 256 learning nodes; the append-only ledger remains the audit history. Provider prompts label retrieved evidence as untrusted historical data so stored text cannot become executable prompt instructions.
+
+## Meticulous Work Packets
+
+One natural-language request always enters a fine-grained provider plan. Five base packets normalize intent, derive functional and quality contracts, define architecture, and return a strict relative-path file manifest. Each manifest file expands into contract, implementation, adversarial review, and correction packets. Corrected files feed bounded three-input hierarchical integration groups before integration, functional verification planning, hostile review, and finalization. A one-file product therefore requires 13 packets; larger products add four focused packets per file plus the required integration groups. There is no one-shot provider bypass.
+
+Planning packets accept only exact ID-bound JSON schemas. File packets accept exactly one complete fenced file, reject credential material and placeholder markers, and otherwise remain byte-for-byte unchanged. Context is dependency-scoped and bounded, with untrusted context before the final contract. The schema-v2 work manifest is verified by reconstructing the canonical packet ID and dependency graph. The final deliverable is assembled from corrected file packets, so a small-context model does not need to regenerate an entire multi-file product in one response.
+
+## Complex Build Recipes
+
+The wiki graph indexes every numbered section as a separate bounded evidence node. Step-by-step references cover the dependency-free [2D engine](knowledge/wiki/recipes/2d-engine-build.md), [3D engine](knowledge/wiki/recipes/3d-engine-build.md), and [WiFi adapter](knowledge/wiki/recipes/wifi-adapter-build.md). The [browser engine](knowledge/wiki/recipes/browser-engine-build.md) is explicitly incomplete and cannot be treated as general-browser production proof.
 
 ## Product Mission
 
@@ -63,7 +78,7 @@ Provider selection:
 $env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
 $env:MATH_ATOMS_PROVIDER_KIND="ollama"  # OLLAMA_API_KEY, Ollama Cloud chat API
 $env:MATH_ATOMS_PROVIDER_KIND="mistral" # MISTRAL_API_KEY, Mistral chat completions API
-$env:MATH_ATOMS_PROVIDER_KIND="deepseek" # DEEPSEEK_API_KEY, DeepSeek V4 Flash chat API
+$env:MATH_ATOMS_PROVIDER_KIND="deepseek" # DEEPSEEK_API_KEY, DeepSeek V4 Pro with thinking=max
 
 # Any OpenAI-compatible/custom provider:
 $env:MATH_ATOMS_PROVIDER_KIND="custom"
@@ -75,6 +90,7 @@ $env:MATH_ATOMS_PROVIDER_AUTH_HEADER="Authorization"
 $env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style headers
 $env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="answer" # optional top-level response key for a custom provider
 $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{prompt_json}}}'
+$env:MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS="900" # optional, bounded to 10..1800 seconds
 ```
 
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
@@ -83,7 +99,7 @@ The native Settings tab also exposes `Design Upload` with HTML and CSS path inpu
 
 Every generated interactive PMRE app also gets the renderer-owned `Design` rail without app-specific wiring. Open it to tune colors, text scale, typography preset, rounded/square/pill/circle control shape, glass intensity, animation intensity, and preview controls such as mic, mute, and record buttons. The controls are native PMRE widgets, not browser/Electron/Tauri widgets.
 
-Run a real DeepSeek Flash model test that asks the provider to generate a dependency-free Rust toy app, compiles it with `rustc`, runs it, and verifies output:
+Run a real DeepSeek V4 Pro thinking-model test that asks the provider to generate a dependency-free Rust toy app through meticulous packets, compiles it with `rustc`, runs it, and verifies output:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-DeepSeekToyApp.ps1

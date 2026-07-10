@@ -20,16 +20,11 @@ $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
-if ($ProviderKind -match "deepseek" -and $ProviderModel -match "pro") {
-    throw "Bluetooth driver gate is configured for a DeepSeek Pro model; expected Flash"
-}
 if ($MaxAttempts -lt 1) {
     throw "MaxAttempts must be at least 1"
 }
 
 $Expected = "MATH_ATOMS_DRIVER_OK bluetooth hci_reset=0x0C03 scan=enabled devices=2 connected=AA:BB:CC:DD:EE:01 stack=canonical"
-$DeepSeekTemplate = '{"model":{{model_json}},"messages":[{"role":"system","content":"You generate small, dependency-free Rust programs. Return exactly one fenced rust code block and no prose. The code must compile with rustc --edition=2021 -D warnings and print the required exact line. If you define a field, method, import, variable, enum, or struct, the program must read or call it in executable logic."},{"role":"user","content":{{prompt_json}}}],"thinking":{"type":"disabled"},"temperature":0.1,"stream":false}'
-
 function New-DriverIntent([string]$FailureEvidence) {
     $intent = @"
 provider model build a complete dependency-free Rust Bluetooth HCI driver core through Atom Vibe Coder.
@@ -218,7 +213,7 @@ function Update-ArtifactManifest([string]$Actual) {
 
 try {
     if ($ProviderKind -match "deepseek") {
-        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = $DeepSeekTemplate
+        $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE = ""
     }
 
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -231,6 +226,7 @@ try {
         $attemptIntent = New-DriverIntent $lastFailure
         try {
             $providerText = Invoke-ProviderProbe $attemptIntent $attemptDir
+            $work = Get-AtomWorkEvidence -ProviderText $providerText
             $code = Get-RustCode $providerText
             Assert-DriverSource $code
             [System.IO.File]::WriteAllText($Source, $code)
@@ -272,7 +268,7 @@ $actual
             [System.IO.File]::WriteAllText($Review, $reviewText)
             Update-ArtifactManifest $actual
             $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
-            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $Source -ProviderModel $ProviderModel
+            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $Source -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
             Write-Host "provider bluetooth driver ok: $actual"
             Write-Host "driver review: $Review"
             return

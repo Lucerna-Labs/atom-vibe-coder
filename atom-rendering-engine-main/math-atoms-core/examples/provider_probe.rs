@@ -33,24 +33,40 @@ fn main() {
         );
         std::process::exit(3);
     };
-    match task.call.execute_with_curl() {
-        Ok(text) if !text.trim().is_empty() => {
-            let evidence = persist_provider_output(&text, default_provider_output_dir())
+    match task.call.execute_with_curl_report() {
+        Ok(report) if !report.text.trim().is_empty() => {
+            let evidence = persist_provider_output(&report.text, default_provider_output_dir())
                 .unwrap_or_else(|error| {
                     eprintln!(
                         "provider proof blocked: output evidence persistence failed: {error}"
                     );
                     std::process::exit(6);
                 });
-            runtime.mark_provider_executed(
+            if !runtime.mark_provider_execution_report(
                 &evidence.path.to_string_lossy(),
                 &evidence.hash,
                 evidence.len,
+                &report,
+            ) {
+                eprintln!(
+                    "provider proof blocked: report evidence failed verification: {:?}",
+                    runtime.state().blockers
+                );
+                std::process::exit(7);
+            }
+            println!(
+                "provider execution ok: {} chars model={} work_plan={} packets={} executed={} resumed={}",
+                report.text.chars().count(),
+                task.call.model,
+                report.work_plan_id,
+                report.packet_ids.len(),
+                report.executed_packets,
+                report.resumed_packets
             );
-            println!("provider execution ok: {} chars", text.chars().count());
+            println!("provider work manifest: {}", report.work_plan_manifest);
             println!("provider output artifact: {}", evidence.path.display());
             println!("provider output hash: {}", evidence.hash);
-            println!("{}", text.trim());
+            println!("{}", report.text.trim());
         }
         Ok(_) => {
             eprintln!("provider proof blocked: provider returned empty text");

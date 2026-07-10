@@ -32,6 +32,7 @@ try {
     $providerText = ($providerOutput | Out-String).Trim()
     Write-Host $providerText
     if ($providerExit -ne 0) { throw "provider execution gate failed with exit code $providerExit" }
+    $work = Get-AtomWorkEvidence -ProviderText $providerText
     if ($providerText -notmatch '(?m)^provider output artifact: (.+)$') {
         throw "provider execution gate did not return an output artifact path"
     }
@@ -47,7 +48,7 @@ try {
     if ($actualHash -ne $providerHash) {
         throw "provider execution artifact hash mismatch"
     }
-    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $providerArtifact -ArtifactHash $providerHash -ProviderModel $env:MATH_ATOMS_PROVIDER_MODEL
+    Write-AtomLearningRecord -Source "provider-execution" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "measure,compose,flow,preserve" -Gate "provider-execution" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $providerArtifact -ArtifactHash $providerHash -ProviderModel $work.Model -WorkPlanId $work.PlanId -WorkPlanManifest $work.Manifest -WorkPacketCount $work.PacketCount
 }
 catch {
     $failure = $_.Exception.Message

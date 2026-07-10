@@ -1,7 +1,8 @@
-use crate::domain::{atoms, gates, mission, recipes};
+use math_atoms_doctrine::{atoms, gates, mission, recipes};
 use math_atoms_hash::{sha256_file, valid_sha256_tag};
 use math_atoms_learning::{LearningOutcome, LearningRecord, DEFAULT_GRAPH_MEMORY_LIMIT};
 use math_atoms_proof::ProofRecord;
+use math_atoms_work::verify_work_plan_evidence;
 use std::collections::{hash_map::DefaultHasher, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -454,13 +455,82 @@ impl WikiGraph {
             });
         }
         self.nodes.push(WikiNode {
-            id,
+            id: id.clone(),
             title,
             excerpt,
-            tags: node_tags,
+            tags: node_tags.clone(),
         });
+        let mut prior_section = None;
+        for (index, (section_title, section_body)) in
+            markdown_sections(&text).into_iter().enumerate()
+        {
+            let section_id = format!("{id}:{:02}-{}", index + 1, slug(&section_title));
+            self.edges.push(WikiEdge {
+                from: id.clone(),
+                to: section_id.clone(),
+                weight: 7,
+            });
+            if let Some(prior) = prior_section.replace(section_id.clone()) {
+                self.edges.push(WikiEdge {
+                    from: prior,
+                    to: section_id.clone(),
+                    weight: 5,
+                });
+            }
+            for link in wiki_links(&section_body) {
+                self.edges.push(WikiEdge {
+                    from: section_id.clone(),
+                    to: link,
+                    weight: 6,
+                });
+            }
+            let mut section_tags = node_tags.clone();
+            section_tags.extend(tokenize(&section_title));
+            section_tags.sort();
+            section_tags.dedup();
+            self.nodes.push(WikiNode {
+                id: section_id,
+                title: section_title,
+                excerpt: bounded_excerpt(&section_body, 1_400),
+                tags: section_tags,
+            });
+        }
         Ok(())
     }
+}
+
+fn markdown_sections(text: &str) -> Vec<(String, String)> {
+    let mut sections = Vec::new();
+    let mut title: Option<String> = None;
+    let mut body = Vec::new();
+    for line in text.lines() {
+        let heading = line
+            .strip_prefix("## ")
+            .or_else(|| line.strip_prefix("### "));
+        if let Some(heading) = heading {
+            if let Some(previous) = title.replace(heading.trim().to_string()) {
+                sections.push((previous, body.join("\n").trim().to_string()));
+                body.clear();
+            }
+        } else if title.is_some() && !line.trim().is_empty() {
+            body.push(line.trim().to_string());
+        }
+    }
+    if let Some(title) = title {
+        sections.push((title, body.join("\n").trim().to_string()));
+    }
+    sections
+}
+
+fn bounded_excerpt(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n[section truncated]", &value[..end])
 }
 
 fn tokenize(query: &str) -> Vec<String> {
@@ -589,6 +659,9 @@ fn proof_node_id(record: &ProofRecord, record_atoms: &[String]) -> String {
     record.provider_output_artifact.hash(&mut hasher);
     record.provider_output_hash.hash(&mut hasher);
     record.provider_output_len.hash(&mut hasher);
+    record.work_plan_id.hash(&mut hasher);
+    record.work_plan_manifest.hash(&mut hasher);
+    record.work_packet_count.hash(&mut hasher);
     record.route_len.hash(&mut hasher);
     format!("proof:{:016x}", hasher.finish())
 }
@@ -622,6 +695,15 @@ fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
             .map(|metadata| metadata.len() == record.provider_output_len as u64)
             .unwrap_or(false)
         && record.provider_output_len > 0
+        && record.work_plan_id.starts_with("work-")
+        && record.work_packet_count >= 13
+        && verify_work_plan_evidence(
+            &record.work_plan_manifest,
+            &record.work_plan_id,
+            record.work_packet_count,
+        )
+        .map(|plan| plan.model == record.provider_model)
+        .unwrap_or(false)
 }
 
 fn pin_mission_evidence(evidence: &mut Vec<Evidence>, graph: &WikiGraph, limit: usize) {
@@ -655,6 +737,7 @@ mod tests {
     use super::*;
     use math_atoms_hash::sha256_file;
     use math_atoms_learning::{LearningRecordInput, LEARNING_SCHEMA_VERSION};
+    use math_atoms_work::{WorkFile, WorkPlan, WorkPlanStore};
 
     fn provider_artifact(label: &str, text: &str) -> (PathBuf, String) {
         let path = std::env::temp_dir().join(format!(
@@ -668,6 +751,53 @@ mod tests {
         fs::write(&path, text).unwrap();
         let hash = sha256_file(&path).unwrap();
         (path, hash)
+    }
+
+    fn provider_work_evidence(label: &str) -> (PathBuf, PathBuf, String, usize) {
+        let root = std::env::temp_dir().join(format!(
+            "math-atoms-{label}-work-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = WorkPlanStore::new(&root);
+        let mut plan = WorkPlan::meticulous(
+            "provider proof fixture",
+            "provider-model-loop",
+            &["measure".to_string(), "flow".to_string()],
+            label,
+        )
+        .unwrap();
+        plan.expand_files(vec![WorkFile {
+            path: "proof.txt".to_string(),
+            purpose: "provider proof".to_string(),
+            acceptance: vec!["proof exists".to_string()],
+        }])
+        .unwrap();
+        let lease = store.acquire(&plan.id).unwrap();
+        let manifest = store.write_plan_manifest(&plan).unwrap();
+        for packet in &plan.packets {
+            let output = match packet.contract {
+                math_atoms_work::PacketContract::Envelope => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"result\":\"complete\",\"checks\":[\"verified\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileManifest => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"proof.txt\",\"purpose\":\"provider proof\",\"acceptance\":[\"proof exists\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileArtifact => {
+                    "```text\nprovider proof\n```".to_string()
+                }
+            };
+            store
+                .store_packet(&plan, packet, &output, "gpt-test")
+                .unwrap();
+        }
+        drop(lease);
+        (root, manifest, plan.id.clone(), plan.packets.len())
     }
 
     fn failed_learning(index: usize, intent: String) -> LearningRecord {
@@ -684,6 +814,9 @@ mod tests {
             artifact_path: String::new(),
             artifact_hash: String::new(),
             provider_model: String::new(),
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 4,
         });
         record.schema_version = LEARNING_SCHEMA_VERSION;
@@ -703,7 +836,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("provider-proof.md"),
-            "# Provider Proof\ntags: provider, rag\nProvider calls must fail closed and cite graph evidence.\n[[provider-model-loop]]\n",
+            "# Provider Proof\ntags: provider, rag\nProvider calls must fail closed and cite graph evidence.\n[[provider-model-loop]]\n\n## Step 01 Verify transport\nRun the real provider transport and recompute the response artifact.\n\n## Step 02 Verify product\nCompile and execute the generated product through its functional harness.\n",
         )
         .unwrap();
         let graph = WikiGraph::from_markdown_dir(&dir).unwrap();
@@ -712,6 +845,11 @@ mod tests {
         assert!(hits
             .iter()
             .any(|item| item.node_id == "wiki:provider-proof"));
+        let step_hits = graph.retrieve("compile execute generated product", &[], 12);
+        assert!(step_hits.iter().any(|item| {
+            item.node_id == "wiki:provider-proof:02-step-02-verify-product"
+                && item.excerpt.contains("functional harness")
+        }));
     }
 
     #[test]
@@ -729,6 +867,9 @@ mod tests {
             provider_output_artifact: String::new(),
             provider_output_hash: "fnv:1111111111111111".to_string(),
             provider_output_len: 18,
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 6,
         });
         let hits = graph.retrieve("stored proof wiki graph", &["scan".to_string()], 12);
@@ -750,6 +891,9 @@ mod tests {
             provider_output_artifact: String::new(),
             provider_output_hash: String::new(),
             provider_output_len: 0,
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 6,
         });
         let hits = graph.retrieve(
@@ -765,6 +909,8 @@ mod tests {
         let mut graph = WikiGraph::seeded();
         let output = "provider proof";
         let (artifact, hash) = provider_artifact("audited-provider-proof", output);
+        let (work_root, work_manifest, work_plan_id, work_packet_count) =
+            provider_work_evidence("audited-provider-proof");
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -777,6 +923,9 @@ mod tests {
             provider_output_artifact: artifact.to_string_lossy().to_string(),
             provider_output_hash: hash,
             provider_output_len: output.len(),
+            work_plan_id,
+            work_plan_manifest: work_manifest.to_string_lossy().to_string(),
+            work_packet_count,
             route_len: 8,
         });
         let hits = graph.retrieve(
@@ -786,6 +935,7 @@ mod tests {
         );
         assert!(hits.iter().any(|item| item.node_id.starts_with("proof:")));
         fs::remove_file(artifact).ok();
+        fs::remove_dir_all(work_root).ok();
     }
 
     #[test]
@@ -804,6 +954,9 @@ mod tests {
             provider_output_artifact: artifact.to_string_lossy().to_string(),
             provider_output_hash: hash,
             provider_output_len: output.len(),
+            work_plan_id: "work-tampered-provider".to_string(),
+            work_plan_manifest: "C:/audit/plan-expanded.json".to_string(),
+            work_packet_count: 13,
             route_len: 8,
         };
         fs::write(&artifact, "tampered provider output").unwrap();
@@ -818,6 +971,8 @@ mod tests {
         let mut graph = WikiGraph::seeded();
         let output = "provider proof";
         let (artifact, hash) = provider_artifact("atom-limited-provider-proof", output);
+        let (work_root, work_manifest, work_plan_id, work_packet_count) =
+            provider_work_evidence("atom-limited-provider-proof");
         graph.add_proof_record(&ProofRecord {
             recipe_id: "provider-model-loop".to_string(),
             status: "proven".to_string(),
@@ -836,6 +991,9 @@ mod tests {
             provider_output_artifact: artifact.to_string_lossy().to_string(),
             provider_output_hash: hash,
             provider_output_len: output.len(),
+            work_plan_id,
+            work_plan_manifest: work_manifest.to_string_lossy().to_string(),
+            work_packet_count,
             route_len: 8,
         });
 
@@ -850,6 +1008,7 @@ mod tests {
             .iter()
             .any(|edge| edge.from == "combine" && edge.to == proof_node.id));
         fs::remove_file(artifact).ok();
+        fs::remove_dir_all(work_root).ok();
     }
 
     #[test]
@@ -912,6 +1071,9 @@ mod tests {
             provider_output_artifact: String::new(),
             provider_output_hash: String::new(),
             provider_output_len: 0,
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 6,
         });
         let hits = graph.retrieve(
@@ -938,6 +1100,9 @@ mod tests {
                 provider_output_artifact: String::new(),
                 provider_output_hash: String::new(),
                 provider_output_len: 0,
+                work_plan_id: String::new(),
+                work_plan_manifest: String::new(),
+                work_packet_count: 0,
                 route_len: 5,
             });
         }

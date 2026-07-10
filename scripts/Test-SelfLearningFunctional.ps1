@@ -19,8 +19,8 @@ try {
     [System.IO.File]::WriteAllText($Artifact, 'fn main() { println!("bluetooth corrected"); }')
     $env:MATH_ATOMS_LEARNING_STORE = $Store
 
-    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 1 -Outcome "failed" -Failure $Failure -ProviderModel "functional-model"
-    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 2 -Outcome "succeeded" -Correction $Failure -Artifact $Artifact -ProviderModel "functional-model"
+    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 1 -Outcome "failed" -Failure $Failure
+    Write-AtomLearningRecord -Source "self-learning-functional" -Intent $Intent -Recipe "provider-model-loop" -Atoms $Atoms -Gate "bluetooth-driver" -Attempt 2 -Outcome "succeeded" -Correction $Failure -Artifact $Artifact
 
     $lines = @([System.IO.File]::ReadAllLines($Store))
     if ($lines.Count -ne 2) {

@@ -7,12 +7,14 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
 $Exe = Join-Path $Engine "target\release\math-atoms-native.exe"
 $OriginalStoreDir = $env:MATH_ATOMS_STORE_DIR
+$OriginalWorkDir = $env:MATH_ATOMS_WORK_DIR
 $OriginalKind = $env:MATH_ATOMS_PROVIDER_KIND
 $OriginalUrl = $env:MATH_ATOMS_PROVIDER_URL
 $OriginalModel = $env:MATH_ATOMS_PROVIDER_MODEL
 $OriginalKeyEnv = $env:MATH_ATOMS_PROVIDER_KEY_ENV
 $OriginalFakeKey = $env:MATH_ATOMS_FAKE_KEY
 $TestStoreDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-provider-responsive-" + [Guid]::NewGuid().ToString("N"))
+$ExpectedProviderOutput = '```text' + "`nslow provider ok`n" + '```'
 
 function Get-FreePort() {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -27,6 +29,7 @@ $ServerJob = $null
 
 try {
     $env:MATH_ATOMS_STORE_DIR = $TestStoreDir
+    $env:MATH_ATOMS_WORK_DIR = Join-Path $TestStoreDir "work-packets"
     $env:MATH_ATOMS_PROVIDER_KIND = "openai"
     $env:MATH_ATOMS_PROVIDER_URL = "http://127.0.0.1:$Port/v1/responses"
     $env:MATH_ATOMS_PROVIDER_MODEL = "fake-responsive-provider"
@@ -50,25 +53,63 @@ try {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         try {
-            $client = $listener.AcceptTcpClient()
-            try {
-                $stream = $client.GetStream()
-                $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::ASCII, $false, 1024, $true)
-                while ($true) {
-                    $line = $reader.ReadLine()
-                    if ($null -eq $line -or $line.Length -eq 0) { break }
+            for ($requestIndex = 0; $requestIndex -lt 13; $requestIndex++) {
+                $client = $listener.AcceptTcpClient()
+                try {
+                    $stream = $client.GetStream()
+                    $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $false, 4096, $true)
+                    $contentLength = 0
+                    while ($true) {
+                        $line = $reader.ReadLine()
+                        if ($null -eq $line -or $line.Length -eq 0) { break }
+                        if ($line -match '^Content-Length:\s*(\d+)$') { $contentLength = [int]$Matches[1] }
+                    }
+                    $buffer = New-Object char[] $contentLength
+                    $read = 0
+                    while ($read -lt $contentLength) {
+                        $count = $reader.Read($buffer, $read, $contentLength - $read)
+                        if ($count -le 0) { break }
+                        $read += $count
+                    }
+                    $request = ([string]::new($buffer, 0, $read)) | ConvertFrom-Json
+                    $prompt = [string]$request.input[-1].content[-1].text
+                    if ($prompt -notmatch '(?m)^Packet id: (?<packet>[^\r\n]+)$') { throw "missing packet id" }
+                    $packetId = $Matches.packet.Trim()
+                    if ($prompt -notmatch '(?m)^Stage: (?<stage>[^\r\n]+)$') { throw "missing packet stage" }
+                    $stage = $Matches.stage.Trim()
+                    if ($requestIndex -eq 0) { Start-Sleep -Seconds 5 }
+                    if ($stage -eq 'file-manifest') {
+                        $content = @{
+                            packet_id = $packetId
+                            status = "complete"
+                            files = @(@{ path = "response.txt"; purpose = "responsive provider proof"; acceptance = @("provider remains responsive") })
+                            checks = @("manifest complete")
+                            risks = @()
+                        } | ConvertTo-Json -Depth 8 -Compress
+                    }
+                    elseif ($stage -in @('file-implementation', 'file-correction')) {
+                        $content = '```text' + "`nslow provider ok`n" + '```'
+                    }
+                    else {
+                        $content = @{
+                            packet_id = $packetId
+                            status = "complete"
+                            result = "responsive fixture completed $stage"
+                            checks = @("window remained responsive")
+                            risks = @()
+                        } | ConvertTo-Json -Depth 6 -Compress
+                    }
+                    $body = @{ output_text = $content } | ConvertTo-Json -Depth 5 -Compress
+                    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                    $header = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
+                    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
+                    $stream.Write($headerBytes, 0, $headerBytes.Length)
+                    $stream.Write($bodyBytes, 0, $bodyBytes.Length)
+                    $stream.Flush()
                 }
-                Start-Sleep -Seconds 5
-                $body = '{"output_text":"slow provider ok"}'
-                $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-                $header = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
-                $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
-                $stream.Write($headerBytes, 0, $headerBytes.Length)
-                $stream.Write($bodyBytes, 0, $bodyBytes.Length)
-                $stream.Flush()
-            }
-            finally {
-                $client.Close()
+                finally {
+                    $client.Close()
+                }
             }
         }
         finally {
@@ -161,8 +202,8 @@ public static class MathAtomsProviderResponsive {
     if ($tail -notmatch '"provider_state":"provider:ran"') {
         throw "Slow provider proof did not record provider:ran. Tail: $tail"
     }
-    if ($tail -notmatch '"status":"proven"') {
-        throw "Slow provider proof did not promote status to proven after execution. Tail: $tail"
+    if ($tail -notmatch '"status":"verification pending"') {
+        throw "Slow provider output did not remain pending the real product harness. Tail: $tail"
     }
     if ($tail -notmatch '"provider_model":"fake-responsive-provider"') {
         throw "Slow provider proof did not record provider model. Tail: $tail"
@@ -178,8 +219,12 @@ public static class MathAtomsProviderResponsive {
     if ($actualHash -ne $proof.provider_output_hash) {
         throw "Slow provider proof artifact hash does not recompute. Tail: $tail"
     }
-    if ($tail -notmatch '"provider_output_len":16') {
+    $expectedOutputLen = [System.Text.Encoding]::UTF8.GetByteCount($ExpectedProviderOutput)
+    if ([int]$proof.provider_output_len -ne $expectedOutputLen) {
         throw "Slow provider proof did not record output length. Tail: $tail"
+    }
+    if ($proof.work_plan_id -notmatch '^work-[0-9a-f]{24}$' -or [int]$proof.work_packet_count -ne 13) {
+        throw "Slow provider proof did not bind the 13-packet meticulous work plan. Tail: $tail"
     }
 
     Write-Host "native provider responsiveness ok: $(Get-AtomNativeWindowTitle -Process $proc)"
@@ -192,6 +237,7 @@ finally {
     }
     Remove-Item -LiteralPath $TestStoreDir -Recurse -Force -ErrorAction SilentlyContinue
     $env:MATH_ATOMS_STORE_DIR = $OriginalStoreDir
+    $env:MATH_ATOMS_WORK_DIR = $OriginalWorkDir
     $env:MATH_ATOMS_PROVIDER_KIND = $OriginalKind
     $env:MATH_ATOMS_PROVIDER_URL = $OriginalUrl
     $env:MATH_ATOMS_PROVIDER_MODEL = $OriginalModel

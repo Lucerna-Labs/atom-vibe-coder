@@ -1,10 +1,11 @@
 [package]
-name = "math-atoms-proof"
+name = "math-atoms-work"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Strict durable proof records and JSONL persistence for Atom Vibe Coder."
+description = "Fine-grained, resumable provider work packets for Atom Vibe Coder."
 
 [dependencies]
+math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
 math-atoms-secrets = { path = "../math-atoms-secrets" }

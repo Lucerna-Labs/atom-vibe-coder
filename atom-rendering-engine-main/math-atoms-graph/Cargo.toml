@@ -1,0 +1,14 @@
+[package]
+name = "math-atoms-graph"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Graph-native wiki, proof, and learning retrieval for Atom Vibe Coder."
+
+[dependencies]
+math-atoms-doctrine = { path = "../math-atoms-doctrine" }
+math-atoms-hash = { path = "../math-atoms-hash" }
+math-atoms-learning = { path = "../math-atoms-learning" }
+math-atoms-proof = { path = "../math-atoms-proof" }
+math-atoms-work = { path = "../math-atoms-work" }
+

@@ -224,7 +224,9 @@ struct App {
     cursor: (f32, f32),
     quality: Quality,
     tracking_leave: bool,
-    provider_rx: Option<Receiver<Result<String, math_atoms_core::ProviderError>>>,
+    provider_rx: Option<
+        Receiver<Result<math_atoms_core::ProviderExecutionOutput, math_atoms_core::ProviderError>>,
+    >,
     design_rx: Option<Receiver<Result<String, String>>>,
     suppress_ctrl_char: Option<u32>,
     visual_generation: u64,
@@ -761,16 +763,15 @@ fn poll_provider() -> bool {
         match rx.try_recv() {
             Ok(result) => {
                 app.provider_rx = None;
-                app.model.complete_provider_execution(result);
+                app.model.complete_provider_execution_report(result);
                 true
             }
             Err(TryRecvError::Empty) => false,
             Err(TryRecvError::Disconnected) => {
                 app.provider_rx = None;
-                app.model
-                    .complete_provider_execution(Err(math_atoms_core::ProviderError::Io(
-                        "provider worker disconnected".to_string(),
-                    )));
+                app.model.complete_provider_execution_report(Err(
+                    math_atoms_core::ProviderError::Io("provider worker disconnected".to_string()),
+                ));
                 true
             }
         }

@@ -59,6 +59,9 @@ fn record(args: &[String]) -> Result<(), String> {
         artifact_path,
         artifact_hash,
         provider_model: optional(args, "--provider-model").unwrap_or_default(),
+        work_plan_id: optional(args, "--work-plan-id").unwrap_or_default(),
+        work_plan_manifest: optional(args, "--work-plan-manifest").unwrap_or_default(),
+        work_packet_count: parse_optional(args, "--work-packet-count")?.unwrap_or(0),
         route_len: parse_optional(args, "--route-len")?.unwrap_or(0),
     };
     let record = LearningRecord::new(input);

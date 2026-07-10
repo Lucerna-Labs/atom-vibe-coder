@@ -8,6 +8,8 @@ description = "Durable, dependency-free learning ledger for Atom Vibe Coder."
 [dependencies]
 math-atoms-hash = { path = "../math-atoms-hash" }
 math-atoms-json = { path = "../math-atoms-json" }
+math-atoms-secrets = { path = "../math-atoms-secrets" }
+math-atoms-work = { path = "../math-atoms-work" }
 
 [[bin]]
 name = "learning_probe"

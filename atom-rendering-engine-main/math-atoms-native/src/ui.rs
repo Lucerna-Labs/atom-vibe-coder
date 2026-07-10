@@ -1119,6 +1119,7 @@ fn status_color(status: RuntimeStatus) -> Rgba {
     match status {
         RuntimeStatus::Draft => lamp(),
         RuntimeStatus::ProviderPending => lamp(),
+        RuntimeStatus::VerificationPending => lamp(),
         RuntimeStatus::Proven => teal(),
         RuntimeStatus::Blocked => red(),
         RuntimeStatus::DriftFlagged => blue(),

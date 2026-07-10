@@ -1,16 +1,25 @@
 use crate::domain::{atom_by_key, atoms, mission, recipes, Recipe};
-use crate::graph::{Evidence, WikiGraph};
-use crate::provider::{PreparedProviderCall, ProviderConfig, ProviderError, ProviderWireFormat};
+use crate::provider::{
+    provider_output_hash, PreparedProviderCall, ProviderConfig, ProviderError,
+    ProviderExecutionOutput, ProviderWireFormat,
+};
 use math_atoms_bus::{BusMessageKind, EnvelopeId, SpiderwebBus};
+use math_atoms_graph::{Evidence, WikiGraph};
+use math_atoms_hash::sha256_file;
 use math_atoms_learning::{
     effective_records, LearningOutcome, LearningRecord, LearningStore, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use math_atoms_proof::{ProofRecord, ProofStore};
+use math_atoms_secrets::redact_sensitive_text;
+use math_atoms_work::verify_work_plan_evidence;
+use std::collections::HashSet;
+use std::fs;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
     Draft,
     ProviderPending,
+    VerificationPending,
     Proven,
     Blocked,
     DriftFlagged,
@@ -21,6 +30,7 @@ impl RuntimeStatus {
         match self {
             Self::Draft => "draft",
             Self::ProviderPending => "provider pending",
+            Self::VerificationPending => "verification pending",
             Self::Proven => "proven",
             Self::Blocked => "blocked",
             Self::DriftFlagged => "drift flagged",
@@ -41,6 +51,9 @@ pub struct RuntimeState {
     pub last_provider_output_artifact: String,
     pub last_provider_output_hash: String,
     pub last_provider_output_len: usize,
+    pub last_work_plan_id: String,
+    pub last_work_plan_manifest: String,
+    pub last_work_packet_count: usize,
     pub last_route: Vec<EnvelopeId>,
 }
 
@@ -132,6 +145,9 @@ impl MathAtomsRuntime {
                 last_provider_output_artifact: String::new(),
                 last_provider_output_hash: String::new(),
                 last_provider_output_len: 0,
+                last_work_plan_id: String::new(),
+                last_work_plan_manifest: String::new(),
+                last_work_packet_count: 0,
                 last_route: Vec::new(),
             },
         }
@@ -164,6 +180,9 @@ impl MathAtomsRuntime {
         self.state.last_provider_output_artifact.clear();
         self.state.last_provider_output_hash.clear();
         self.state.last_provider_output_len = 0;
+        self.state.last_work_plan_id.clear();
+        self.state.last_work_plan_manifest.clear();
+        self.state.last_work_packet_count = 0;
         self.state.last_route.clear();
     }
 
@@ -210,7 +229,8 @@ impl MathAtomsRuntime {
         );
         let atom_stack = recipe_stack(recipe);
         let provider_result = if recipe.requires_provider || provider_route {
-            self.provider.prepare_call(intent, recipe.id, &evidence)
+            self.provider
+                .prepare_call_with_atoms(intent, recipe.id, &atom_stack, &evidence)
         } else {
             Ok(PreparedProviderCall {
                 endpoint: String::new(),
@@ -221,13 +241,18 @@ impl MathAtomsRuntime {
                 wire_format: ProviderWireFormat::OpenAiResponses,
                 response_key: String::new(),
                 body: String::new(),
+                work_plan: None,
+                evidence_context: String::new(),
+                body_template: String::new(),
+                request_timeout_seconds: 120,
             })
         };
 
         let mut blockers = Vec::new();
+        let mut recipe_parent = l2;
         let provider_call = match provider_result {
             Ok(call) if !call.body.is_empty() => {
-                self.bus.l2_flow(
+                recipe_parent = self.bus.l2_flow(
                     l2,
                     BusMessageKind::ProviderPrepared,
                     "provider-adapter",
@@ -235,12 +260,25 @@ impl MathAtomsRuntime {
                     "provider request prepared from graph evidence",
                     &evidence_ids,
                 );
+                if let Some(plan) = &call.work_plan {
+                    recipe_parent = self.bus.l2_flow(
+                        recipe_parent,
+                        BusMessageKind::WorkPlanCreated,
+                        "work-planner",
+                        "provider-worker",
+                        &format!(
+                            "{} base packets prepared; file packets expand from the strict manifest",
+                            plan.packets.len()
+                        ),
+                        &evidence_ids,
+                    );
+                }
                 Some(call)
             }
             Ok(_) => None,
             Err(ProviderError::MissingApiKey { env }) => {
                 blockers.push(format!("Missing provider credential in {env}"));
-                self.bus.l2_flow(
+                recipe_parent = self.bus.l2_flow(
                     l2,
                     BusMessageKind::ProviderBlocked,
                     "provider-adapter",
@@ -276,7 +314,7 @@ impl MathAtomsRuntime {
         }
 
         let l3 = self.bus.l3_orchestrate(
-            l2,
+            recipe_parent,
             BusMessageKind::RecipeSelected,
             "recipe-selector",
             "proof-loop",
@@ -335,6 +373,13 @@ impl MathAtomsRuntime {
         self.state.last_provider_output_artifact.clear();
         self.state.last_provider_output_hash.clear();
         self.state.last_provider_output_len = 0;
+        self.state.last_work_plan_id = provider_call
+            .as_ref()
+            .and_then(|call| call.work_plan.as_ref())
+            .map(|plan| plan.id.clone())
+            .unwrap_or_default();
+        self.state.last_work_plan_manifest.clear();
+        self.state.last_work_packet_count = 0;
         self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
         if status == RuntimeStatus::Proven {
             self.state.proof_count += 1;
@@ -422,11 +467,41 @@ impl MathAtomsRuntime {
         output_hash: &str,
         output_len: usize,
     ) {
-        self.state.status = RuntimeStatus::Proven;
-        self.state.proof_count += 1;
+        self.mark_provider_execution_report(
+            output_artifact,
+            output_hash,
+            output_len,
+            &ProviderExecutionOutput {
+                text: String::new(),
+                work_plan_id: String::new(),
+                work_plan_manifest: String::new(),
+                packet_ids: Vec::new(),
+                executed_packets: 1,
+                resumed_packets: 0,
+            },
+        );
+    }
+
+    pub fn mark_provider_execution_report(
+        &mut self,
+        output_artifact: &str,
+        output_hash: &str,
+        output_len: usize,
+        report: &ProviderExecutionOutput,
+    ) -> bool {
+        if let Err(reason) =
+            self.verify_provider_execution_report(output_artifact, output_hash, output_len, report)
+        {
+            self.mark_provider_blocked(&format!("provider report verification failed: {reason}"));
+            return false;
+        }
+        self.state.status = RuntimeStatus::VerificationPending;
         self.state.last_provider_output_artifact = output_artifact.to_string();
         self.state.last_provider_output_hash = output_hash.to_string();
         self.state.last_provider_output_len = output_len;
+        self.state.last_work_plan_id = report.work_plan_id.clone();
+        self.state.last_work_plan_manifest = report.work_plan_manifest.clone();
+        self.state.last_work_packet_count = report.packet_ids.len();
         let evidence_ids = self.provider_evidence_ids();
         let model = self
             .state
@@ -458,8 +533,40 @@ impl MathAtomsRuntime {
             &body,
             &evidence_ids,
         );
+        let mut packet_parent = l2;
+        for (index, packet_id) in report.packet_ids.iter().enumerate() {
+            packet_parent = self.bus.l2_flow(
+                packet_parent,
+                BusMessageKind::WorkPacketExecuted,
+                "provider-worker",
+                "work-proof",
+                &format!(
+                    "packet {}/{} completed: {packet_id}",
+                    index + 1,
+                    report.packet_ids.len()
+                ),
+                &evidence_ids,
+            );
+        }
+        let completion_parent = if report.packet_ids.is_empty() {
+            packet_parent
+        } else {
+            self.bus.l3_orchestrate(
+                packet_parent,
+                BusMessageKind::WorkPlanCompleted,
+                "work-proof",
+                "proof-loop",
+                &format!(
+                    "{} packets complete; {} executed, {} resumed",
+                    report.packet_ids.len(),
+                    report.executed_packets,
+                    report.resumed_packets
+                ),
+                &evidence_ids,
+            )
+        };
         let l3 = self.bus.l3_orchestrate(
-            l2,
+            completion_parent,
             BusMessageKind::ProviderExecuted,
             "proof-loop",
             "artifact-state",
@@ -468,19 +575,76 @@ impl MathAtomsRuntime {
         );
         let proof = self.bus.l3_orchestrate(
             l3,
-            BusMessageKind::ProofCaptured,
+            BusMessageKind::ProofPending,
             "proof-loop",
             "artifact-state",
-            "provider execution returned model output; proof captured",
+            "provider work evidence verified; executable product harness is still required",
             &evidence_ids,
         );
         self.state.last_route = self.bus.route_for(proof).iter().map(|env| env.id).collect();
+        true
+    }
+
+    fn verify_provider_execution_report(
+        &self,
+        output_artifact: &str,
+        output_hash: &str,
+        output_len: usize,
+        report: &ProviderExecutionOutput,
+    ) -> Result<(), String> {
+        if self.state.status != RuntimeStatus::ProviderPending {
+            return Err("runtime is not provider pending".to_string());
+        }
+        let call = self
+            .state
+            .last_provider_call
+            .as_ref()
+            .ok_or_else(|| "prepared provider call is missing".to_string())?;
+        let prepared_plan = call
+            .work_plan
+            .as_ref()
+            .ok_or_else(|| "prepared meticulous work plan is missing".to_string())?;
+        if report.work_plan_id != prepared_plan.id || report.work_plan_manifest.trim().is_empty() {
+            return Err("reported work plan does not match the prepared plan".to_string());
+        }
+        let verified = verify_work_plan_evidence(
+            &report.work_plan_manifest,
+            &report.work_plan_id,
+            report.packet_ids.len(),
+        )
+        .map_err(|error| error.to_string())?;
+        let total = report
+            .executed_packets
+            .checked_add(report.resumed_packets)
+            .ok_or_else(|| "packet accounting overflowed".to_string())?;
+        let unique = report.packet_ids.iter().collect::<HashSet<_>>();
+        if total != report.packet_ids.len()
+            || unique.len() != report.packet_ids.len()
+            || report.packet_ids != verified.packet_ids
+            || verified.model != call.model
+        {
+            return Err("packet IDs, accounting, or model do not match evidence".to_string());
+        }
+        if output_artifact.trim().is_empty()
+            || output_len == 0
+            || report.text.len() != output_len
+            || provider_output_hash(&report.text) != output_hash
+        {
+            return Err("provider output claim is empty or inconsistent".to_string());
+        }
+        let metadata = fs::metadata(output_artifact).map_err(|error| error.to_string())?;
+        let actual_hash = sha256_file(output_artifact).map_err(|error| error.to_string())?;
+        if metadata.len() != output_len as u64 || actual_hash != output_hash {
+            return Err("provider output artifact does not recompute".to_string());
+        }
+        Ok(())
     }
 
     pub fn mark_provider_blocked(&mut self, reason: &str) {
+        let reason = redact_sensitive_text(reason);
         self.state.status = RuntimeStatus::Blocked;
-        if !self.state.blockers.iter().any(|item| item == reason) {
-            self.state.blockers.push(reason.to_string());
+        if !self.state.blockers.iter().any(|item| item == &reason) {
+            self.state.blockers.push(reason.clone());
         }
         let evidence_ids = self.provider_evidence_ids();
         let parent = self.state.last_route.last().copied();
@@ -489,21 +653,21 @@ impl MathAtomsRuntime {
             BusMessageKind::ProviderBlocked,
             "model-worker",
             "provider-adapter",
-            reason,
+            &reason,
         );
         let l1 = self.bus.l1_message(
             l0,
             BusMessageKind::ProviderBlocked,
             "provider-adapter",
             "proof-loop",
-            reason,
+            &reason,
         );
         let l2 = self.bus.l2_flow(
             l1,
             BusMessageKind::ProviderBlocked,
             "provider-adapter",
             "proof-loop",
-            reason,
+            &reason,
             &evidence_ids,
         );
         let l3 = self.bus.l3_orchestrate(
@@ -511,16 +675,17 @@ impl MathAtomsRuntime {
             BusMessageKind::ProviderBlocked,
             "proof-loop",
             "artifact-state",
-            reason,
+            &reason,
             &evidence_ids,
         );
         self.state.last_route = self.bus.route_for(l3).iter().map(|env| env.id).collect();
     }
 
     pub fn mark_store_blocked(&mut self, reason: &str) {
+        let reason = redact_sensitive_text(reason);
         self.state.status = RuntimeStatus::Blocked;
-        if !self.state.blockers.iter().any(|item| item == reason) {
-            self.state.blockers.push(reason.to_string());
+        if !self.state.blockers.iter().any(|item| item == &reason) {
+            self.state.blockers.push(reason.clone());
         }
         let evidence_ids: Vec<String> = self
             .state
@@ -533,7 +698,7 @@ impl MathAtomsRuntime {
             BusMessageKind::StoreBlocked,
             "proof-store",
             "proof-loop",
-            reason,
+            &reason,
             &evidence_ids,
         );
     }
@@ -897,6 +1062,73 @@ mod tests {
     use super::*;
     use math_atoms_bus::BusLayer;
 
+    fn verified_report(
+        runtime: &MathAtomsRuntime,
+        label: &str,
+        text: &str,
+    ) -> (
+        ProviderExecutionOutput,
+        crate::provider::PersistedProviderOutput,
+        std::path::PathBuf,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "math-atoms-runtime-work-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = math_atoms_work::WorkPlanStore::new(&root);
+        let call = runtime.state().last_provider_call.as_ref().unwrap();
+        let mut plan = call.work_plan.clone().unwrap();
+        plan.expand_files(vec![math_atoms_work::WorkFile {
+            path: "response.txt".to_string(),
+            purpose: "provider response".to_string(),
+            acceptance: vec!["response verified".to_string()],
+        }])
+        .unwrap();
+        let lease = store.acquire(&plan.id).unwrap();
+        let manifest = store.write_plan_manifest(&plan).unwrap();
+        for packet in &plan.packets {
+            let output = match packet.contract {
+                math_atoms_work::PacketContract::Envelope => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"result\":\"complete\",\"checks\":[\"verified\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileManifest => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"response.txt\",\"purpose\":\"provider response\",\"acceptance\":[\"response verified\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileArtifact => {
+                    "```text\nprovider proof\n```".to_string()
+                }
+            };
+            store
+                .store_packet(&plan, packet, &output, &call.model)
+                .unwrap();
+        }
+        drop(lease);
+        let evidence =
+            crate::provider::persist_provider_output(text, root.join("provider")).unwrap();
+        (
+            ProviderExecutionOutput {
+                text: text.to_string(),
+                work_plan_id: plan.id,
+                work_plan_manifest: manifest.to_string_lossy().to_string(),
+                packet_ids: plan
+                    .packets
+                    .iter()
+                    .map(|packet| packet.id.clone())
+                    .collect(),
+                executed_packets: plan.packets.len(),
+                resumed_packets: 0,
+            },
+            evidence,
+            root,
+        )
+    }
+
     #[test]
     fn run_intent_routes_through_all_spiderweb_layers() {
         let mut runtime =
@@ -1072,6 +1304,9 @@ mod tests {
             provider_output_artifact: String::new(),
             provider_output_hash: "fnv:0011223344556677".to_string(),
             provider_output_len: 24,
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 4,
         });
         let run = runtime.run_intent("Use stored proof for wiki graph rag");
@@ -1110,7 +1345,44 @@ mod tests {
     }
 
     #[test]
-    fn provider_execution_success_is_bus_evidence() {
+    fn malformed_provider_report_blocks_without_completion_evidence() {
+        let mut runtime =
+            MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        runtime.run_intent("Run provider api with wiki graph rag");
+        let report = ProviderExecutionOutput {
+            text: "provider output".to_string(),
+            work_plan_id: "work-provider-runtime-test".to_string(),
+            work_plan_manifest: "C:/audit/plan-expanded.json".to_string(),
+            packet_ids: (1..=13).map(|index| format!("packet-{index}")).collect(),
+            executed_packets: 13,
+            resumed_packets: 0,
+        };
+        assert!(!runtime.mark_provider_execution_report(
+            "C:/audit/output.txt",
+            "sha256:abc",
+            17,
+            &report
+        ));
+        assert_eq!(runtime.state().status, RuntimeStatus::Blocked);
+        assert!(runtime
+            .state()
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("report verification failed")));
+        assert!(!runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::WorkPlanCompleted));
+        assert!(!runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProofCaptured));
+    }
+
+    #[test]
+    fn verified_provider_report_is_pending_real_harness_evidence() {
         let mut runtime =
             MathAtomsRuntime::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
         runtime.run_intent("Run provider api with wiki graph rag");
@@ -1119,14 +1391,27 @@ mod tests {
         assert!(!task.route.is_empty());
         assert!(task.route.starts_with(&pending_route));
         assert_eq!(task.call.model, "gpt-5.5");
-        runtime.mark_provider_executed("C:/audit/output.txt", "sha256:abc", 17);
-        assert_eq!(runtime.state().status, RuntimeStatus::Proven);
+        let (report, evidence, root) = verified_report(&runtime, "valid-report", "provider output");
+        assert!(runtime.mark_provider_execution_report(
+            &evidence.path.to_string_lossy(),
+            &evidence.hash,
+            evidence.len,
+            &report
+        ));
+        assert_eq!(runtime.state().status, RuntimeStatus::VerificationPending);
+        assert_eq!(runtime.state().proof_count, 0);
         assert_eq!(
             runtime.state().last_provider_output_artifact,
-            "C:/audit/output.txt"
+            evidence.path.to_string_lossy()
         );
-        assert_eq!(runtime.state().last_provider_output_hash, "sha256:abc");
-        assert_eq!(runtime.state().last_provider_output_len, 17);
+        assert_eq!(runtime.state().last_provider_output_hash, evidence.hash);
+        assert_eq!(runtime.state().last_provider_output_len, 15);
+        assert_eq!(runtime.state().last_work_plan_id, report.work_plan_id);
+        assert_eq!(
+            runtime.state().last_work_plan_manifest,
+            report.work_plan_manifest
+        );
+        assert_eq!(runtime.state().last_work_packet_count, 13);
         assert!(runtime
             .bus()
             .envelopes()
@@ -1137,14 +1422,34 @@ mod tests {
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProviderExecuted));
+        assert_eq!(
+            runtime
+                .bus()
+                .envelopes()
+                .iter()
+                .filter(|env| env.kind == BusMessageKind::WorkPacketExecuted)
+                .count(),
+            13
+        );
         assert!(runtime
+            .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::WorkPlanCompleted));
+        assert!(!runtime
             .bus()
             .envelopes()
             .iter()
             .any(|env| env.kind == BusMessageKind::ProofCaptured));
         assert!(runtime
             .bus()
+            .envelopes()
+            .iter()
+            .any(|env| env.kind == BusMessageKind::ProofPending));
+        assert!(runtime
+            .bus()
             .route_contains_all_layers(*runtime.state().last_route.last().unwrap()));
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

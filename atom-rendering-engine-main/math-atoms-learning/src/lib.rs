@@ -6,6 +6,8 @@
 
 use math_atoms_hash::{sha256_file, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
+use math_atoms_secrets::redact_sensitive_text;
+use math_atoms_work::verify_work_plan_evidence;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -14,8 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const LEARNING_SCHEMA_VERSION: u32 = 2;
+pub const LEARNING_SCHEMA_VERSION: u32 = 3;
 const LEGACY_LEARNING_SCHEMA_VERSION: u32 = 1;
+const LEGACY_SHA_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_GRAPH_MEMORY_LIMIT: usize = 256;
 const MAX_SHORT_FIELD: usize = 512;
 const MAX_LONG_FIELD: usize = 4_096;
@@ -64,6 +67,9 @@ pub struct LearningRecord {
     pub artifact_path: String,
     pub artifact_hash: String,
     pub provider_model: String,
+    pub work_plan_id: String,
+    pub work_plan_manifest: String,
+    pub work_packet_count: usize,
     pub route_len: usize,
 }
 
@@ -81,6 +87,9 @@ pub struct LearningRecordInput {
     pub artifact_path: String,
     pub artifact_hash: String,
     pub provider_model: String,
+    pub work_plan_id: String,
+    pub work_plan_manifest: String,
+    pub work_packet_count: usize,
     pub route_len: usize,
 }
 
@@ -150,14 +159,38 @@ impl LearningRecord {
             artifact_path: sanitize_text(&input.artifact_path, MAX_LONG_FIELD),
             artifact_hash: sanitize_text(&input.artifact_hash, MAX_SHORT_FIELD),
             provider_model: sanitize_text(&input.provider_model, MAX_SHORT_FIELD),
+            work_plan_id: sanitize_text(&input.work_plan_id, MAX_SHORT_FIELD),
+            work_plan_manifest: sanitize_text(&input.work_plan_manifest, MAX_LONG_FIELD),
+            work_packet_count: input.work_packet_count,
             route_len: input.route_len,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_structure()?;
+        if self.outcome == LearningOutcome::Succeeded
+            && self.schema_version == LEARNING_SCHEMA_VERSION
+            && self.requires_work_evidence()
+        {
+            let verified = verify_work_plan_evidence(
+                &self.work_plan_manifest,
+                &self.work_plan_id,
+                self.work_packet_count,
+            )
+            .map_err(|error| format!("work plan evidence failed: {error}"))?;
+            if !self.provider_model.trim().is_empty() && verified.model != self.provider_model {
+                return Err(
+                    "learning provider model does not match work packet evidence".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_structure(&self) -> Result<(), String> {
         if !matches!(
             self.schema_version,
-            LEGACY_LEARNING_SCHEMA_VERSION | LEARNING_SCHEMA_VERSION
+            LEGACY_LEARNING_SCHEMA_VERSION | LEGACY_SHA_SCHEMA_VERSION | LEARNING_SCHEMA_VERSION
         ) {
             return Err(format!(
                 "unsupported learning schema version {}",
@@ -203,6 +236,17 @@ impl LearningRecord {
                             .to_string(),
                     );
                 }
+                if self.schema_version == LEARNING_SCHEMA_VERSION
+                    && self.requires_work_evidence()
+                    && (self.work_plan_id.trim().is_empty()
+                        || self.work_plan_manifest.trim().is_empty()
+                        || self.work_packet_count < 13)
+                {
+                    return Err(
+                        "successful provider learning requires a verified meticulous work plan"
+                            .to_string(),
+                    );
+                }
             }
         }
         if !self.artifact_hash.is_empty() {
@@ -233,6 +277,16 @@ impl LearningRecord {
             && sha256_file(&self.artifact_path)
                 .map(|actual| actual == self.artifact_hash)
                 .unwrap_or(false)
+            && (!self.requires_work_evidence()
+                || verify_work_plan_evidence(
+                    &self.work_plan_manifest,
+                    &self.work_plan_id,
+                    self.work_packet_count,
+                )
+                .map(|plan| {
+                    self.provider_model.trim().is_empty() || plan.model == self.provider_model
+                })
+                .unwrap_or(false))
     }
 
     pub fn node_id(&self) -> String {
@@ -312,9 +366,15 @@ impl LearningRecord {
         )
     }
 
+    fn requires_work_evidence(&self) -> bool {
+        !self.provider_model.trim().is_empty()
+            || self.source.starts_with("provider-")
+            || self.source.starts_with("deepseek-")
+    }
+
     pub fn to_json(&self) -> String {
-        format!(
-            "{{\"schema_version\":{},\"id\":\"{}\",\"timestamp_ms\":{},\"source\":\"{}\",\"intent\":\"{}\",\"recipe_id\":\"{}\",\"atom_stack\":[{}],\"gate\":\"{}\",\"attempt\":{},\"outcome\":\"{}\",\"failure\":\"{}\",\"correction\":\"{}\",\"artifact_path\":\"{}\",\"artifact_hash\":\"{}\",\"provider_model\":\"{}\",\"route_len\":{}}}",
+        let prefix = format!(
+            "{{\"schema_version\":{},\"id\":\"{}\",\"timestamp_ms\":{},\"source\":\"{}\",\"intent\":\"{}\",\"recipe_id\":\"{}\",\"atom_stack\":[{}],\"gate\":\"{}\",\"attempt\":{},\"outcome\":\"{}\",\"failure\":\"{}\",\"correction\":\"{}\",\"artifact_path\":\"{}\",\"artifact_hash\":\"{}\",\"provider_model\":\"{}\"",
             self.schema_version,
             escape(&self.id),
             self.timestamp_ms,
@@ -329,13 +389,22 @@ impl LearningRecord {
             escape(&self.correction),
             escape(&self.artifact_path),
             escape(&self.artifact_hash),
-            escape(&self.provider_model),
+            escape(&self.provider_model)
+        );
+        if self.schema_version < LEARNING_SCHEMA_VERSION {
+            return format!("{prefix},\"route_len\":{}}}", self.route_len);
+        }
+        format!(
+            "{prefix},\"work_plan_id\":\"{}\",\"work_plan_manifest\":\"{}\",\"work_packet_count\":{},\"route_len\":{}}}",
+            escape(&self.work_plan_id),
+            escape(&self.work_plan_manifest),
+            self.work_packet_count,
             self.route_len
         )
     }
 
     pub fn from_json(line: &str) -> Option<Self> {
-        const FIELDS: [&str; 16] = [
+        const BASE_FIELDS: [&str; 16] = [
             "schema_version",
             "id",
             "timestamp_ms",
@@ -353,17 +422,22 @@ impl LearningRecord {
             "provider_model",
             "route_len",
         ];
+        const WORK_FIELDS: [&str; 3] = ["work_plan_id", "work_plan_manifest", "work_packet_count"];
         let root = parse_json(line).ok()?;
         let object = root.as_object()?;
-        if object.len() != FIELDS.len()
-            || object
-                .iter()
-                .any(|(name, _)| !FIELDS.contains(&name.as_str()))
+        let schema_version = json_u32(&root, "schema_version")?;
+        let uses_work_schema = schema_version == LEARNING_SCHEMA_VERSION;
+        let expected_len = BASE_FIELDS.len() + usize::from(uses_work_schema) * WORK_FIELDS.len();
+        if object.len() != expected_len
+            || object.iter().any(|(name, _)| {
+                !BASE_FIELDS.contains(&name.as_str())
+                    && (!uses_work_schema || !WORK_FIELDS.contains(&name.as_str()))
+            })
         {
             return None;
         }
         let record = Self {
-            schema_version: json_u32(&root, "schema_version")?,
+            schema_version,
             id: json_string(&root, "id")?,
             timestamp_ms: json_u64(&root, "timestamp_ms")?,
             source: json_string(&root, "source")?,
@@ -378,9 +452,12 @@ impl LearningRecord {
             artifact_path: json_string(&root, "artifact_path")?,
             artifact_hash: json_string(&root, "artifact_hash")?,
             provider_model: json_string(&root, "provider_model")?,
+            work_plan_id: json_string(&root, "work_plan_id").unwrap_or_default(),
+            work_plan_manifest: json_string(&root, "work_plan_manifest").unwrap_or_default(),
+            work_packet_count: json_usize(&root, "work_packet_count").unwrap_or(0),
             route_len: json_usize(&root, "route_len")?,
         };
-        record.validate().ok()?;
+        record.validate_structure().ok()?;
         Some(record)
     }
 }
@@ -674,155 +751,7 @@ fn sanitize_text(value: &str, limit: usize) -> String {
         })
         .take(limit)
         .collect();
-    redact_token_like_secrets(&cleaned)
-}
-
-fn redact_token_like_secrets(value: &str) -> String {
-    let mut output = Vec::new();
-    let mut redact_next = false;
-    for part in value.split_whitespace() {
-        let normalized = normalize_secret_label(part);
-        if redact_next {
-            if normalized == "bearer" {
-                output.push(part.to_string());
-                continue;
-            }
-            output.push("[REDACTED]".to_string());
-            redact_next = false;
-            continue;
-        }
-        if let Some((redacted, needs_next)) = redact_assignment(part) {
-            output.push(redacted);
-            redact_next = needs_next;
-        } else if let Some(redacted) = redact_token_families(part) {
-            output.push(redacted);
-        } else {
-            output.push(part.to_string());
-            redact_next = normalized == "bearer";
-        }
-    }
-    output.join(" ")
-}
-
-fn redact_assignment(part: &str) -> Option<(String, bool)> {
-    let separator = part.find([':', '='])?;
-    let label = normalize_secret_label(&part[..separator]);
-    if !sensitive_label(&label) {
-        return None;
-    }
-    let prefix = &part[..=separator];
-    let value = &part[separator + 1..];
-    let trimmed = value.trim_matches(|ch: char| {
-        matches!(
-            ch,
-            '"' | '\'' | '`' | '{' | '}' | '[' | ']' | '(' | ')' | ',' | ';'
-        )
-    });
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("bearer") {
-        return Some((part.to_string(), true));
-    }
-    let leading_len = value
-        .char_indices()
-        .take_while(|(_, ch)| matches!(ch, '"' | '\'' | '`' | '[' | '(' | '{'))
-        .last()
-        .map(|(index, ch)| index + ch.len_utf8())
-        .unwrap_or(0);
-    let trailing_start = value
-        .char_indices()
-        .rev()
-        .take_while(|(_, ch)| matches!(ch, '"' | '\'' | '`' | ']' | ')' | '}' | ',' | ';'))
-        .last()
-        .map(|(index, _)| index)
-        .unwrap_or(value.len());
-    Some((
-        format!(
-            "{prefix}{}[REDACTED]{}",
-            &value[..leading_len.min(value.len())],
-            &value[trailing_start.max(leading_len)..]
-        ),
-        false,
-    ))
-}
-
-fn normalize_secret_label(value: &str) -> String {
-    value
-        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && !matches!(ch, '_' | '-'))
-        .to_ascii_lowercase()
-}
-
-fn sensitive_label(label: &str) -> bool {
-    matches!(
-        label,
-        "api_key"
-            | "apikey"
-            | "api-key"
-            | "x-api-key"
-            | "key"
-            | "token"
-            | "access_token"
-            | "access-token"
-            | "password"
-            | "passwd"
-            | "secret"
-            | "client_secret"
-            | "client-secret"
-            | "authorization"
-            | "auth"
-    )
-}
-
-fn redact_token_families(value: &str) -> Option<String> {
-    let lower = value.to_ascii_lowercase();
-    let prefixes = [
-        "sk-",
-        "ghp_",
-        "github_pat_",
-        "xoxb-",
-        "xoxp-",
-        "hf_",
-        "akia",
-        "aiza",
-    ];
-    let mut spans = Vec::new();
-    for start in lower.char_indices().map(|(index, _)| index) {
-        let boundary = start == 0
-            || !lower.as_bytes()[start - 1].is_ascii_alphanumeric()
-                && lower.as_bytes()[start - 1] != b'_';
-        if !boundary {
-            continue;
-        }
-        let Some(prefix) = prefixes
-            .iter()
-            .find(|prefix| lower[start..].starts_with(**prefix))
-        else {
-            continue;
-        };
-        let mut end = start + prefix.len();
-        while end < lower.len()
-            && matches!(lower.as_bytes()[end], b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.')
-        {
-            end += 1;
-        }
-        if end - start > 12 {
-            spans.push((start, end));
-        }
-    }
-    if spans.is_empty() {
-        return None;
-    }
-    spans.sort_unstable();
-    let mut output = String::new();
-    let mut cursor = 0;
-    for (start, end) in spans {
-        if start < cursor {
-            continue;
-        }
-        output.push_str(&value[cursor..start]);
-        output.push_str("[REDACTED]");
-        cursor = end;
-    }
-    output.push_str(&value[cursor..]);
-    Some(output)
+    redact_sensitive_text(&cleaned)
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -956,7 +885,10 @@ mod tests {
             } else {
                 String::new()
             },
-            provider_model: "deepseek-chat".to_string(),
+            provider_model: String::new(),
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
             route_len: 4,
         })
     }
@@ -1031,6 +963,9 @@ mod tests {
                 artifact_path: String::new(),
                 artifact_hash: String::new(),
                 provider_model: String::new(),
+                work_plan_id: String::new(),
+                work_plan_manifest: String::new(),
+                work_packet_count: 0,
                 route_len: 4,
             }
         });
@@ -1062,6 +997,9 @@ mod tests {
             artifact_path: input.artifact_path,
             artifact_hash: String::new(),
             provider_model: input.provider_model,
+            work_plan_id: input.work_plan_id,
+            work_plan_manifest: input.work_plan_manifest,
+            work_packet_count: input.work_packet_count,
             route_len: input.route_len,
         });
         assert!(!sanitized.failure.contains("sk-123"));
@@ -1094,6 +1032,9 @@ mod tests {
             artifact_path: format!("C:/private/{secret}/artifact"),
             artifact_hash: String::new(),
             provider_model: format!("model auth={secret}"),
+            work_plan_id: format!("work-plan token={secret}"),
+            work_plan_manifest: format!("C:/private/{secret}/plan-expanded.json"),
+            work_packet_count: 13,
             route_len: 4,
         });
         let serialized = record.to_json();
@@ -1137,6 +1078,80 @@ mod tests {
         fs::write(&path, b"tampered artifact").unwrap();
         assert!(!item.is_promotable_success());
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn provider_success_requires_recomputable_work_packet_evidence() {
+        let artifact = temp_path("provider-work-artifact");
+        fs::write(&artifact, b"verified provider artifact").unwrap();
+        let work_root = std::env::temp_dir().join(format!(
+            "math-atoms-learning-work-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let store = math_atoms_work::WorkPlanStore::new(&work_root);
+        let mut plan = math_atoms_work::WorkPlan::meticulous(
+            "Build provider app",
+            "provider-model-loop",
+            &["measure".to_string(), "flow".to_string()],
+            "learning-provider-work",
+        )
+        .unwrap();
+        plan.expand_files(vec![math_atoms_work::WorkFile {
+            path: "main.rs".to_string(),
+            purpose: "provider app".to_string(),
+            acceptance: vec!["runs".to_string()],
+        }])
+        .unwrap();
+        let lease = store.acquire(&plan.id).unwrap();
+        let manifest = store.write_plan_manifest(&plan).unwrap();
+        for packet in &plan.packets {
+            let output = match packet.contract {
+                math_atoms_work::PacketContract::Envelope => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"result\":\"complete\",\"checks\":[\"verified\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileManifest => format!(
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"main.rs\",\"purpose\":\"provider app\",\"acceptance\":[\"runs\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    packet.id
+                ),
+                math_atoms_work::PacketContract::FileArtifact => {
+                    "```rust\nfn main() {}\n```".to_string()
+                }
+            };
+            store
+                .store_packet(&plan, packet, &output, "deepseek-v4-pro")
+                .unwrap();
+        }
+        drop(lease);
+
+        let mut item = record(LearningOutcome::Succeeded, 1);
+        item.source = "provider-test".to_string();
+        item.provider_model = "deepseek-v4-pro".to_string();
+        item.artifact_path = artifact.to_string_lossy().to_string();
+        item.artifact_hash = artifact_hash(&artifact).unwrap();
+        assert!(item.validate().is_err());
+        item.work_plan_id = plan.id;
+        item.work_plan_manifest = manifest.to_string_lossy().to_string();
+        item.work_packet_count = plan.packets.len();
+        assert_eq!(item.validate(), Ok(()));
+        assert!(item.is_promotable_success());
+
+        let packet_output = fs::read_dir(work_root.join(&item.work_plan_id).join("outputs"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        fs::write(packet_output, b"tampered").unwrap();
+        assert!(!item.is_promotable_success());
+        let serialized = item.to_json();
+        fs::remove_dir_all(&work_root).unwrap();
+        let historical = LearningRecord::from_json(&serialized).unwrap();
+        assert_eq!(historical, item);
+        assert!(historical.validate().is_err());
+        assert!(!historical.is_promotable_success());
+        fs::remove_file(artifact).ok();
     }
 
     #[test]

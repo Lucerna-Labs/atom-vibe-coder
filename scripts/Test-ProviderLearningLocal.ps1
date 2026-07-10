@@ -12,6 +12,7 @@ $SavedEnvironment = @{}
 $EnvironmentNames = @(
     "MATH_ATOMS_STORE_DIR",
     "MATH_ATOMS_LEARNING_STORE",
+    "MATH_ATOMS_WORK_DIR",
     "MATH_ATOMS_PROVIDER_KIND",
     "MATH_ATOMS_PROVIDER_FORMAT",
     "MATH_ATOMS_PROVIDER_MODEL",
@@ -76,6 +77,7 @@ try {
     }
     $env:MATH_ATOMS_STORE_DIR = $TestDir
     $env:MATH_ATOMS_LEARNING_STORE = $LearningStore
+    $env:MATH_ATOMS_WORK_DIR = Join-Path $TestDir "work-packets"
     $env:MATH_ATOMS_PROVIDER_KIND = "custom"
     $env:MATH_ATOMS_PROVIDER_FORMAT = "chat"
     $env:MATH_ATOMS_PROVIDER_MODEL = "local-functional-provider"
@@ -93,7 +95,7 @@ try {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         try {
-            for ($requestIndex = 0; $requestIndex -lt 4; $requestIndex++) {
+            for ($requestIndex = 0; $requestIndex -lt 52; $requestIndex++) {
                 $client = $listener.AcceptTcpClient()
                 try {
                     $stream = $client.GetStream()
@@ -112,17 +114,62 @@ try {
                         $read += $count
                     }
                     $requestBody = [string]::new($buffer, 0, $read)
-                    if ($requestBody -match 'Bluetooth Low Energy HCI') {
-                        $content = '```rust' + "`n" + $bluetooth + "`n" + '```'
+                    $request = $requestBody | ConvertFrom-Json
+                    $prompt = [string]$request.messages[-1].content
+                    if ($prompt -notmatch '(?m)^Packet id: (?<packet>[^\r\n]+)$') {
+                        throw "work packet prompt is missing Packet id: $prompt"
                     }
-                    elseif ($requestBody -match 'product spec' -or $requestBody -match 'pmre-task-board') {
-                        $content = '```json' + "`n" + $TaskBoardSpec + "`n" + '```'
+                    $packetId = $Matches.packet.Trim()
+                    if ($prompt -notmatch '(?m)^Stage: (?<stage>[^\r\n]+)$') {
+                        throw "work packet prompt is missing Stage: $prompt"
                     }
-                    elseif ($requestBody -match 'CounterApp') {
-                        $content = '```rust' + "`n" + $CounterSource + "`n" + '```'
+                    $stage = $Matches.stage.Trim()
+                    $isBluetooth = $prompt -match 'Bluetooth Low Energy HCI'
+                    $isTaskBoard = $prompt -match 'product spec' -or $prompt -match 'pmre-task-board'
+                    $isCounter = $prompt -match 'CounterApp'
+                    if ($stage -eq 'file-manifest') {
+                        $file = if ($isBluetooth) {
+                            @{ path = "bluetooth_driver.rs"; purpose = "complete Bluetooth HCI driver core"; acceptance = @("compiles and passes the driver behavior gate") }
+                        }
+                        elseif ($isTaskBoard) {
+                            @{ path = "app-spec.json"; purpose = "validated task board product specification"; acceptance = @("matches the task board schema") }
+                        }
+                        elseif ($isCounter) {
+                            @{ path = "main.rs"; purpose = "complete counter console application"; acceptance = @("compiles and prints the exact proof line") }
+                        }
+                        else {
+                            @{ path = "response.txt"; purpose = "provider proof response"; acceptance = @("contains non-empty provider evidence") }
+                        }
+                        $content = @{
+                            packet_id = $packetId
+                            status = "complete"
+                            files = @($file)
+                            checks = @("manifest covers the fixture requirement")
+                            risks = @()
+                        } | ConvertTo-Json -Depth 8 -Compress
+                    }
+                    elseif ($stage -in @('file-implementation', 'file-correction')) {
+                        if ($isBluetooth) {
+                            $content = '```rust' + "`n" + $bluetooth + "`n" + '```'
+                        }
+                        elseif ($isTaskBoard) {
+                            $content = '```json' + "`n" + $TaskBoardSpec + "`n" + '```'
+                        }
+                        elseif ($isCounter) {
+                            $content = '```rust' + "`n" + $CounterSource + "`n" + '```'
+                        }
+                        else {
+                            $content = '```text' + "`nlocal provider proof`n" + '```'
+                        }
                     }
                     else {
-                        $content = "local provider proof"
+                        $content = @{
+                            packet_id = $packetId
+                            status = "complete"
+                            result = "fixture completed $stage with explicit evidence"
+                            checks = @("deterministic fixture gate passed")
+                            risks = @()
+                        } | ConvertTo-Json -Depth 6 -Compress
                     }
                     $response = @{ choices = @(@{ message = @{ content = $content } }) } | ConvertTo-Json -Depth 6 -Compress
                     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($response)
@@ -154,7 +201,7 @@ try {
 
     $job = Wait-Job -Job $ServerJob -Timeout 10
     if ($null -eq $job -or $ServerJob.State -ne "Completed") {
-        throw "local provider server did not complete four requests; state=$($ServerJob.State)"
+        throw "local provider server did not complete 52 meticulous packet requests; state=$($ServerJob.State)"
     }
     $records = @([System.IO.File]::ReadAllLines($LearningStore))
     if ($records.Count -ne 4) {
