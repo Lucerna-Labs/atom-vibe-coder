@@ -1,7 +1,8 @@
 use crate::model::{
-    bundle_hash, validate_files, validate_plan_id, CandidateFile, CommandEvidence, FileEvidence,
-    RepairEvidence, VerificationAttempt, VerificationError, VerificationSuccess, VerifiedCandidate,
-    VERIFICATION_SCHEMA_VERSION,
+    bundle_hash, candidate_profile, controller_json_harness, controller_manifest,
+    json_validation_failure, validate_files, validate_plan_id, CandidateFile, CandidateProfile,
+    CommandEvidence, FileEvidence, RepairEvidence, VerificationAttempt, VerificationError,
+    VerificationSuccess, VerifiedCandidate, VERIFICATION_SCHEMA_VERSION,
 };
 use math_atoms_hash::{sha256_file, sha256_tagged, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
@@ -558,16 +559,14 @@ fn verify_attempt(attempt: &VerificationAttempt) -> Result<(), VerificationError
         ));
     }
     let mut candidate_files = Vec::new();
-    let mut controller_files = 0_u32;
+    let mut controller_files = Vec::new();
     for file in &attempt.files {
         verify_file(&candidate_dir, file)?;
         if file.controller_owned {
-            controller_files += 1;
-            if file.path != "Cargo.toml" {
-                return Err(VerificationError::Evidence(
-                    "unexpected controller-owned candidate file".to_string(),
-                ));
-            }
+            controller_files.push(CandidateFile::new(
+                &file.path,
+                fs::read_to_string(candidate_dir.join(&file.path))?,
+            )?);
         } else {
             candidate_files.push(CandidateFile::new(
                 &file.path,
@@ -575,9 +574,18 @@ fn verify_attempt(attempt: &VerificationAttempt) -> Result<(), VerificationError
             )?);
         }
     }
-    if controller_files > 1 || bundle_hash(&candidate_files)? != attempt.bundle_hash {
+    let profile = candidate_profile(&candidate_files)?;
+    let expected_controller_files = expected_controller_files(profile, &candidate_files)?;
+    if controller_files != expected_controller_files
+        || bundle_hash(&candidate_files)? != attempt.bundle_hash
+    {
         return Err(VerificationError::Evidence(
             "candidate bundle does not recompute from attempt files".to_string(),
+        ));
+    }
+    if attempt.passed && json_validation_failure(&candidate_files)?.is_some() {
+        return Err(VerificationError::Evidence(
+            "passing JSON candidate does not parse".to_string(),
         ));
     }
     let expected = ["cargo-check", "cargo-test", "cargo-clippy"];
@@ -616,6 +624,52 @@ fn verify_attempt(attempt: &VerificationAttempt) -> Result<(), VerificationError
         ));
     }
     Ok(())
+}
+
+fn expected_controller_files(
+    profile: CandidateProfile,
+    files: &[CandidateFile],
+) -> Result<Vec<CandidateFile>, VerificationError> {
+    if files.iter().any(|file| {
+        file.path
+            .replace('\\', "/")
+            .eq_ignore_ascii_case("Cargo.toml")
+    }) {
+        return Ok(Vec::new());
+    }
+    if profile == CandidateProfile::Json {
+        return Ok(vec![
+            CandidateFile::new("Cargo.toml", controller_manifest(""))?,
+            CandidateFile::new("src/lib.rs", controller_json_harness(files)?)?,
+        ]);
+    }
+    let rust_files = files
+        .iter()
+        .filter(|file| file.path.to_ascii_lowercase().ends_with(".rs"))
+        .collect::<Vec<_>>();
+    let has_standard_target = files.iter().any(|file| {
+        matches!(
+            file.path.replace('\\', "/").as_str(),
+            "src/main.rs" | "src/lib.rs"
+        )
+    });
+    let extra = if has_standard_target {
+        String::new()
+    } else if rust_files.len() == 1 {
+        format!(
+            "\n[[bin]]\nname = \"candidate\"\npath = \"{}\"\n",
+            toml_escape(&rust_files[0].path.replace('\\', "/"))
+        )
+    } else {
+        return Err(VerificationError::UnsupportedCandidate(
+            "candidate must provide Cargo.toml, src/main.rs, src/lib.rs, or one Rust source file"
+                .to_string(),
+        ));
+    };
+    Ok(vec![CandidateFile::new(
+        "Cargo.toml",
+        controller_manifest(&extra),
+    )?])
 }
 
 fn verify_file(root: &Path, file: &FileEvidence) -> Result<(), VerificationError> {
@@ -986,6 +1040,10 @@ fn escape(value: &str) -> String {
         }
     }
     output
+}
+
+fn toml_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn now_ms() -> u128 {

@@ -16,6 +16,12 @@ pub struct CandidateFile {
     pub content: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CandidateProfile {
+    Rust,
+    Json,
+}
+
 impl CandidateFile {
     pub fn new(
         path: impl Into<String>,
@@ -252,6 +258,71 @@ pub(crate) fn validate_files(files: &[CandidateFile]) -> Result<(), Verification
         }
     }
     Ok(())
+}
+
+pub(crate) fn candidate_profile(
+    files: &[CandidateFile],
+) -> Result<CandidateProfile, VerificationError> {
+    validate_files(files)?;
+    let has_manifest = files.iter().any(|file| {
+        file.path
+            .replace('\\', "/")
+            .eq_ignore_ascii_case("Cargo.toml")
+    });
+    let rust_files = files
+        .iter()
+        .filter(|file| file.path.to_ascii_lowercase().ends_with(".rs"))
+        .count();
+    if has_manifest || rust_files > 0 {
+        return Ok(CandidateProfile::Rust);
+    }
+    if files
+        .iter()
+        .all(|file| file.path.to_ascii_lowercase().ends_with(".json"))
+    {
+        return Ok(CandidateProfile::Json);
+    }
+    Err(VerificationError::UnsupportedCandidate(
+        "candidate must be a Rust crate/source bundle or a JSON artifact bundle".to_string(),
+    ))
+}
+
+pub(crate) fn json_validation_failure(
+    files: &[CandidateFile],
+) -> Result<Option<String>, VerificationError> {
+    if candidate_profile(files)? != CandidateProfile::Json {
+        return Ok(None);
+    }
+    for file in files {
+        if let Err(error) = math_atoms_json::parse(&file.content) {
+            return Ok(Some(clean_failure(&format!(
+                "JSON file {} failed strict parsing: {error}",
+                file.path
+            ))));
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn controller_json_harness(
+    files: &[CandidateFile],
+) -> Result<String, VerificationError> {
+    if let Some(failure) = json_validation_failure(files)? {
+        return Ok(format!(
+            "#![forbid(unsafe_code)]\ncompile_error!({failure:?});\n"
+        ));
+    }
+    let bytes = files.iter().map(|file| file.content.len()).sum::<usize>();
+    Ok(format!(
+        "#![forbid(unsafe_code)]\npub const VERIFIED_JSON_FILES: usize = {};\npub const VERIFIED_JSON_BYTES: usize = {bytes};\n#[cfg(test)]\nmod tests {{\n    use super::*;\n    #[test]\n    fn controller_validated_nonempty_json_bundle() {{\n        assert!(std::hint::black_box(VERIFIED_JSON_FILES) > 0);\n        assert!(std::hint::black_box(VERIFIED_JSON_BYTES) > 0);\n    }}\n}}\n",
+        files.len()
+    ))
+}
+
+pub(crate) fn controller_manifest(extra: &str) -> String {
+    format!(
+        "[package]\nname = \"atom-verified-candidate\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[workspace]\n{extra}"
+    )
 }
 
 pub(crate) fn clean_failure(value: &str) -> String {

@@ -1,5 +1,6 @@
 use crate::model::{
-    bundle_hash, clean_failure, validate_files, validate_plan_id, CandidateFile, CommandEvidence,
+    bundle_hash, candidate_profile, clean_failure, controller_json_harness, controller_manifest,
+    validate_files, validate_plan_id, CandidateFile, CandidateProfile, CommandEvidence,
     FileEvidence, RepairEvidence, VerificationAttempt, VerificationError, VerificationPolicy,
     VerificationSuccess, MAX_LOG_BYTES, MAX_VERIFICATION_ATTEMPTS,
 };
@@ -196,7 +197,12 @@ fn materialize_candidate(
         write_immutable(&path, item.content.as_bytes())?;
         evidence.push(file_evidence(candidate_dir, &path, false)?);
     }
-    ensure_manifest(candidate_dir, files, &mut evidence)?;
+    ensure_manifest(
+        candidate_dir,
+        files,
+        candidate_profile(files)?,
+        &mut evidence,
+    )?;
     let manifest = fs::read_to_string(candidate_dir.join("Cargo.toml"))?;
     validate_dependency_free_manifest(&manifest)?;
     Ok(evidence)
@@ -205,6 +211,7 @@ fn materialize_candidate(
 fn ensure_manifest(
     candidate_dir: &Path,
     files: &[CandidateFile],
+    profile: CandidateProfile,
     evidence: &mut Vec<FileEvidence>,
 ) -> Result<(), VerificationError> {
     if files.iter().any(|item| {
@@ -214,6 +221,16 @@ fn ensure_manifest(
     }) {
         return Ok(());
     }
+    if profile == CandidateProfile::Json {
+        let manifest_path = candidate_dir.join("Cargo.toml");
+        write_immutable(&manifest_path, controller_manifest("").as_bytes())?;
+        evidence.push(file_evidence(candidate_dir, &manifest_path, true)?);
+        let harness_path = candidate_dir.join("src/lib.rs");
+        write_immutable(&harness_path, controller_json_harness(files)?.as_bytes())?;
+        evidence.push(file_evidence(candidate_dir, &harness_path, true)?);
+        return Ok(());
+    }
+
     let rust_files: Vec<&CandidateFile> = files
         .iter()
         .filter(|item| item.path.to_ascii_lowercase().ends_with(".rs"))
@@ -241,12 +258,6 @@ fn ensure_manifest(
     write_immutable(&path, manifest.as_bytes())?;
     evidence.push(file_evidence(candidate_dir, &path, true)?);
     Ok(())
-}
-
-fn controller_manifest(extra: &str) -> String {
-    format!(
-        "[package]\nname = \"atom-verified-candidate\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n\n[workspace]\n{extra}"
-    )
 }
 
 fn validate_dependency_free_manifest(text: &str) -> Result<(), VerificationError> {
@@ -591,5 +602,39 @@ mod tests {
             Err(VerificationError::UnsupportedCandidate(_))
         ));
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn malformed_json_is_repaired_then_reverified_by_real_gates() {
+        let root = temp_root("json-repair");
+        let verifier = CandidateVerifier::new(&root, VerificationPolicy::strict(120).unwrap());
+        let plan_id = "work-0123456789abcdef01234567";
+        let invalid = vec![CandidateFile::new("app-spec.json", "{\"title\":}").unwrap()];
+        let failed = verifier.verify_attempt(plan_id, 1, &invalid).unwrap();
+        assert!(!failed.passed);
+        assert!(failed.failure.contains("app-spec.json"));
+        assert!(failed.failure.contains("strict parsing"));
+
+        let valid =
+            vec![
+                CandidateFile::new("app-spec.json", "{\"title\":\"Task Board\",\"tasks\":[]}")
+                    .unwrap(),
+            ];
+        let repair = verifier
+            .store_repair(&failed, "json-repair-model", &valid)
+            .unwrap();
+        let passed = verifier.verify_attempt(plan_id, 2, &repair.files).unwrap();
+        assert!(passed.passed, "{}", passed.failure);
+        let success = verifier.finalize(&passed).unwrap();
+        let verified = verify_candidate_evidence(
+            &success.manifest_path,
+            &success.manifest_hash,
+            plan_id,
+            &success.bundle_hash,
+        )
+        .unwrap();
+        assert_eq!(verified.attempts, 2);
+        assert_eq!(verified.repairs, 1);
+        fs::remove_dir_all(root).unwrap();
     }
 }
