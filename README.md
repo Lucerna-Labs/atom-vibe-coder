@@ -80,7 +80,7 @@ Provider selection:
 $env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
 $env:MATH_ATOMS_PROVIDER_KIND="ollama"  # OLLAMA_API_KEY, Ollama Cloud chat API
 $env:MATH_ATOMS_PROVIDER_KIND="mistral" # MISTRAL_API_KEY, Mistral chat completions API
-$env:MATH_ATOMS_PROVIDER_KIND="deepseek" # DEEPSEEK_API_KEY, DeepSeek V4 Pro with thinking=max
+$env:MATH_ATOMS_PROVIDER_KIND="deepseek" # DEEPSEEK_API_KEY, DeepSeek V4 Pro with provider-default thinking
 
 # Any OpenAI-compatible/custom provider:
 $env:MATH_ATOMS_PROVIDER_KIND="custom"

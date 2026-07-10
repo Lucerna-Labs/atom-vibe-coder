@@ -853,7 +853,7 @@ fn chat_completions_body(model: &str, prompt: &WorkPrompt) -> String {
 
 fn deepseek_pro_body(model: &str, prompt: &WorkPrompt) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"thinking\":{{\"type\":\"enabled\"}},\"reasoning_effort\":\"max\",\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"thinking\":{{\"type\":\"enabled\"}},\"stream\":false}}",
         json_escape(model),
         json_escape(&prompt.instructions),
         json_escape(&prompt.data)
@@ -1050,7 +1050,7 @@ mod tests {
         assert_eq!(call.endpoint, "https://api.deepseek.com/chat/completions");
         assert!(call.body.contains("\"model\":\"deepseek-v4-pro\""));
         assert!(call.body.contains("\"thinking\":{\"type\":\"enabled\"}"));
-        assert!(call.body.contains("\"reasoning_effort\":\"max\""));
+        assert!(!call.body.contains("\"reasoning_effort\""));
         assert!(call.body.contains("\"stream\":false"));
         assert!(!call.body.contains("\"temperature\""));
         assert!(!call.body.contains("deepseek-v4-flash"));
