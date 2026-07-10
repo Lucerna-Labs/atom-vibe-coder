@@ -1,0 +1,1 @@
+MATH_ATOMS_DRIVER_OK bluetooth hci_reset=0x0C03 scan=enabled devices=2 connected=AA:BB:CC:DD:EE:01 stack=canonical
