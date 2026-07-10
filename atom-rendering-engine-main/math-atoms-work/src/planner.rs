@@ -1,5 +1,6 @@
 use crate::model::{
-    PacketContract, ValidatedPacketOutput, WorkError, WorkFile, WorkPacket, MAX_PACKET_OUTPUT_BYTES,
+    validate_files, PacketContract, ValidatedPacketOutput, WorkError, WorkFile, WorkPacket,
+    WorkStage, MAX_FILE_OUTPUT_BYTES, MAX_PACKET_OUTPUT_BYTES,
 };
 use math_atoms_json::{parse as parse_json, JsonValue};
 use math_atoms_secrets::{contains_credential_material, redact_sensitive_text};
@@ -46,6 +47,28 @@ pub fn validate_secure_packet_output(
             validate_packet_output(packet, &redact_sensitive_text(output))
         }
     }
+}
+
+pub fn validate_secure_file_artifact(path: &str, output: &str) -> Result<String, WorkError> {
+    let file = WorkFile {
+        path: path.to_string(),
+        purpose: "verification repair".to_string(),
+        acceptance: vec!["strict executable verification passes".to_string()],
+    };
+    validate_files(std::slice::from_ref(&file))?;
+    let packet = WorkPacket {
+        id: "candidate-repair-file".to_string(),
+        ordinal: 0,
+        stage: WorkStage::FinalCorrection,
+        contract: PacketContract::FileArtifact,
+        objective: "repair one failed candidate file".to_string(),
+        acceptance: file.acceptance.clone(),
+        dependencies: Vec::new(),
+        file: Some(file),
+        max_output_bytes: MAX_FILE_OUTPUT_BYTES,
+    };
+    validate_secure_packet_output(&packet, output)?;
+    Ok(file_artifact_content(&packet, output)?.to_string())
 }
 
 pub fn extract_json_payload(output: &str) -> Result<&str, WorkError> {
@@ -135,6 +158,17 @@ fn validate_file_artifact(
     packet: &WorkPacket,
     output: &str,
 ) -> Result<ValidatedPacketOutput, WorkError> {
+    file_artifact_content(packet, output)?;
+    Ok(ValidatedPacketOutput {
+        context: output.trim().to_string(),
+        files: Vec::new(),
+    })
+}
+
+pub(crate) fn file_artifact_content<'a>(
+    packet: &WorkPacket,
+    output: &'a str,
+) -> Result<&'a str, WorkError> {
     let trimmed = output.trim();
     if !trimmed.starts_with("```") || !trimmed.ends_with("```") {
         return Err(WorkError::InvalidOutput(format!(
@@ -162,10 +196,7 @@ fn validate_file_artifact(
             packet.id
         )));
     }
-    Ok(ValidatedPacketOutput {
-        context: trimmed.to_string(),
-        files: Vec::new(),
-    })
+    Ok(content)
 }
 
 fn incomplete_code_marker(content: &str) -> Option<&'static str> {
@@ -410,5 +441,11 @@ mod tests {
             "```rust\nconst API: &str = \"sk-abcdefghijklmnopqrstuvwxyz\";\n```"
         )
         .is_err());
+        assert_eq!(
+            validate_secure_file_artifact("src/main.rs", "```rust\nfn main() {}\n```").unwrap(),
+            "fn main() {}\n"
+        );
+        assert!(validate_secure_file_artifact("../main.rs", code).is_err());
+        assert!(validate_secure_file_artifact("src/main.rs", "fn main() {}").is_err());
     }
 }

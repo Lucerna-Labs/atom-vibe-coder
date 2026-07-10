@@ -6,7 +6,7 @@ pub const WORK_SCHEMA_VERSION: u32 = 3;
 pub const MAX_INTENT_BYTES: usize = 16 * 1024;
 pub const MAX_FILES_PER_PLAN: usize = 32;
 pub const MAX_PACKET_OUTPUT_BYTES: usize = 64 * 1024;
-const MAX_FILE_OUTPUT_BYTES: usize = 12 * 1024;
+pub(crate) const MAX_FILE_OUTPUT_BYTES: usize = 12 * 1024;
 const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 const MAX_CONTEXT_PER_DEPENDENCY: usize = 12 * 1024;
 
@@ -672,7 +672,10 @@ impl WorkPlan {
         Ok(WorkPrompt { instructions, data })
     }
 
-    pub fn deliverable(&self, completed: &[CompletedPacket]) -> Result<String, WorkError> {
+    pub fn generated_files(
+        &self,
+        completed: &[CompletedPacket],
+    ) -> Result<Vec<GeneratedFile>, WorkError> {
         if !self.expanded {
             return Err(WorkError::InvalidPlan(
                 "file manifest was not expanded".to_string(),
@@ -698,9 +701,19 @@ impl WorkPlan {
                     .expect("correction packet file")
                     .path
                     .clone(),
-                content: (*output).to_string(),
+                content: crate::planner::file_artifact_content(packet, output)?.to_string(),
             });
         }
+        if files.is_empty() {
+            return Err(WorkError::InvalidPlan(
+                "plan has no corrected generated files".to_string(),
+            ));
+        }
+        Ok(files)
+    }
+
+    pub fn deliverable(&self, completed: &[CompletedPacket]) -> Result<String, WorkError> {
+        let mut files = self.generated_files(completed)?;
         if files.len() == 1 {
             return Ok(files.remove(0).content);
         }
@@ -1016,7 +1029,11 @@ mod tests {
             packet_id: correction.id.clone(),
             output: "```rust\nfn main() {}\n```".into(),
         }];
-        assert_eq!(plan.deliverable(&completed).unwrap(), completed[0].output);
+        assert_eq!(plan.deliverable(&completed).unwrap(), "fn main() {}\n");
+        assert_eq!(
+            plan.generated_files(&completed).unwrap()[0].path,
+            "src/main.rs"
+        );
     }
 
     #[test]
@@ -1048,6 +1065,7 @@ mod tests {
         let bundle = plan.deliverable(&completed).unwrap();
         assert!(bundle.contains("FILE: src/main.rs"));
         assert!(bundle.contains("FILE: src/model.rs"));
+        assert!(!bundle.contains("```"));
     }
 
     #[test]
