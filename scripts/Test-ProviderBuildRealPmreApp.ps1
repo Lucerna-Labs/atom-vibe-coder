@@ -16,6 +16,7 @@ $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
 $OriginalRustFlags = $env:RUSTFLAGS
 $OriginalBmpPath = $env:MATH_ATOMS_REAL_APP_BMP
+. (Join-Path $PSScriptRoot "Learning-Loop.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -650,13 +651,16 @@ try {
     $env:RUSTFLAGS = "-D warnings"
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+    $durableCorrection = Get-AtomLearningContext -Intent $UserIntent -Atoms "scan,project,compose,measure,preserve,order" -Limit 4
+    if ($durableCorrection -match 'hits=0') { $durableCorrection = "" }
     $lastFailure = ""
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $appDir = Join-Path $OutDir ("pmre-task-board-attempt-{0}" -f $attempt)
         New-Item -ItemType Directory -Force -Path $appDir | Out-Null
         $bmp = Join-Path $appDir "pmre-task-board.bmp"
+        $attemptIntent = New-AppSpecIntent $UserIntent $lastFailure
         try {
-            $providerText = Invoke-ProviderProbe (New-AppSpecIntent $UserIntent $lastFailure) $appDir
+            $providerText = Invoke-ProviderProbe $attemptIntent $appDir
             $json = Get-FencedJson $providerText
             [System.IO.File]::WriteAllText((Join-Path $appDir "app-spec.json"), $json)
             $spec = Get-AppSpec $json
@@ -666,12 +670,15 @@ try {
             Assert-BmpArtifact $bmp
             $source = Join-Path $appDir "src\main.rs"
             Add-ManifestRow $spec.Slug $Expected $source $exe $bmp
+            $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
+            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $bmp -ProviderModel $ProviderModel
             Write-Host "provider natural-language PMRE app ok: spec generated, harness compiled, interacted, rendered: $Expected"
             return
         }
         catch {
             $lastFailure = $_.Exception.Message
             [System.IO.File]::WriteAllText((Join-Path $appDir "failure.txt"), $lastFailure)
+            Write-AtomLearningRecord -Source "provider-pmre-app" -Intent $UserIntent -Recipe "production-app-runtime" -Atoms "scan,project,compose,measure,preserve,order" -Gate "natural-language-pmre-app" -Attempt $attempt -Outcome "failed" -Failure $lastFailure -ProviderModel $ProviderModel
             if ($attempt -eq $MaxAttempts) {
                 throw "provider natural-language PMRE app failed after $MaxAttempts attempts. Last failure: $lastFailure"
             }

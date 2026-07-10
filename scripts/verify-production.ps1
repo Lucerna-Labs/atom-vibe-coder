@@ -62,7 +62,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "native input editing gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
-        Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, and native provider responsiveness gate"
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-SelfLearningFunctional.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "self-learning functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderLearningLocal.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "local provider app-build learning gate failed with exit code $LASTEXITCODE" }
+        Write-Host "structural verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, native provider responsiveness gate, restart-level self-learning gate, and local provider adapter/app/PMRE/Bluetooth learning gate"
     }
     else {
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderExecution.ps1")
@@ -71,6 +75,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "provider multi-app build gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildRealPmreApp.ps1")
         if ($LASTEXITCODE -ne 0) { throw "provider real PMRE app gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-ProviderBuildBluetoothDriver.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "provider Bluetooth driver gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-DesignUploadBuild.ps1")
         if ($LASTEXITCODE -ne 0) { throw "design upload build gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
@@ -79,7 +85,9 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "native input editing gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeProviderResponsiveness.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native provider responsiveness gate failed with exit code $LASTEXITCODE" }
-        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, native provider responsiveness gate, provider execution gate, provider multi-app build gate, provider real PMRE app gate, and design upload build gate"
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-SelfLearningFunctional.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "self-learning functional gate failed with exit code $LASTEXITCODE" }
+        Write-Host "production verification ok: Rust doctrine/tests, clippy, native app build, native artifact, native functional gate, native input editing gate, native provider responsiveness gate, provider execution gate, provider multi-app build gate, provider real PMRE app gate, provider Bluetooth driver gate, design upload build gate, and restart-level self-learning gate"
     }
 }
 finally {

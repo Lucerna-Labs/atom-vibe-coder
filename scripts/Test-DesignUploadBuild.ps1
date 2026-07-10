@@ -16,10 +16,14 @@ $Manifest = Join-Path $OutDir "artifact-window.tsv"
 $DefaultInputDir = Join-Path $Engine "target\design-upload-input"
 $OriginalRustFlags = $env:RUSTFLAGS
 $OriginalBmpPath = $env:MATH_ATOMS_DESIGN_APP_BMP
+. (Join-Path $PSScriptRoot "Learning-Loop.ps1")
 
 if ($Name -notmatch '^[a-z0-9][a-z0-9-]{0,48}$') {
     throw "Name must be a lowercase slug containing only a-z, 0-9, and hyphen"
 }
+$LearningIntent = "Build native PMRE app '$Name' from uploaded HTML and CSS design files"
+$DurableCorrection = Get-AtomLearningContext -Intent $LearningIntent -Atoms "project,combine,measure,compose" -Limit 4
+if ($DurableCorrection -match 'hits=0') { $DurableCorrection = "" }
 
 function Convert-ToTomlPath([string]$Path) {
     return $Path.Replace("\", "/")
@@ -298,7 +302,13 @@ try {
     Assert-BmpArtifact $bmp
     $source = Join-Path $appDir "src\main.rs"
     Add-ManifestRow $Name $expected $source $exe $bmp
+    Write-AtomLearningRecord -Source "design-upload" -Intent $LearningIntent -Recipe "native-atom-renderer" -Atoms "project,combine,measure,compose" -Gate "design-upload-build" -Attempt 1 -Outcome "succeeded" -Correction $DurableCorrection -Artifact $bmp
     Write-Host "design upload build ok: $expected"
+}
+catch {
+    $failure = $_.Exception.Message
+    Write-AtomLearningRecord -Source "design-upload" -Intent $LearningIntent -Recipe "native-atom-renderer" -Atoms "project,combine,measure,compose" -Gate "design-upload-build" -Attempt 1 -Outcome "failed" -Failure $failure
+    throw
 }
 finally {
     $env:RUSTFLAGS = $OriginalRustFlags

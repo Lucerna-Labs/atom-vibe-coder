@@ -12,6 +12,8 @@ $ResponseText = Join-Path $OutDir "provider-response.txt"
 $Expected = "MATH_ATOMS_DEEPSEEK_TOY_OK atoms=3 proof=pass"
 $Endpoint = "https://api.deepseek.com/chat/completions"
 $Model = "deepseek-v4-flash"
+. (Join-Path $PSScriptRoot "Learning-Loop.ps1")
+$LearningIntent = "Build a dependency-free Rust CounterApp toy application with an executable three-atom proof"
 
 Add-Type -AssemblyName System.Net.Http
 
@@ -19,6 +21,7 @@ if ($Model -like "*pro*") {
     throw "DeepSeek toy app test is configured for a Pro model, expected Flash"
 }
 
+try {
 $Key = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "Process")
 if ([string]::IsNullOrWhiteSpace($Key)) {
     $Key = [Environment]::GetEnvironmentVariable("DEEPSEEK_API_KEY", "User")
@@ -32,6 +35,8 @@ if ([string]::IsNullOrWhiteSpace($Key)) {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+$PriorLearning = Get-AtomLearningContext -Intent $LearningIntent -Atoms "scan,project,compose,measure,preserve,order" -Limit 4
+
 $Prompt = @"
 Return exactly one fenced rust code block and no other text.
 
@@ -43,6 +48,9 @@ Requirements:
 - main must print exactly:
 $Expected
 "@
+if ($PriorLearning -notmatch 'hits=0') {
+    $Prompt += "`nDurable correction evidence from earlier real gates:`n$PriorLearning"
+}
 
 $Body = @{
     model = $Model
@@ -115,8 +123,15 @@ try {
     if ($Output -ne $Expected) {
         throw "DeepSeek-generated toy app output mismatch. Expected '$Expected' but got '$Output'"
     }
+    Write-AtomLearningRecord -Source "deepseek-toy-app" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "deepseek-toy-app" -Attempt 1 -Outcome "succeeded" -Correction $PriorLearning -Artifact $Source -ProviderModel $Model
     Write-Host "deepseek toy app ok: generated, compiled, ran: $Output"
 }
 finally {
     Pop-Location
+}
+}
+catch {
+    $failure = $_.Exception.Message
+    Write-AtomLearningRecord -Source "deepseek-toy-app" -Intent $LearningIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "deepseek-toy-app" -Attempt 1 -Outcome "failed" -Failure $failure -ProviderModel $Model
+    throw
 }

@@ -370,7 +370,11 @@ impl LearningStore {
         record
             .validate()
             .map_err(|reason| io::Error::new(io::ErrorKind::InvalidInput, reason))?;
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent)?;
         }
         let _lock = self.acquire_lock()?;
@@ -384,6 +388,10 @@ impl LearningStore {
     }
 
     pub fn read_to_string(&self) -> io::Result<String> {
+        if !self.path.exists() {
+            return Ok(String::new());
+        }
+        let _lock = self.acquire_lock()?;
         let mut file = match OpenOptions::new().read(true).open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
@@ -888,6 +896,37 @@ mod tests {
         assert_eq!(
             isolated.path(),
             Path::new("C:/temp/proof-test-42.jsonl.learning.jsonl")
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_remain_complete_and_parseable() {
+        let path = temp_path("concurrent");
+        let store = std::sync::Arc::new(LearningStore::new(&path));
+        let mut workers = Vec::new();
+        for worker in 0..8 {
+            let store = store.clone();
+            workers.push(std::thread::spawn(move || {
+                for index in 0..8 {
+                    let mut item = record(LearningOutcome::Failed, worker * 8 + index + 1);
+                    item.id = format!("worker-{worker}-record-{index}");
+                    store.append(&item).unwrap();
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let records = store.read_records().unwrap();
+        fs::remove_file(path).ok();
+        assert_eq!(records.len(), 64);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| &record.id)
+                .collect::<HashSet<_>>()
+                .len(),
+            64
         );
     }
 }

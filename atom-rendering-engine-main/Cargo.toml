@@ -6,6 +6,7 @@ resolver = "2"
 members = [
     "math-atoms-core",
     "math-atoms-doctrine",
+    "math-atoms-json",
     "math-atoms-learning",
     "math-atoms-native",
     "pmre-font",

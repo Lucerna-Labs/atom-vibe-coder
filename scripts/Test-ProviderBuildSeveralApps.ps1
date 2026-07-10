@@ -14,6 +14,7 @@ $OutDir = Join-Path $Engine "target\provider-built-apps"
 $Manifest = Join-Path $OutDir "artifact-window.tsv"
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
+. (Join-Path $PSScriptRoot "Learning-Loop.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -178,6 +179,8 @@ try {
     $passed = @()
     $manifestRows = @("name`tstatus`toutput`tsource`texe`tartifact")
     foreach ($spec in $Specs | Select-Object -First $AppsRequired) {
+        $durableCorrection = Get-AtomLearningContext -Intent (New-AppIntent $spec "") -Atoms "scan,project,compose,measure,preserve,order" -Limit 4
+        if ($durableCorrection -match 'hits=0') { $durableCorrection = "" }
         $lastFailure = ""
         $passedApp = $false
         for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
@@ -185,8 +188,9 @@ try {
             New-Item -ItemType Directory -Force -Path $appDir | Out-Null
             $source = Join-Path $appDir "main.rs"
             $exe = Join-Path $appDir "$($spec.Name).exe"
+            $attemptIntent = New-AppIntent $spec $lastFailure
             try {
-                $providerText = Invoke-ProviderProbe (New-AppIntent $spec $lastFailure) $appDir
+                $providerText = Invoke-ProviderProbe $attemptIntent $appDir
                 $code = Get-RustCode $providerText
                 if ($code -notmatch "fn\s+main\s*\(") {
                     throw "$($spec.Name) app is missing fn main"
@@ -208,6 +212,8 @@ try {
                 if ($actual -ne $spec.Expected) {
                     throw "output mismatch. Expected '$($spec.Expected)' but got '$actual'"
                 }
+                $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
+                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $source -ProviderModel $ProviderModel
                 $passed += "$($spec.Name)=$actual"
                 $manifestRows += "$($spec.Name)`tcompiled`t$actual`t$source`t$exe`t"
                 $passedApp = $true
@@ -215,6 +221,7 @@ try {
             }
             catch {
                 $lastFailure = $_.Exception.Message
+                Write-AtomLearningRecord -Source "provider-multi-app" -Intent $attemptIntent -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "app-$($spec.Name)" -Attempt $attempt -Outcome "failed" -Failure $lastFailure -ProviderModel $ProviderModel
                 if ($attempt -eq $MaxAttempts) {
                     throw "$($spec.Name) app failed after $MaxAttempts attempts. Last failure: $lastFailure"
                 }

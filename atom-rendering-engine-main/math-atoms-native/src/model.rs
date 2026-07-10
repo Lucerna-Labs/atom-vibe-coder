@@ -1,12 +1,14 @@
 use math_atoms_core::{
-    provider_output_hash, LearningOutcome, LearningRecord, LearningRecordInput, LearningStore,
-    LearningSummary, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
-    ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus, WikiGraph,
+    effective_records, provider_output_hash, LearningOutcome, LearningRecord, LearningRecordInput,
+    LearningStore, LearningSummary, MathAtomsRuntime, PreparedProviderCall, ProofRecord,
+    ProofStore, ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus, WikiGraph,
+    DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use pmre_orchestrator::{
     UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
     DESIGN_RADIUS_SLIDER, DESIGN_SAT_SLIDER, DESIGN_TEXT_SLIDER,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
@@ -55,6 +57,8 @@ pub struct NativeApp {
     pub store: Option<ProofStore>,
     pub learning_store: Option<LearningStore>,
     pub learning_records: Vec<LearningRecord>,
+    learning_summary: LearningSummary,
+    learning_attempts: HashMap<(String, String), u32>,
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
@@ -140,10 +144,20 @@ impl NativeApp {
         learning_store: Option<LearningStore>,
     ) -> Self {
         let last_provider_output = initial_provider_output(&provider);
-        let learning_records = learning_store
+        let archived_learning = learning_store
             .as_ref()
             .and_then(|ledger| ledger.read_records().ok())
             .unwrap_or_default();
+        let learning_summary = LearningSummary::from_records(&archived_learning);
+        let mut learning_attempts = HashMap::new();
+        for record in &archived_learning {
+            let key = (record.intent.clone(), record.gate.clone());
+            learning_attempts
+                .entry(key)
+                .and_modify(|attempt: &mut u32| *attempt = (*attempt).max(record.attempt))
+                .or_insert(record.attempt);
+        }
+        let learning_records = effective_records(&archived_learning, DEFAULT_GRAPH_MEMORY_LIMIT);
         let runtime = match (&store, &learning_store) {
             (Some(proofs), Some(learning)) => {
                 MathAtomsRuntime::with_stores(provider, proofs.clone(), learning.clone())
@@ -156,6 +170,8 @@ impl NativeApp {
             store,
             learning_store,
             learning_records,
+            learning_summary,
+            learning_attempts,
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output,
             provider_running: false,
@@ -463,7 +479,7 @@ impl NativeApp {
     }
 
     pub fn learning_summary(&self) -> LearningSummary {
-        LearningSummary::from_records(&self.learning_records)
+        self.learning_summary
     }
 
     fn append_proof_record(&mut self, learn: bool) -> StoreOutcome {
@@ -514,8 +530,19 @@ impl NativeApp {
                 return Err("Persistent learning store readback did not match append".to_string());
             }
         }
+        let outcome = record.outcome;
+        let attempt_key = (record.intent.clone(), record.gate.clone());
+        let attempt = record.attempt;
         self.runtime.learn_learning_record(&record);
         self.learning_records.push(record);
+        self.learning_records =
+            effective_records(&self.learning_records, DEFAULT_GRAPH_MEMORY_LIMIT);
+        self.learning_summary.total += 1;
+        match outcome {
+            LearningOutcome::Failed => self.learning_summary.failed += 1,
+            LearningOutcome::Succeeded => self.learning_summary.succeeded += 1,
+        }
+        self.learning_attempts.insert(attempt_key, attempt);
         Ok(())
     }
 
@@ -537,10 +564,10 @@ impl NativeApp {
             "native-proof-route"
         };
         let attempt = self
-            .learning_records
-            .iter()
-            .filter(|record| record.intent == self.last_intent && record.gate == gate)
-            .count() as u32
+            .learning_attempts
+            .get(&(self.last_intent.clone(), gate.to_string()))
+            .copied()
+            .unwrap_or(0)
             + 1;
         let correction = if outcome == LearningOutcome::Succeeded {
             self.learning_records

@@ -16,6 +16,7 @@ $Exe = Join-Path $OutDir "bluetooth_driver.exe"
 $Review = Join-Path $OutDir "driver-review.md"
 $OriginalProbeIntent = $env:MATH_ATOMS_PROVIDER_PROBE_INTENT
 $OriginalTemplate = $env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE
+. (Join-Path $PSScriptRoot "Learning-Loop.ps1")
 
 $ProviderKind = if ([string]::IsNullOrWhiteSpace($env:MATH_ATOMS_PROVIDER_KIND)) { "openai" } else { $env:MATH_ATOMS_PROVIDER_KIND }
 $ProviderModel = $env:MATH_ATOMS_PROVIDER_MODEL
@@ -221,12 +222,15 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+    $durableCorrection = Get-AtomLearningContext -Intent "Build a Bluetooth driver" -Atoms "scan,project,compose,measure,preserve,order" -Limit 4
+    if ($durableCorrection -match 'hits=0') { $durableCorrection = "" }
     $lastFailure = ""
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $attemptDir = Join-Path $OutDir ("attempt-{0}" -f $attempt)
         New-Item -ItemType Directory -Force -Path $attemptDir | Out-Null
+        $attemptIntent = New-DriverIntent $lastFailure
         try {
-            $providerText = Invoke-ProviderProbe (New-DriverIntent $lastFailure) $attemptDir
+            $providerText = Invoke-ProviderProbe $attemptIntent $attemptDir
             $code = Get-RustCode $providerText
             Assert-DriverSource $code
             [System.IO.File]::WriteAllText($Source, $code)
@@ -267,6 +271,8 @@ $actual
 "@
             [System.IO.File]::WriteAllText($Review, $reviewText)
             Update-ArtifactManifest $actual
+            $correctionEvidence = if ([string]::IsNullOrWhiteSpace($lastFailure)) { $durableCorrection } else { $lastFailure }
+            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "succeeded" -Correction $correctionEvidence -Artifact $Source -ProviderModel $ProviderModel
             Write-Host "provider bluetooth driver ok: $actual"
             Write-Host "driver review: $Review"
             return
@@ -274,6 +280,7 @@ $actual
         catch {
             $lastFailure = $_.Exception.Message
             [System.IO.File]::WriteAllText((Join-Path $attemptDir "failure.txt"), $lastFailure)
+            Write-AtomLearningRecord -Source "provider-bluetooth-driver" -Intent "Build a Bluetooth driver" -Recipe "provider-model-loop" -Atoms "scan,project,compose,measure,preserve,order" -Gate "bluetooth-driver" -Attempt $attempt -Outcome "failed" -Failure $lastFailure -ProviderModel $ProviderModel
             if ($attempt -eq $MaxAttempts) {
                 throw "Bluetooth driver failed after $MaxAttempts attempts. Last failure: $lastFailure"
             }
