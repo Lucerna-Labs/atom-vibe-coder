@@ -472,6 +472,10 @@ name = "math-atoms-doctrine"
 version = "0.1.0"
 
 [[package]]
+name = "math-atoms-learning"
+version = "0.1.0"
+
+[[package]]
 name = "math-atoms-native"
 version = "0.1.0"
 dependencies = [
