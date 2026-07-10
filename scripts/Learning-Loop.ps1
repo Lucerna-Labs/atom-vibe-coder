@@ -192,7 +192,7 @@ function Get-AtomWorkEvidence {
     $planId = $Matches.id
     $model = $Matches.model
     $packetCount = [int]$Matches.count
-    if ($packetCount -lt 13) {
+    if ($packetCount -lt 19) {
         throw "provider work plan is too coarse: $packetCount packets"
     }
     if ($machineText -notmatch '(?m)^provider work manifest: (?<manifest>.+)$') {

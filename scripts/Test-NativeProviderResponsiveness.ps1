@@ -53,7 +53,7 @@ try {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         try {
-            for ($requestIndex = 0; $requestIndex -lt 13; $requestIndex++) {
+            for ($requestIndex = 0; $requestIndex -lt 19; $requestIndex++) {
                 $client = $listener.AcceptTcpClient()
                 try {
                     $stream = $client.GetStream()
@@ -72,7 +72,7 @@ try {
                         $read += $count
                     }
                     $request = ([string]::new($buffer, 0, $read)) | ConvertFrom-Json
-                    $prompt = [string]$request.input[-1].content[-1].text
+                    $prompt = [string]$request.instructions
                     if ($prompt -notmatch '(?m)^Packet id: (?<packet>[^\r\n]+)$') { throw "missing packet id" }
                     $packetId = $Matches.packet.Trim()
                     if ($prompt -notmatch '(?m)^Stage: (?<stage>[^\r\n]+)$') { throw "missing packet stage" }
@@ -87,7 +87,7 @@ try {
                             risks = @()
                         } | ConvertTo-Json -Depth 8 -Compress
                     }
-                    elseif ($stage -in @('file-implementation', 'file-correction')) {
+                    elseif ($stage -in @('file-implementation', 'file-correction', 'integration-correction', 'final-correction')) {
                         $content = '```text' + "`nslow provider ok`n" + '```'
                     }
                     else {
@@ -223,8 +223,8 @@ public static class MathAtomsProviderResponsive {
     if ([int]$proof.provider_output_len -ne $expectedOutputLen) {
         throw "Slow provider proof did not record output length. Tail: $tail"
     }
-    if ($proof.work_plan_id -notmatch '^work-[0-9a-f]{24}$' -or [int]$proof.work_packet_count -ne 13) {
-        throw "Slow provider proof did not bind the 13-packet meticulous work plan. Tail: $tail"
+    if ($proof.work_plan_id -notmatch '^work-[0-9a-f]{24}$' -or [int]$proof.work_packet_count -ne 19) {
+        throw "Slow provider proof did not bind the 19-packet meticulous work plan. Tail: $tail"
     }
 
     Write-Host "native provider responsiveness ok: $(Get-AtomNativeWindowTitle -Process $proc)"

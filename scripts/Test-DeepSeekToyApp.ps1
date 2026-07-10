@@ -93,7 +93,7 @@ try {
     $passed = [pscustomobject]@{ Source = $source; Exe = $exe; Output = $actual }
     $manifestPath = [string]$success.work_plan_manifest
     $plan = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ([int]$plan.packet_count -lt 13 -or -not [bool]$plan.expanded -or $plan.plan_id -ne $success.work_plan_id) {
+    if ([int]$plan.packet_count -lt 19 -or -not [bool]$plan.expanded -or $plan.plan_id -ne $success.work_plan_id) {
         throw "DeepSeek Pro work plan was not meticulously expanded: $manifestPath"
     }
     $packetRecords = @(Get-ChildItem -LiteralPath (Split-Path -Parent $manifestPath) -Filter "*.json" | Where-Object Name -NotLike "plan-*.json")

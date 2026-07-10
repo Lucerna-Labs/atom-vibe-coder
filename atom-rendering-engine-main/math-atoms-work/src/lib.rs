@@ -6,7 +6,8 @@ mod store;
 
 pub use model::{
     CompletedPacket, GeneratedFile, PacketContract, ValidatedPacketOutput, WorkError, WorkFile,
-    WorkPacket, WorkPlan, WorkStage, MAX_FILES_PER_PLAN, MAX_INTENT_BYTES, WORK_SCHEMA_VERSION,
+    WorkPacket, WorkPlan, WorkPrompt, WorkStage, MAX_FILES_PER_PLAN, MAX_INTENT_BYTES,
+    WORK_SCHEMA_VERSION,
 };
 pub use planner::{extract_json_payload, validate_packet_output, validate_secure_packet_output};
 pub use store::{

@@ -77,11 +77,28 @@ fn validate_envelope(
     }
     let checks = required_strings(&value, "checks", true)?;
     let risks = required_strings(&value, "risks", false)?;
-    let _ = (checks, risks);
+    if stage_requires_closed_risks(packet.stage) && !risks.is_empty() {
+        return Err(WorkError::InvalidOutput(format!(
+            "packet {} cannot close with unresolved risks",
+            packet.id
+        )));
+    }
+    let _ = checks;
     Ok(ValidatedPacketOutput {
         context: output.trim().to_string(),
         files: Vec::new(),
     })
+}
+
+fn stage_requires_closed_risks(stage: crate::WorkStage) -> bool {
+    matches!(
+        stage,
+        crate::WorkStage::ClosureGroup
+            | crate::WorkStage::IntegrationClosure
+            | crate::WorkStage::ReleaseGroup
+            | crate::WorkStage::ReleaseVerification
+            | crate::WorkStage::Finalization
+    )
 }
 
 fn validate_manifest(
@@ -317,6 +334,28 @@ mod tests {
             &valid.replace("\"risks\":[]", "\"risks\":[],\"extra\":true")
         )
         .is_err());
+    }
+
+    #[test]
+    fn closure_envelopes_reject_self_reported_unresolved_risks() {
+        let mut plan =
+            WorkPlan::meticulous("Build an app", "provider-model-loop", &[], "fixture").unwrap();
+        plan.expand_files(vec![WorkFile {
+            path: "main.rs".into(),
+            purpose: "entry".into(),
+            acceptance: vec!["runs".into()],
+        }])
+        .unwrap();
+        let packet = plan
+            .packets
+            .iter()
+            .find(|packet| packet.stage == WorkStage::IntegrationClosure)
+            .unwrap();
+        let output = format!(
+            "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"result\":\"closed\",\"checks\":[\"checked\"],\"risks\":[\"API mismatch\"]}}",
+            packet.id
+        );
+        assert!(validate_packet_output(packet, &output).is_err());
     }
 
     #[test]

@@ -1412,7 +1412,7 @@ mod tests {
             runtime.state().last_work_plan_manifest,
             report.work_plan_manifest
         );
-        assert_eq!(runtime.state().last_work_packet_count, 13);
+        assert_eq!(runtime.state().last_work_packet_count, 19);
         assert!(runtime
             .bus()
             .envelopes()
@@ -1430,7 +1430,7 @@ mod tests {
                 .iter()
                 .filter(|env| env.kind == BusMessageKind::WorkPacketExecuted)
                 .count(),
-            13
+            report.packet_ids.len()
         );
         assert!(runtime
             .bus()

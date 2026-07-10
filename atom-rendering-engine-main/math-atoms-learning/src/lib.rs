@@ -264,7 +264,12 @@ impl LearningRecord {
                     && self.requires_work_evidence()
                     && (self.work_plan_id.trim().is_empty()
                         || self.work_plan_manifest.trim().is_empty()
-                        || self.work_packet_count < 13)
+                        || self.work_packet_count
+                            < if self.schema_version == LEARNING_SCHEMA_VERSION {
+                                19
+                            } else {
+                                13
+                            })
                 {
                     return Err(
                         "successful provider learning requires a verified meticulous work plan"

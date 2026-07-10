@@ -70,7 +70,7 @@ try {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         try {
-            for ($requestIndex = 0; $requestIndex -lt 13; $requestIndex++) {
+            for ($requestIndex = 0; $requestIndex -lt 19; $requestIndex++) {
                 $client = $listener.AcceptTcpClient()
                 try {
                     $stream = $client.GetStream()
@@ -89,7 +89,7 @@ try {
                         $read += $count
                     }
                     $request = ([string]::new($buffer, 0, $read)) | ConvertFrom-Json
-                    $prompt = [string]$request.messages[-1].content
+                    $prompt = [string]$request.messages[0].content
                     if ($prompt -notmatch '(?m)^Packet id: (?<packet>[^\r\n]+)$') { throw "missing packet id" }
                     $packetId = $Matches.packet.Trim()
                     if ($prompt -notmatch '(?m)^Stage: (?<stage>[^\r\n]+)$') { throw "missing packet stage" }
@@ -103,7 +103,7 @@ try {
                             risks = @()
                         } | ConvertTo-Json -Depth 8 -Compress
                     }
-                    elseif ($stage -in @("file-implementation", "file-correction")) {
+                    elseif ($stage -in @("file-implementation", "file-correction", "integration-correction", "final-correction")) {
                         $content = '```text' + "`nresumable provider proof`n" + '```'
                     }
                     else {
@@ -135,18 +135,18 @@ try {
 
     $first = Invoke-ResumeProbe
     $firstWork = Get-AtomWorkEvidence -ProviderText $first
-    if ($first -notmatch 'packets=13 executed=13 resumed=0') {
-        throw "first work run did not execute all 13 packets: $first"
+    if ($first -notmatch 'packets=19 executed=19 resumed=0') {
+        throw "first work run did not execute all 19 packets: $first"
     }
     $finished = Wait-Job -Job $ServerJob -Timeout 15
     if ($null -eq $finished -or $ServerJob.State -ne "Completed") {
-        throw "resume fixture server did not stop after exactly 13 requests"
+        throw "resume fixture server did not stop after exactly 19 requests"
     }
 
     $second = Invoke-ResumeProbe
     $secondWork = Get-AtomWorkEvidence -ProviderText $second
-    if ($second -notmatch 'packets=13 executed=0 resumed=13') {
-        throw "second work run did not resume all 13 packets: $second"
+    if ($second -notmatch 'packets=19 executed=0 resumed=19') {
+        throw "second work run did not resume all 19 packets: $second"
     }
     if ($firstWork.PlanId -ne $secondWork.PlanId -or $firstWork.Manifest -ne $secondWork.Manifest) {
         throw "resumed run changed its plan identity"
@@ -154,7 +154,7 @@ try {
     if ($second -notmatch 'resumable provider proof') {
         throw "resumed run did not reconstruct the verified deliverable"
     }
-    Write-Host "work packet resume ok: plan=$($secondWork.PlanId) executed=13 then resumed=13 with endpoint offline"
+    Write-Host "work packet resume ok: plan=$($secondWork.PlanId) executed=19 then resumed=19 with endpoint offline"
 }
 finally {
     if ($null -ne $ServerJob) {

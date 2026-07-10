@@ -10,7 +10,8 @@ use math_atoms_provider_transport::{
     MAX_PROVIDER_RESPONSE_BYTES,
 };
 use math_atoms_work::{
-    validate_secure_packet_output, CompletedPacket, WorkError, WorkPlan, WorkPlanStore, WorkStage,
+    validate_secure_packet_output, CompletedPacket, WorkError, WorkPlan, WorkPlanStore, WorkPrompt,
+    WorkStage,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,8 +331,8 @@ impl ProviderConfig {
             });
         }
         if !self.body_template.trim().is_empty()
-            && !self.body_template.contains("{{prompt}}")
-            && !self.body_template.contains("{{prompt_json}}")
+            && (!template_has_value(&self.body_template, "instructions")
+                || !template_has_value(&self.body_template, "data"))
         {
             return Err(ProviderError::InvalidBodyTemplate);
         }
@@ -761,7 +762,7 @@ fn default_response_key() -> &'static str {
 fn provider_body(
     format: ProviderWireFormat,
     model: &str,
-    prompt: &str,
+    prompt: &WorkPrompt,
     body_template: &str,
 ) -> String {
     if !body_template.trim().is_empty() {
@@ -777,44 +778,61 @@ fn provider_body(
     }
 }
 
-fn responses_body(model: &str, prompt: &str) -> String {
+fn responses_body(model: &str, prompt: &WorkPrompt) -> String {
     format!(
-        "{{\"model\":\"{}\",\"input\":[{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}],\"temperature\":0.1}}",
+        "{{\"model\":\"{}\",\"instructions\":\"{}\",\"input\":[{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}],\"temperature\":0.1}}",
         json_escape(model),
-        json_escape(prompt)
+        json_escape(&prompt.instructions),
+        json_escape(&prompt.data)
     )
 }
 
-fn ollama_chat_body(model: &str, prompt: &str) -> String {
+fn ollama_chat_body(model: &str, prompt: &WorkPrompt) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}],\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"stream\":false}}",
         json_escape(model),
-        json_escape(prompt)
+        json_escape(&prompt.instructions),
+        json_escape(&prompt.data)
     )
 }
 
-fn chat_completions_body(model: &str, prompt: &str) -> String {
+fn chat_completions_body(model: &str, prompt: &WorkPrompt) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}],\"temperature\":0.1,\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"temperature\":0.1,\"stream\":false}}",
         json_escape(model),
-        json_escape(prompt)
+        json_escape(&prompt.instructions),
+        json_escape(&prompt.data)
     )
 }
 
-fn deepseek_pro_body(model: &str, prompt: &str) -> String {
+fn deepseek_pro_body(model: &str, prompt: &WorkPrompt) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}],\"thinking\":{{\"type\":\"enabled\"}},\"reasoning_effort\":\"max\",\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"thinking\":{{\"type\":\"enabled\"}},\"reasoning_effort\":\"max\",\"stream\":false}}",
         json_escape(model),
-        json_escape(prompt)
+        json_escape(&prompt.instructions),
+        json_escape(&prompt.data)
     )
 }
 
-fn render_body_template(template: &str, model: &str, prompt: &str) -> String {
+fn render_body_template(template: &str, model: &str, prompt: &WorkPrompt) -> String {
     template
         .replace("{{model}}", &json_escape(model))
-        .replace("{{prompt}}", &json_escape(prompt))
+        .replace("{{instructions}}", &json_escape(&prompt.instructions))
+        .replace("{{data}}", &json_escape(&prompt.data))
         .replace("{{model_json}}", &format!("\"{}\"", json_escape(model)))
-        .replace("{{prompt_json}}", &format!("\"{}\"", json_escape(prompt)))
+        .replace(
+            "{{instructions_json}}",
+            &format!("\"{}\"", json_escape(&prompt.instructions)),
+        )
+        .replace(
+            "{{data_json}}",
+            &format!("\"{}\"", json_escape(&prompt.data)),
+        )
+}
+
+fn template_has_value(template: &str, name: &str) -> bool {
+    template.contains(&format!("{{{{{name}}}}}"))
+        || template.contains(&format!("{{{{{name}_json}}}}"))
 }
 
 fn json_escape(input: &str) -> String {
@@ -851,6 +869,25 @@ mod tests {
             .unwrap();
         assert!(call.body.contains("\"model\":\"gpt-5.5\""));
         assert!(call.body.contains("\"input\""));
+        let body = parse_json(&call.body).unwrap();
+        let instructions = body
+            .get("instructions")
+            .and_then(JsonValue::as_str)
+            .unwrap();
+        let user_data = body
+            .get("input")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("content"))
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(JsonValue::as_str)
+            .unwrap();
+        assert!(instructions.contains("Required output contract"));
+        assert!(!instructions.contains("Mission evidence"));
+        assert!(user_data.contains("Mission evidence"));
+        assert!(user_data.contains("provider api"));
         assert_eq!(config.wire_format, ProviderWireFormat::OpenAiResponses);
         assert_eq!(call.wire_format, ProviderWireFormat::OpenAiResponses);
         assert!(!call.body.contains("secret"));
@@ -1023,7 +1060,7 @@ mod tests {
             ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
             (
                 "MATH_ATOMS_PROVIDER_BODY_TEMPLATE",
-                "{\"m\":{{model_json}},\"p\":{{prompt_json}}}",
+                "{\"m\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}}}",
             ),
             ("MATH_ATOMS_PROVIDER_RESPONSE_KEY", "answer"),
             ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
@@ -1032,9 +1069,10 @@ mod tests {
             .prepare_call("template provider", "provider-model-loop", &[])
             .unwrap();
         assert_eq!(call.response_key, "answer");
-        assert!(call
-            .body
-            .starts_with("{\"m\":\"vibe-model\",\"p\":\"Atom Vibe Coder meticulous work packet."));
+        assert!(call.body.starts_with(
+            "{\"m\":\"vibe-model\",\"system\":\"Atom Vibe Coder trusted work-packet controller."
+        ));
+        assert!(call.body.contains("\"data\":\"{\\\"operator_request\\\""));
         assert_eq!(call.work_plan.as_ref().unwrap().packets.len(), 5);
         assert_eq!(
             parse_provider_text(
@@ -1076,7 +1114,7 @@ mod tests {
         let mut changed = base.to_vec();
         changed.push((
             "MATH_ATOMS_PROVIDER_BODY_TEMPLATE",
-            "{\"model\":{{model_json}},\"request\":{{prompt_json}}}",
+            "{\"model\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}},\"contract\":\"changed\"}",
         ));
         let second = ProviderConfig::from_pairs(&changed)
             .prepare_call("build an app", "provider-model-loop", &[])

@@ -95,7 +95,7 @@ try {
         $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $listener.Start()
         try {
-            for ($requestIndex = 0; $requestIndex -lt 52; $requestIndex++) {
+            for ($requestIndex = 0; $requestIndex -lt 76; $requestIndex++) {
                 $client = $listener.AcceptTcpClient()
                 try {
                     $stream = $client.GetStream()
@@ -115,7 +115,9 @@ try {
                     }
                     $requestBody = [string]::new($buffer, 0, $read)
                     $request = $requestBody | ConvertFrom-Json
-                    $prompt = [string]$request.messages[-1].content
+                    $instructions = [string]$request.messages[0].content
+                    $userData = [string]$request.messages[-1].content
+                    $prompt = $instructions + "`n" + $userData
                     if ($prompt -notmatch '(?m)^Packet id: (?<packet>[^\r\n]+)$') {
                         throw "work packet prompt is missing Packet id: $prompt"
                     }
@@ -148,7 +150,7 @@ try {
                             risks = @()
                         } | ConvertTo-Json -Depth 8 -Compress
                     }
-                    elseif ($stage -in @('file-implementation', 'file-correction')) {
+                    elseif ($stage -in @('file-implementation', 'file-correction', 'integration-correction', 'final-correction')) {
                         if ($isBluetooth) {
                             $content = '```rust' + "`n" + $bluetooth + "`n" + '```'
                         }
@@ -201,7 +203,7 @@ try {
 
     $job = Wait-Job -Job $ServerJob -Timeout 10
     if ($null -eq $job -or $ServerJob.State -ne "Completed") {
-        throw "local provider server did not complete 52 meticulous packet requests; state=$($ServerJob.State)"
+        throw "local provider server did not complete 76 meticulous packet requests; state=$($ServerJob.State)"
     }
     $records = @([System.IO.File]::ReadAllLines($LearningStore))
     if ($records.Count -ne 4) {

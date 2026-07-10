@@ -31,7 +31,7 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `scripts/Test-ProviderLearningLocal.ps1` runs the real provider adapter, console-app, PMRE-app, Bluetooth, and learning gates against an isolated local endpoint.
 - `scripts/Test-NativeLaunchEnvironment.ps1` proves the detached Win32 launcher inherits session-only provider and store settings.
 - `scripts/Test-NativeIdleCpu.ps1` measures the real minimized native process and rejects background rerender loops.
-- `scripts/Test-WorkPacketResume.ps1` executes 13 provider packets, takes the endpoint offline, then requires the identical plan to resume all 13 packets from revalidated evidence without a network request.
+- `scripts/Test-WorkPacketResume.ps1` executes every provider packet, takes the endpoint offline, then requires the identical plan to resume the full canonical DAG from revalidated evidence without a network request.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app through an environment-preserving detached Win32 process, preferring job breakaway when Windows permits it, with an explicit working directory.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
 - The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
@@ -45,9 +45,9 @@ Learning events move through explicit L0 observation, L1 persistence, L2 graph j
 
 ## Meticulous Work Packets
 
-One natural-language request always enters a fine-grained provider plan. Five base packets normalize intent, derive functional and quality contracts, define architecture, and return a strict relative-path file manifest. Each manifest file expands into contract, implementation, adversarial review, and correction packets. Corrected files feed bounded three-input hierarchical integration groups before integration, functional verification planning, hostile review, and finalization. A one-file product therefore requires 13 packets; larger products add four focused packets per file plus the required integration groups. There is no one-shot provider bypass.
+One natural-language request always enters a fine-grained provider plan. Five base packets normalize intent, derive functional and quality contracts, define architecture, and return a strict relative-path file manifest. Every file receives an initial review/correction, an integration-aware correction tied to its authoritative contract, and a final correction after functional and hostile review. Bounded three-input closure and release groups keep the context usable by small models. A one-file product requires 19 packets; larger products add six focused packets per file plus bounded integration, closure, and release groups. There is no one-shot provider bypass.
 
-Planning packets accept only exact ID-bound JSON schemas. File packets accept exactly one complete fenced file, reject credential material and placeholder markers, and otherwise remain byte-for-byte unchanged. Context is dependency-scoped and bounded, with untrusted context before the final contract. The schema-v2 work manifest is verified by reconstructing the canonical packet ID and dependency graph. The final deliverable is assembled from corrected file packets, so a small-context model does not need to regenerate an entire multi-file product in one response.
+Planning packets accept only exact ID-bound JSON schemas. File packets accept exactly one complete fenced file, reject credential material and incomplete-code markers, and otherwise remain byte-for-byte unchanged. Trusted packet control is sent in the provider system/instructions role; the operator request, graph evidence, and prior output are encoded as data in a separate user role. The schema-v3 work manifest is verified by reconstructing the canonical packet ID and dependency graph. The final deliverable is assembled only from final-correction packets, so a small-context model never has to regenerate an entire multi-file product in one response.
 
 ## Complex Build Recipes
 
@@ -91,7 +91,7 @@ $env:MATH_ATOMS_PROVIDER_KEY_ENV="MY_PROVIDER_API_KEY"
 $env:MATH_ATOMS_PROVIDER_AUTH_HEADER="Authorization"
 $env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style headers
 $env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="answer" # optional top-level response key for a custom provider
-$env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"prompt":{{prompt_json}}}'
+$env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"system":{{instructions_json}},"data":{{data_json}}}'
 $env:MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS="900" # optional, bounded to 10..1800 seconds
 ```
 

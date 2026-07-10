@@ -696,7 +696,7 @@ fn proof_record_is_positive_evidence(record: &ProofRecord) -> bool {
             .unwrap_or(false)
         && record.provider_output_len > 0
         && record.work_plan_id.starts_with("work-")
-        && record.work_packet_count >= 13
+        && record.work_packet_count >= 19
         && verify_work_plan_evidence(
             &record.work_plan_manifest,
             &record.work_plan_id,

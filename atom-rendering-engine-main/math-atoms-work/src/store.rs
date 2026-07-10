@@ -302,7 +302,10 @@ fn validate_packet_schedule(
     descriptors: &[WorkPacket],
     files: &[crate::WorkFile],
 ) -> Result<(), WorkError> {
-    let expected_count = 9 + files.len() * 4 + integration_group_count(files.len());
+    let expected_count = 11
+        + files.len() * 6
+        + integration_group_count(files.len())
+        + reduction_to_one_count(files.len()) * 2;
     if files.is_empty() || descriptors.len() != expected_count {
         return Err(WorkError::InvalidPlan(format!(
             "work packet schedule does not match manifest files: expected {expected_count}, got {}",
@@ -342,14 +345,82 @@ fn validate_packet_schedule(
         )?;
         index += 1;
     }
-    for (stage, contract) in [
-        (WorkStage::Integration, PacketContract::Envelope),
-        (WorkStage::Verification, PacketContract::Envelope),
-        (WorkStage::AdversarialReview, PacketContract::Envelope),
-        (WorkStage::Finalization, PacketContract::Envelope),
-    ] {
-        expect_descriptor(&descriptors[index], index, stage, contract, "")?;
+    expect_descriptor(
+        &descriptors[index],
+        index,
+        WorkStage::Integration,
+        PacketContract::Envelope,
+        "",
+    )?;
+    index += 1;
+    for file in files {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            WorkStage::IntegrationCorrection,
+            PacketContract::FileArtifact,
+            &file.path,
+        )?;
         index += 1;
+    }
+    for _ in 0..reduction_to_one_count(files.len()) {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            WorkStage::ClosureGroup,
+            PacketContract::Envelope,
+            "",
+        )?;
+        index += 1;
+    }
+    for stage in [
+        WorkStage::IntegrationClosure,
+        WorkStage::Verification,
+        WorkStage::AdversarialReview,
+    ] {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            stage,
+            PacketContract::Envelope,
+            "",
+        )?;
+        index += 1;
+    }
+    for file in files {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            WorkStage::FinalCorrection,
+            PacketContract::FileArtifact,
+            &file.path,
+        )?;
+        index += 1;
+    }
+    for _ in 0..reduction_to_one_count(files.len()) {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            WorkStage::ReleaseGroup,
+            PacketContract::Envelope,
+            "",
+        )?;
+        index += 1;
+    }
+    for stage in [WorkStage::ReleaseVerification, WorkStage::Finalization] {
+        expect_descriptor(
+            &descriptors[index],
+            index,
+            stage,
+            PacketContract::Envelope,
+            "",
+        )?;
+        index += 1;
+    }
+    if index != descriptors.len() {
+        return Err(WorkError::InvalidPlan(
+            "work packet schedule has trailing descriptors".to_string(),
+        ));
     }
     Ok(())
 }
@@ -361,6 +432,17 @@ fn integration_group_count(mut inputs: usize) -> usize {
         total += inputs;
     }
     total
+}
+
+fn reduction_to_one_count(mut inputs: usize) -> usize {
+    let mut total = 0;
+    loop {
+        inputs = inputs.div_ceil(3);
+        total += inputs;
+        if inputs == 1 {
+            return total;
+        }
+    }
 }
 
 fn expect_descriptor(
@@ -870,7 +952,7 @@ mod tests {
                 .unwrap();
         }
         let verified = verify_work_plan_evidence(&manifest, &plan.id, plan.packets.len()).unwrap();
-        assert_eq!(verified.packet_count, 13);
+        assert_eq!(verified.packet_count, 19);
         assert_eq!(verified.model, "fixture-model");
         let tampered = fs::read_to_string(&manifest).unwrap().replacen(
             "\"stage\":\"file-contract\"",
