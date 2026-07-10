@@ -1,6 +1,7 @@
 use math_atoms_core::{
-    provider_output_hash, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
-    ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus,
+    provider_output_hash, LearningOutcome, LearningRecord, LearningRecordInput, LearningStore,
+    LearningSummary, MathAtomsRuntime, PreparedProviderCall, ProofRecord, ProofStore,
+    ProviderConfig, ProviderConfigInput, ProviderError, RuntimeStatus, WikiGraph,
 };
 use pmre_orchestrator::{
     UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
@@ -52,6 +53,8 @@ pub fn default_intent() -> &'static str {
 pub struct NativeApp {
     pub runtime: MathAtomsRuntime,
     pub store: Option<ProofStore>,
+    pub learning_store: Option<LearningStore>,
+    pub learning_records: Vec<LearningRecord>,
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
@@ -60,6 +63,7 @@ pub struct NativeApp {
     pub active_main_tab: MainTab,
     pub active_settings_tab: SettingsTab,
     pub side_artifacts: Vec<SideArtifact>,
+    last_intent: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,9 +114,10 @@ impl StoreOutcome {
 
 impl NativeApp {
     pub fn from_process_env() -> Self {
-        Self::new_with_store(
+        Self::new_with_stores(
             ProviderConfig::from_process_env(),
             Some(ProofStore::new(ProofStore::default_path())),
+            Some(LearningStore::new(LearningStore::default_path())),
         )
     }
 
@@ -121,11 +126,36 @@ impl NativeApp {
         Self::new_with_store(provider, None)
     }
 
+    #[cfg(test)]
     pub fn new_with_store(provider: ProviderConfig, store: Option<ProofStore>) -> Self {
+        let learning_store = store
+            .as_ref()
+            .map(|proof_store| LearningStore::beside(proof_store.path()));
+        Self::new_with_stores(provider, store, learning_store)
+    }
+
+    pub fn new_with_stores(
+        provider: ProviderConfig,
+        store: Option<ProofStore>,
+        learning_store: Option<LearningStore>,
+    ) -> Self {
         let last_provider_output = initial_provider_output(&provider);
+        let learning_records = learning_store
+            .as_ref()
+            .and_then(|ledger| ledger.read_records().ok())
+            .unwrap_or_default();
+        let runtime = match (&store, &learning_store) {
+            (Some(proofs), Some(learning)) => {
+                MathAtomsRuntime::with_stores(provider, proofs.clone(), learning.clone())
+            }
+            (Some(proofs), None) => MathAtomsRuntime::with_proof_store(provider, proofs.clone()),
+            _ => MathAtomsRuntime::with_graph(provider, WikiGraph::from_default_dirs()),
+        };
         Self {
-            runtime: MathAtomsRuntime::new(provider),
+            runtime,
             store,
+            learning_store,
+            learning_records,
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output,
             provider_running: false,
@@ -134,6 +164,7 @@ impl NativeApp {
             active_main_tab: MainTab::Workspace,
             active_settings_tab: SettingsTab::ProviderConnections,
             side_artifacts: load_side_artifacts(),
+            last_intent: String::new(),
         }
     }
 
@@ -149,8 +180,9 @@ impl NativeApp {
 
     pub fn run_current_intent(&mut self, ui: &UiState) {
         let intent = current_intent(ui);
+        self.last_intent = intent.clone();
         let proof = self.runtime.run_intent(&intent);
-        let store_result = self.append_proof_record();
+        let store_result = self.append_proof_record(true);
         self.last_run_summary = if self.status() == RuntimeStatus::Proven {
             format!(
                 "{} proven with {} evidence nodes through {} route envelopes. {}",
@@ -269,7 +301,7 @@ impl NativeApp {
                     .to_string();
             return;
         }
-        let store_result = self.append_proof_record();
+        let store_result = self.append_proof_record(false);
         self.last_run_summary = if matches!(store_result, StoreOutcome::Blocked(_)) {
             format!("Capture blocked: {}", store_result.message())
         } else {
@@ -320,7 +352,7 @@ impl NativeApp {
             }
         };
         self.provider_running = false;
-        let _ = self.append_proof_record();
+        let _ = self.append_proof_record(true);
     }
 
     pub fn begin_design_upload_build(
@@ -430,26 +462,129 @@ impl NativeApp {
         format!("artifacts:{}", self.side_artifacts.len())
     }
 
-    fn append_proof_record(&mut self) -> StoreOutcome {
+    pub fn learning_summary(&self) -> LearningSummary {
+        LearningSummary::from_records(&self.learning_records)
+    }
+
+    fn append_proof_record(&mut self, learn: bool) -> StoreOutcome {
         let record = self.current_proof_record();
-        let Some(store) = &self.store else {
-            self.runtime.learn_proof_record(&record);
-            return StoreOutcome::Memory;
-        };
-        match store.append(&record) {
-            Ok(()) => {
-                self.runtime.learn_proof_record(&record);
-                StoreOutcome::Written
+        let outcome = if let Some(store) = &self.store {
+            match store.append(&record) {
+                Ok(()) => StoreOutcome::Written,
+                Err(error) => {
+                    let reason = format!(
+                        "Persistent proof store write failed at {}: {error}",
+                        store.path().display()
+                    );
+                    self.runtime.mark_store_blocked(&reason);
+                    return StoreOutcome::Blocked(reason);
+                }
             }
-            Err(error) => {
-                let reason = format!(
-                    "Persistent proof store write failed at {}: {error}",
-                    store.path().display()
-                );
+        } else {
+            StoreOutcome::Memory
+        };
+        self.runtime.learn_proof_record(&record);
+        if learn {
+            if let Err(reason) = self.append_learning_record() {
                 self.runtime.mark_store_blocked(&reason);
-                StoreOutcome::Blocked(reason)
+                return StoreOutcome::Blocked(reason);
             }
         }
+        outcome
+    }
+
+    fn append_learning_record(&mut self) -> Result<(), String> {
+        let Some(record) = self.current_learning_record() else {
+            return Ok(());
+        };
+        if let Some(store) = &self.learning_store {
+            store.append(&record).map_err(|error| {
+                format!(
+                    "Persistent learning store write failed at {}: {error}",
+                    store.path().display()
+                )
+            })?;
+            let records = store.read_records().map_err(|error| {
+                format!(
+                    "Persistent learning store readback failed at {}: {error}",
+                    store.path().display()
+                )
+            })?;
+            if records.last() != Some(&record) {
+                return Err("Persistent learning store readback did not match append".to_string());
+            }
+        }
+        self.runtime.learn_learning_record(&record);
+        self.learning_records.push(record);
+        Ok(())
+    }
+
+    fn current_learning_record(&self) -> Option<LearningRecord> {
+        let state = self.runtime.state();
+        let outcome = match state.status {
+            RuntimeStatus::Proven => LearningOutcome::Succeeded,
+            RuntimeStatus::Blocked => LearningOutcome::Failed,
+            _ => return None,
+        };
+        let provider_gate = state.last_provider_call.is_some()
+            || state
+                .blockers
+                .iter()
+                .any(|blocker| blocker.to_ascii_lowercase().contains("provider"));
+        let gate = if provider_gate {
+            "native-provider-execution"
+        } else {
+            "native-proof-route"
+        };
+        let attempt = self
+            .learning_records
+            .iter()
+            .filter(|record| record.intent == self.last_intent && record.gate == gate)
+            .count() as u32
+            + 1;
+        let correction = if outcome == LearningOutcome::Succeeded {
+            self.learning_records
+                .iter()
+                .rev()
+                .find(|record| {
+                    record.intent == self.last_intent
+                        && record.gate == gate
+                        && record.outcome == LearningOutcome::Failed
+                })
+                .map(|record| record.failure.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let failure = if outcome == LearningOutcome::Failed {
+            let blockers = state.blockers.join("; ");
+            if blockers.is_empty() {
+                self.last_provider_output.clone()
+            } else {
+                blockers
+            }
+        } else {
+            String::new()
+        };
+        Some(LearningRecord::new(LearningRecordInput {
+            source: "native-app".to_string(),
+            intent: self.last_intent.clone(),
+            recipe_id: state.selected_recipe.clone(),
+            atom_stack: state.selected_atoms.clone(),
+            gate: gate.to_string(),
+            attempt,
+            outcome,
+            failure,
+            correction,
+            artifact_path: String::new(),
+            artifact_hash: state.last_provider_output_hash.clone(),
+            provider_model: state
+                .last_provider_call
+                .as_ref()
+                .map(|call| call.model.clone())
+                .unwrap_or_default(),
+            route_len: state.last_route.len(),
+        }))
     }
 
     fn current_proof_record(&self) -> ProofRecord {
@@ -1021,6 +1156,7 @@ mod tests {
                 .as_nanos()
         ));
         let store = ProofStore::new(&path);
+        let learning_path = LearningStore::beside(&path).path().to_path_buf();
         let mut app = NativeApp::new_with_store(
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
@@ -1030,6 +1166,7 @@ mod tests {
         app.run_current_intent(&ui);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
+        std::fs::remove_file(learning_path).ok();
         assert!(text.contains("\"status\":\"provider pending\""));
         assert!(text.contains("\"recipe_id\":"));
     }
@@ -1081,6 +1218,7 @@ mod tests {
                 .as_nanos()
         ));
         let store = ProofStore::new(&path);
+        let learning_path = LearningStore::beside(&path).path().to_path_buf();
         let mut app = NativeApp::new_with_store(
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
@@ -1091,9 +1229,10 @@ mod tests {
         assert_eq!(app.status(), RuntimeStatus::ProviderPending);
         app.runtime.mark_provider_blocked("test");
         app.last_provider_output = "Provider blocked: test".to_string();
-        let _ = app.append_proof_record();
+        let _ = app.append_proof_record(true);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
+        std::fs::remove_file(learning_path).ok();
         assert!(text.contains("\"status\":\"blocked\""));
         assert!(text.contains("\"provider_state\":\"provider:blocked\""));
     }
@@ -1109,6 +1248,7 @@ mod tests {
                 .as_nanos()
         ));
         let store = ProofStore::new(&path);
+        let learning_path = LearningStore::beside(&path).path().to_path_buf();
         let mut app = NativeApp::new_with_store(
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
@@ -1121,6 +1261,7 @@ mod tests {
         assert_eq!(app.status(), RuntimeStatus::Proven);
         let text = store.read_to_string().unwrap();
         std::fs::remove_file(&path).ok();
+        std::fs::remove_file(learning_path).ok();
         assert!(text.contains("\"provider_state\":\"provider:ran\""));
         assert!(text.contains("\"provider_model\":"));
         assert!(text.contains("\"provider_output_hash\":\"fnv:"));
@@ -1144,6 +1285,7 @@ mod tests {
                 .as_nanos()
         ));
         let store = ProofStore::new(&path);
+        let learning_path = LearningStore::beside(&path).path().to_path_buf();
         let mut app = NativeApp::new_with_store(
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(store.clone()),
@@ -1156,9 +1298,66 @@ mod tests {
         app.capture_current_proof();
         let after = store.read_records().unwrap().len();
         std::fs::remove_file(&path).ok();
+        std::fs::remove_file(learning_path).ok();
         assert_eq!(after, before + 1);
         assert!(app
             .last_run_summary
             .contains("Captured current proof route"));
+    }
+
+    #[test]
+    fn failed_attempt_is_retrieved_after_restart_and_corrected() {
+        let proof_path = std::env::temp_dir().join(format!(
+            "math-atoms-learning-restart-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let learning_path = LearningStore::beside(&proof_path).path().to_path_buf();
+        let proofs = ProofStore::new(&proof_path);
+        let learning = LearningStore::new(&learning_path);
+        let mut first = NativeApp::new_with_stores(
+            ProviderConfig::from_pairs(&[]),
+            Some(proofs.clone()),
+            Some(learning.clone()),
+        );
+        let mut ui = UiState::new(1200, 800);
+        first.seed_input(&mut ui);
+        first.run_current_intent(&ui);
+        assert_eq!(first.learning_summary().failed, 1);
+        assert!(first.runtime.bus().envelopes().iter().any(|envelope| {
+            envelope.kind == math_atoms_core::BusMessageKind::LearningPersisted
+        }));
+        assert!(first
+            .runtime
+            .bus()
+            .route_contains_all_layers(*first.runtime.state().last_route.last().unwrap()));
+        drop(first);
+
+        let mut restarted = NativeApp::new_with_stores(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(proofs),
+            Some(learning.clone()),
+        );
+        restarted.seed_input(&mut ui);
+        restarted.run_current_intent(&ui);
+        assert!(restarted
+            .runtime
+            .state()
+            .evidence
+            .iter()
+            .any(|item| item.node_id.starts_with("learning:failed:")));
+        restarted.complete_provider_execution(Ok("corrected provider output".to_string()));
+        let records = learning.read_records().unwrap();
+        assert_eq!(LearningSummary::from_records(&records).failed, 1);
+        assert_eq!(LearningSummary::from_records(&records).succeeded, 1);
+        assert!(records.last().unwrap().correction.contains("credential"));
+        let before_capture = records.len();
+        restarted.capture_current_proof();
+        assert_eq!(learning.read_records().unwrap().len(), before_capture);
+        std::fs::remove_file(proof_path).ok();
+        std::fs::remove_file(learning_path).ok();
     }
 }

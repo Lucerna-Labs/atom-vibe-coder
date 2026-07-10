@@ -21,6 +21,7 @@ $TestStoreDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-native-
 $RunLogDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-native-functional-logs-" + [Guid]::NewGuid().ToString("N"))
 $StdOutLog = Join-Path $RunLogDir "native.out.log"
 $StdErrLog = Join-Path $RunLogDir "native.err.log"
+. (Join-Path $PSScriptRoot "Native-Process.ps1")
 New-Item -ItemType Directory -Path $RunLogDir -Force | Out-Null
 $env:MATH_ATOMS_STORE_DIR = $TestStoreDir
 $env:MATH_ATOMS_PROVIDER_KIND = "openai"
@@ -48,7 +49,7 @@ finally {
     Pop-Location
 }
 
-$proc = Start-Process -FilePath $Exe -WorkingDirectory $Engine -RedirectStandardOutput $StdOutLog -RedirectStandardError $StdErrLog -PassThru
+$proc = Start-AtomNativeProcess -FilePath $Exe -WorkingDirectory $Engine -StdOutLog $StdOutLog -StdErrLog $StdErrLog
 $NativePid = $proc.Id
 $WindowDeadline = [DateTime]::UtcNow.AddSeconds(20)
 do {
@@ -61,8 +62,9 @@ do {
         $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
         throw "Native app exited before creating a main window for pid $NativePid. stdout: $stdout stderr: $stderr"
     }
-} while (($proc.MainWindowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
-if ($proc.MainWindowHandle -eq 0) {
+    $windowHandle = Get-AtomNativeWindowHandle -Process $proc
+} while (($windowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
+if ($windowHandle -eq 0) {
     $stdout = if (Test-Path -LiteralPath $StdOutLog) { Get-Content -LiteralPath $StdOutLog -Raw } else { "" }
     $stderr = if (Test-Path -LiteralPath $StdErrLog) { Get-Content -LiteralPath $StdErrLog -Raw } else { "" }
     throw "Native app launched without a main window handle after 20s. stdout: $stdout stderr: $stderr"
@@ -121,6 +123,14 @@ function Get-ProofRecordCount() {
     return @([System.IO.File]::ReadLines($path)).Count
 }
 
+function Get-LearningRecordCount() {
+    $path = Join-Path $TestStoreDir "MathAtomsCoder\learning.jsonl"
+    if (-not (Test-Path -LiteralPath $path)) {
+        return 0
+    }
+    return @([System.IO.File]::ReadLines($path)).Count
+}
+
 function Get-ExpectedArtifactCount() {
     if (-not (Test-Path -LiteralPath $ArtifactManifest)) {
         return 0
@@ -143,7 +153,7 @@ function Test-DesignArtifactRow() {
 function Refresh-NativeProcess([string]$Stage) {
     try {
         $refreshed = Get-Process -Id $script:NativePid -ErrorAction Stop
-        if ($refreshed.MainWindowHandle -eq 0) {
+        if ((Get-AtomNativeWindowHandle -Process $refreshed) -eq 0) {
             throw "Native app lost its main window handle during $Stage"
         }
         return $refreshed
@@ -161,133 +171,157 @@ function Wait-ForTitlePattern([string]$Pattern, [string]$Stage, [int]$Seconds = 
     do {
         Start-Sleep -Seconds 1
         $script:proc = Refresh-NativeProcess $Stage
-        if ($script:proc.MainWindowTitle -match $Pattern) {
+        if ((Get-AtomNativeWindowTitle -Process $script:proc) -match $Pattern) {
             return $script:proc
         }
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "$Stage did not reach expected title pattern '$Pattern'. Title: $($script:proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $script:proc
+    throw "$Stage did not reach expected title pattern '$Pattern'. Title: $title"
 }
 
 try {
     $expectedArtifactCount = Get-ExpectedArtifactCount
     if ($expectedArtifactCount -gt 0) {
-        Start-Sleep -Seconds 1
-        $proc = Refresh-NativeProcess "side artifact window load"
-        if ($proc.MainWindowTitle -notmatch "artifacts:$expectedArtifactCount") {
-            throw "Side artifact window did not load $expectedArtifactCount generated app artifacts. Title: $($proc.MainWindowTitle)"
-        }
+        $proc = Wait-ForTitlePattern "artifacts:$expectedArtifactCount" "side artifact window load" 20
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandSettingsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Settings tab command"
-    if ($proc.MainWindowTitle -notmatch "settings-runtime") {
-        throw "Settings tab did not expose runtime settings as the default settings panel. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "settings-runtime") {
+        throw "Settings tab did not expose runtime settings as the default settings panel. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandRuntimeSettingsTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandRuntimeSettingsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Runtime settings tab command"
-    if ($proc.MainWindowTitle -notmatch "settings-runtime") {
-        throw "Runtime settings tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "settings-runtime") {
+        throw "Runtime settings tab did not update native navigation state. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandProviderConnectionsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Provider connections tab command"
-    if ($proc.MainWindowTitle -notmatch "provider-connections") {
-        throw "Provider connections tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider-connections") {
+        throw "Provider connections tab did not update native navigation state. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandDesignUploadTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandDesignUploadTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Design Upload settings tab command"
-    if ($proc.MainWindowTitle -notmatch "design-upload") {
-        throw "Design Upload tab did not update native navigation state. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "design-upload") {
+        throw "Design Upload tab did not update native navigation state. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandBuildDesignUpload
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandBuildDesignUpload
     $proc = Wait-ForTitlePattern "design:built" "Build Design Upload" 120
     if (-not (Test-DesignArtifactRow)) {
         throw "Build Design Upload did not write the uploaded-design-app artifact manifest row"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandWorkspaceTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Workspace tab command"
-    if ($proc.MainWindowTitle -notmatch "assistant") {
-        throw "Workspace tab did not return to the assistant surface. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "assistant") {
+        throw "Workspace tab did not return to the assistant surface. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandSettingsTab
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandProviderConnectionsTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandSettingsTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandProviderConnectionsTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Provider settings before apply"
-    if ($proc.MainWindowTitle -notmatch "provider-connections") {
-        throw "Provider apply path was not on the provider connections settings tab. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider-connections") {
+        throw "Provider apply path was not on the provider connections settings tab. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandApplyProvider
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandApplyProvider
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Apply Provider"
-    if ($proc.MainWindowTitle -notmatch "provider:(idle|blocked)") {
-        throw "Apply Provider control did not update provider setup state. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider:(idle|blocked)") {
+        throw "Apply Provider control did not update provider setup state. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle $CommandWorkspaceTab
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) $CommandWorkspaceTab
     Start-Sleep -Seconds 1
     $proc = Refresh-NativeProcess "Workspace tab after provider apply"
 
-    Clear-Intent $proc.MainWindowHandle
-    Send-Text $proc.MainWindowHandle "native renderer artifact only"
-    Send-WmChar $proc.MainWindowHandle 13
+    $windowHandle = Get-AtomNativeWindowHandle -Process $proc
+    Clear-Intent $windowHandle
+    Send-Text $windowHandle "native renderer artifact only"
+    Send-WmChar $windowHandle 13
     Start-Sleep -Seconds 2
     $proc = Refresh-NativeProcess "typed native intent"
-    if ($proc.MainWindowTitle -notmatch "native-atom-renderer") {
-        throw "Typed native intent did not select native-atom-renderer. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "native-atom-renderer") {
+        throw "Typed native intent did not select native-atom-renderer. Title: $title"
     }
 
-    Clear-Intent $proc.MainWindowHandle
-    Send-Text $proc.MainWindowHandle "provider model wiki graph rag from typed input"
-    Invoke-NativeCommand $proc.MainWindowHandle 2
+    $windowHandle = Get-AtomNativeWindowHandle -Process $proc
+    Clear-Intent $windowHandle
+    Send-Text $windowHandle "provider model wiki graph rag from typed input"
+    Invoke-NativeCommand $windowHandle 2
     Start-Sleep -Seconds 2
     $proc = Refresh-NativeProcess "Run command"
-    if ($proc.MainWindowTitle -notmatch "provider pending") {
-        throw "Run button did not reach provider pending state before execution. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider pending") {
+        throw "Run button did not reach provider pending state before execution. Title: $title"
     }
-    if ($proc.MainWindowTitle -notmatch "provider-model-loop") {
-        throw "Typed provider intent did not select provider-model-loop. Title: $($proc.MainWindowTitle)"
+    if ($title -notmatch "provider-model-loop") {
+        throw "Typed provider intent did not select provider-model-loop. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle 3
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) 3
     Start-Sleep -Seconds 15
     $proc = Refresh-NativeProcess "Provider command"
-    if ($proc.MainWindowTitle -notmatch "provider:(ran|blocked)") {
-        throw "Provider button did not reach ran/blocked state. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider:(ran|blocked)") {
+        throw "Provider button did not reach ran/blocked state. Title: $title"
     }
     if (-not $proc.Responding) {
         throw "Native app stopped responding after provider action"
     }
 
+    $learningPath = Join-Path $TestStoreDir "MathAtomsCoder\learning.jsonl"
+    $beforeCaptureLearning = Get-LearningRecordCount
+    if ($beforeCaptureLearning -lt 2) {
+        throw "Native runs did not persist both successful and failed learning events. Count: $beforeCaptureLearning"
+    }
+    $learningText = Get-Content -LiteralPath $learningPath -Raw
+    if ($learningText -notmatch '"outcome":"succeeded"' -or $learningText -notmatch '"outcome":"failed"') {
+        throw "Native learning ledger did not contain both terminal outcomes: $learningText"
+    }
+
     $beforeCapture = Get-ProofRecordCount
-    Invoke-NativeCommand $proc.MainWindowHandle 4
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) 4
     Start-Sleep -Seconds 2
     $afterCapture = Get-ProofRecordCount
     if ($afterCapture -le $beforeCapture) {
         throw "Capture button did not append a proof record after provider completion/block. Before: $beforeCapture After: $afterCapture"
     }
+    $afterCaptureLearning = Get-LearningRecordCount
+    if ($afterCaptureLearning -ne $beforeCaptureLearning) {
+        throw "Capture duplicated a learning event. Before: $beforeCaptureLearning After: $afterCaptureLearning"
+    }
 
-    Invoke-NativeCommand $proc.MainWindowHandle 5
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) 5
     Start-Sleep -Seconds 2
     $proc = Refresh-NativeProcess "Drift command"
-    if ($proc.MainWindowTitle -notmatch "drift flagged") {
-        throw "Drift button did not mark drift. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "drift flagged") {
+        throw "Drift button did not mark drift. Title: $title"
     }
     if (-not $proc.Responding) {
         throw "Native app stopped responding after drift action"
     }
 
-    Write-Host "native functional ok: $($proc.MainWindowTitle)"
+    Write-Host "native functional ok: $(Get-AtomNativeWindowTitle -Process $proc)"
 }
 finally {
     if (-not $LeaveRunning) {

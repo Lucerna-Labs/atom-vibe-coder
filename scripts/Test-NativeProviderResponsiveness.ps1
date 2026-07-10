@@ -76,14 +76,16 @@ try {
         }
     } -ArgumentList $Port
 
-    $proc = Start-Process -FilePath $Exe -WorkingDirectory $Engine -PassThru
+    . (Join-Path $PSScriptRoot "Native-Process.ps1")
+    $proc = Start-AtomNativeProcess -FilePath $Exe -WorkingDirectory $Engine
     $NativePid = $proc.Id
     $WindowDeadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
         Start-Sleep -Milliseconds 250
         $proc = Get-Process -Id $NativePid -ErrorAction Stop
-    } while (($proc.MainWindowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
-    if ($proc.MainWindowHandle -eq 0) {
+        $windowHandle = Get-AtomNativeWindowHandle -Process $proc
+    } while (($windowHandle -eq 0 -or -not $proc.Responding) -and [DateTime]::UtcNow -lt $WindowDeadline)
+    if ($windowHandle -eq 0) {
         throw "Native app launched without a main window handle after 20s"
     }
     if (-not $proc.Responding) {
@@ -116,33 +118,36 @@ public static class MathAtomsProviderResponsive {
         [MathAtomsProviderResponsive]::PostMessage($Handle, 0x804A, [UIntPtr]::new($Command), [IntPtr]::Zero) | Out-Null
     }
 
-    Clear-Intent $proc.MainWindowHandle
-    Send-Text $proc.MainWindowHandle "provider model wiki graph rag responsiveness"
-    Invoke-NativeCommand $proc.MainWindowHandle 2
+    Clear-Intent $windowHandle
+    Send-Text $windowHandle "provider model wiki graph rag responsiveness"
+    Invoke-NativeCommand $windowHandle 2
     Start-Sleep -Seconds 2
     $proc = Get-Process -Id $proc.Id
-    if ($proc.MainWindowTitle -notmatch "provider-model-loop") {
-        throw "Provider intent did not prepare provider route. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider-model-loop") {
+        throw "Provider intent did not prepare provider route. Title: $title"
     }
 
-    Invoke-NativeCommand $proc.MainWindowHandle 3
+    Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) 3
     Start-Sleep -Seconds 1
     $proc = Get-Process -Id $proc.Id
     if (-not $proc.Responding) {
         throw "Native app stopped responding during slow provider request"
     }
-    if ($proc.MainWindowTitle -notmatch "provider:running") {
-        throw "Native app did not show provider running state during slow request. Title: $($proc.MainWindowTitle)"
+    $title = Get-AtomNativeWindowTitle -Process $proc
+    if ($title -notmatch "provider:running") {
+        throw "Native app did not show provider running state during slow request. Title: $title"
     }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
         Start-Sleep -Milliseconds 250
         $proc = Get-Process -Id $proc.Id
-    } while ($proc.MainWindowTitle -notmatch "provider:ran" -and [DateTime]::UtcNow -lt $deadline)
+        $title = Get-AtomNativeWindowTitle -Process $proc
+    } while ($title -notmatch "provider:ran" -and [DateTime]::UtcNow -lt $deadline)
 
-    if ($proc.MainWindowTitle -notmatch "provider:ran") {
-        throw "Native app did not complete slow provider request. Title: $($proc.MainWindowTitle)"
+    if ($title -notmatch "provider:ran") {
+        throw "Native app did not complete slow provider request. Title: $title"
     }
     if (-not $proc.Responding) {
         throw "Native app stopped responding after slow provider request"
@@ -169,7 +174,7 @@ public static class MathAtomsProviderResponsive {
         throw "Slow provider proof did not record output length. Tail: $tail"
     }
 
-    Write-Host "native provider responsiveness ok: $($proc.MainWindowTitle)"
+    Write-Host "native provider responsiveness ok: $(Get-AtomNativeWindowTitle -Process $proc)"
 }
 finally {
     Get-Process -Name math-atoms-native -ErrorAction SilentlyContinue | Stop-Process -Force

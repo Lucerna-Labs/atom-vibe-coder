@@ -447,6 +447,27 @@ fn full_provider(app: &NativeApp, ui: &UiState) -> UxNode {
 
 fn full_wiki(app: &NativeApp) -> UxNode {
     let mut rows = wiki_rows(app);
+    let learning = app.learning_summary();
+    rows.push(section_label("DURABLE LEARNING"));
+    if app.learning_records.is_empty() {
+        rows.push(mini_card(
+            "no learned attempts",
+            "Terminal build results will appear here after a real gate runs.",
+            muted(),
+        ));
+    } else {
+        rows.extend(app.learning_records.iter().rev().take(8).map(|record| {
+            mini_card(
+                &record.title(),
+                &record.excerpt(),
+                if record.outcome == math_atoms_core::LearningOutcome::Succeeded {
+                    teal()
+                } else {
+                    red()
+                },
+            )
+        }));
+    }
     rows.insert(
         0,
         UxNode::boxed(
@@ -458,7 +479,9 @@ fn full_wiki(app: &NativeApp) -> UxNode {
                     lamp(),
                 ),
                 compact_metric("recipes", recipes().len().to_string(), teal()),
-                compact_metric("gates", gates().len().to_string(), blue()),
+                compact_metric("learned", learning.total.to_string(), blue()),
+                compact_metric("passed", learning.succeeded.to_string(), teal()),
+                compact_metric("failed", learning.failed.to_string(), red()),
             ],
         ),
     );
@@ -679,6 +702,7 @@ fn design_upload_panel(app: &NativeApp, ui: &UiState) -> Vec<UxNode> {
 }
 
 fn runtime_settings_panel(app: &NativeApp) -> Vec<UxNode> {
+    let learning = app.learning_summary();
     vec![
         UxNode::boxed(
             Style::row().gap(10.0),
@@ -706,6 +730,14 @@ fn runtime_settings_panel(app: &NativeApp) -> Vec<UxNode> {
             "proof store",
             &app.last_run_summary,
             status_color(app.status()),
+        ),
+        mini_card(
+            "learning ledger",
+            &format!(
+                "{} durable events: {} passed, {} failed. Relevant lessons feed the next Wiki Graph RAG route.",
+                learning.total, learning.succeeded, learning.failed
+            ),
+            lamp(),
         ),
         blocker_list(app),
     ]
