@@ -6,6 +6,7 @@
 
 pub mod domain;
 pub mod provider;
+mod provider_verification;
 pub mod runtime;
 
 pub use domain::{
@@ -22,12 +23,13 @@ pub use math_atoms_learning::{
     LearningRecordInput, LearningStore, LearningSummary, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 pub use math_atoms_proof::{ProofRecord, ProofStore};
+pub use math_atoms_verification::{CandidateFile, CandidateVerifier, VerificationPolicy};
 pub use math_atoms_work::{
     verify_work_plan_evidence, PacketContract, WorkFile, WorkPlan, WorkPlanStore, WorkStage,
 };
 pub use provider::{
     default_provider_output_dir, persist_provider_output, provider_output_hash,
-    PersistedProviderOutput, PreparedProviderCall, ProviderConfig, ProviderConfigInput,
-    ProviderError, ProviderExecutionOutput, ProviderKind, ProviderWireFormat,
+    CandidateVerificationReport, PersistedProviderOutput, PreparedProviderCall, ProviderConfig,
+    ProviderConfigInput, ProviderError, ProviderExecutionOutput, ProviderKind, ProviderWireFormat,
 };
 pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};

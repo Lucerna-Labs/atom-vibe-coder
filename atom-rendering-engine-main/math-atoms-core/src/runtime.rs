@@ -246,6 +246,8 @@ impl MathAtomsRuntime {
                 body_template: String::new(),
                 request_timeout_seconds: 120,
                 plan_timeout_seconds: 11_520,
+                verification_attempt_limit: 8,
+                verification_timeout_seconds: 180,
                 credential_scope_hash: String::new(),
             })
         };
@@ -480,6 +482,7 @@ impl MathAtomsRuntime {
                 packet_ids: Vec::new(),
                 executed_packets: 1,
                 resumed_packets: 0,
+                candidate_verification: None,
             },
         );
     }
@@ -633,6 +636,25 @@ impl MathAtomsRuntime {
             || provider_output_hash(&report.text) != output_hash
         {
             return Err("provider output claim is empty or inconsistent".to_string());
+        }
+        let candidate = report
+            .candidate_verification
+            .as_ref()
+            .ok_or_else(|| "real candidate verification evidence is missing".to_string())?;
+        if candidate.bundle_hash != output_hash {
+            return Err("candidate bundle does not match provider output".to_string());
+        }
+        let verified_candidate = math_atoms_verification::verify_candidate_evidence(
+            &candidate.manifest_path,
+            &candidate.manifest_hash,
+            &report.work_plan_id,
+            &candidate.bundle_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        if verified_candidate.attempts != candidate.attempts
+            || verified_candidate.repairs != candidate.repairs
+        {
+            return Err("candidate verification accounting does not match evidence".to_string());
         }
         let metadata = fs::metadata(output_artifact).map_err(|error| error.to_string())?;
         let actual_hash = sha256_file(output_artifact).map_err(|error| error.to_string())?;
@@ -1085,9 +1107,9 @@ mod tests {
         let call = runtime.state().last_provider_call.as_ref().unwrap();
         let mut plan = call.work_plan.clone().unwrap();
         plan.expand_files(vec![math_atoms_work::WorkFile {
-            path: "response.txt".to_string(),
+            path: "src/lib.rs".to_string(),
             purpose: "provider response".to_string(),
-            acceptance: vec!["response verified".to_string()],
+            acceptance: vec!["crate checks, tests, and lints cleanly".to_string()],
         }])
         .unwrap();
         let lease = store.acquire(&plan.id).unwrap();
@@ -1099,18 +1121,25 @@ mod tests {
                     packet.id
                 ),
                 math_atoms_work::PacketContract::FileManifest => format!(
-                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"response.txt\",\"purpose\":\"provider response\",\"acceptance\":[\"response verified\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"src/lib.rs\",\"purpose\":\"provider response\",\"acceptance\":[\"crate checks, tests, and lints cleanly\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
                     packet.id
                 ),
-                math_atoms_work::PacketContract::FileArtifact => {
-                    "```text\nprovider proof\n```".to_string()
-                }
+                math_atoms_work::PacketContract::FileArtifact => format!("```rust\n{text}```"),
             };
             store
                 .store_packet(&plan, packet, &output, &call.model)
                 .unwrap();
         }
         drop(lease);
+        let verifier = math_atoms_verification::CandidateVerifier::new(
+            &root,
+            math_atoms_verification::VerificationPolicy::strict(120).unwrap(),
+        );
+        let candidate =
+            vec![math_atoms_verification::CandidateFile::new("src/lib.rs", text).unwrap()];
+        let attempt = verifier.verify_attempt(&plan.id, 1, &candidate).unwrap();
+        assert!(attempt.passed, "{}", attempt.failure);
+        let verification = verifier.finalize(&attempt).unwrap();
         let evidence =
             crate::provider::persist_provider_output(text, root.join("provider")).unwrap();
         (
@@ -1125,6 +1154,13 @@ mod tests {
                     .collect(),
                 executed_packets: plan.packets.len(),
                 resumed_packets: 0,
+                candidate_verification: Some(crate::provider::CandidateVerificationReport {
+                    manifest_path: verification.manifest_path.to_string_lossy().to_string(),
+                    manifest_hash: verification.manifest_hash,
+                    bundle_hash: verification.bundle_hash,
+                    attempts: verification.attempts,
+                    repairs: verification.repairs,
+                }),
             },
             evidence,
             root,
@@ -1358,6 +1394,7 @@ mod tests {
             packet_ids: (1..=13).map(|index| format!("packet-{index}")).collect(),
             executed_packets: 13,
             resumed_packets: 0,
+            candidate_verification: None,
         };
         assert!(!runtime.mark_provider_execution_report(
             "C:/audit/output.txt",
@@ -1393,7 +1430,8 @@ mod tests {
         assert!(!task.route.is_empty());
         assert!(task.route.starts_with(&pending_route));
         assert_eq!(task.call.model, "gpt-5.5");
-        let (report, evidence, root) = verified_report(&runtime, "valid-report", "provider output");
+        let source = "pub fn provider_output() -> &'static str { \"provider output\" }\n";
+        let (report, evidence, root) = verified_report(&runtime, "valid-report", source);
         assert!(runtime.mark_provider_execution_report(
             &evidence.path.to_string_lossy(),
             &evidence.hash,
@@ -1407,7 +1445,7 @@ mod tests {
             evidence.path.to_string_lossy()
         );
         assert_eq!(runtime.state().last_provider_output_hash, evidence.hash);
-        assert_eq!(runtime.state().last_provider_output_len, 15);
+        assert_eq!(runtime.state().last_provider_output_len, source.len());
         assert_eq!(runtime.state().last_work_plan_id, report.work_plan_id);
         assert_eq!(
             runtime.state().last_work_plan_manifest,

@@ -364,6 +364,7 @@ impl NativeApp {
             packet_ids: Vec::new(),
             executed_packets: 1,
             resumed_packets: 0,
+            candidate_verification: None,
         });
         self.complete_provider_execution_report(report);
     }
@@ -926,6 +927,11 @@ mod tests {
     use pmre_kit::ux::UxNode;
     use pmre_orchestrator::{handle_event, widget_rect, UiEvent};
 
+    const VERIFIED_PROVIDER_SOURCE: &str =
+        "pub fn provider_proof() -> &'static str { \"provider proof\" }\n";
+    const CORRECTED_PROVIDER_SOURCE: &str =
+        "pub fn corrected_provider_output() -> &'static str { \"corrected\" }\n";
+
     fn click_control(app: &NativeApp, ui: &mut UiState, id: u32) {
         let rect = {
             let build = |state: &UiState| crate::ui::build(app, state);
@@ -967,9 +973,9 @@ mod tests {
         let call = app.runtime.state().last_provider_call.as_ref().unwrap();
         let mut plan = call.work_plan.clone().unwrap();
         plan.expand_files(vec![math_atoms_core::WorkFile {
-            path: "response.txt".to_string(),
+            path: "src/lib.rs".to_string(),
             purpose: "provider response".to_string(),
-            acceptance: vec!["response verified".to_string()],
+            acceptance: vec!["crate checks, tests, and lints cleanly".to_string()],
         }])
         .unwrap();
         let lease = store.acquire(&plan.id).unwrap();
@@ -981,18 +987,24 @@ mod tests {
                     packet.id
                 ),
                 math_atoms_core::PacketContract::FileManifest => format!(
-                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"response.txt\",\"purpose\":\"provider response\",\"acceptance\":[\"response verified\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
+                    "{{\"packet_id\":\"{}\",\"status\":\"complete\",\"files\":[{{\"path\":\"src/lib.rs\",\"purpose\":\"provider response\",\"acceptance\":[\"crate checks, tests, and lints cleanly\"]}}],\"checks\":[\"covered\"],\"risks\":[]}}",
                     packet.id
                 ),
-                math_atoms_core::PacketContract::FileArtifact => {
-                    "```text\nprovider proof\n```".to_string()
-                }
+                math_atoms_core::PacketContract::FileArtifact => format!("```rust\n{text}```"),
             };
             store
                 .store_packet(&plan, packet, &output, &call.model)
                 .unwrap();
         }
         drop(lease);
+        let verifier = math_atoms_core::CandidateVerifier::new(
+            &root,
+            math_atoms_core::VerificationPolicy::strict(120).unwrap(),
+        );
+        let candidate = vec![math_atoms_core::CandidateFile::new("src/lib.rs", text).unwrap()];
+        let attempt = verifier.verify_attempt(&plan.id, 1, &candidate).unwrap();
+        assert!(attempt.passed, "{}", attempt.failure);
+        let verification = verifier.finalize(&attempt).unwrap();
         (
             ProviderExecutionOutput {
                 text: text.to_string(),
@@ -1005,6 +1017,13 @@ mod tests {
                     .collect(),
                 executed_packets: plan.packets.len(),
                 resumed_packets: 0,
+                candidate_verification: Some(math_atoms_core::CandidateVerificationReport {
+                    manifest_path: verification.manifest_path.to_string_lossy().to_string(),
+                    manifest_hash: verification.manifest_hash,
+                    bundle_hash: verification.bundle_hash,
+                    attempts: verification.attempts,
+                    repairs: verification.repairs,
+                }),
             },
             root,
         )
@@ -1430,7 +1449,8 @@ mod tests {
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
         app.provider_running = true;
-        let (report, work_root) = verified_provider_report(&app, "output-audit", "provider proof");
+        let (report, work_root) =
+            verified_provider_report(&app, "output-audit", VERIFIED_PROVIDER_SOURCE);
         app.complete_provider_execution_report(Ok(report));
         assert_eq!(app.status(), RuntimeStatus::VerificationPending);
         let text = store.read_to_string().unwrap();
@@ -1442,7 +1462,10 @@ mod tests {
         assert!(text.contains("\"provider_model\":"));
         assert!(text.contains("\"provider_output_artifact\":"));
         assert!(text.contains("\"provider_output_hash\":\"sha256:"));
-        assert!(text.contains("\"provider_output_len\":14"));
+        assert!(text.contains(&format!(
+            "\"provider_output_len\":{}",
+            VERIFIED_PROVIDER_SOURCE.len()
+        )));
         assert!(app
             .runtime
             .bus()
@@ -1471,7 +1494,8 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         app.run_current_intent(&ui);
-        let (report, work_root) = verified_provider_report(&app, "capture", "provider proof");
+        let (report, work_root) =
+            verified_provider_report(&app, "capture", VERIFIED_PROVIDER_SOURCE);
         app.complete_provider_execution_report(Ok(report));
         let before = store.read_records().unwrap().len();
         app.capture_current_proof();
@@ -1531,11 +1555,8 @@ mod tests {
             .evidence
             .iter()
             .any(|item| item.node_id.starts_with("learning:failed:")));
-        let (report, work_root) = verified_provider_report(
-            &restarted,
-            "restart-correction",
-            "corrected provider output",
-        );
+        let (report, work_root) =
+            verified_provider_report(&restarted, "restart-correction", CORRECTED_PROVIDER_SOURCE);
         restarted.complete_provider_execution_report(Ok(report));
         let records = learning.read_records().unwrap();
         assert_eq!(LearningSummary::from_records(&records).failed, 1);

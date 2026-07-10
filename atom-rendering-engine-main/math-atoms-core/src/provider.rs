@@ -68,6 +68,8 @@ pub struct ProviderConfig {
     pub credential_scope_hash: String,
     pub request_timeout_seconds: u64,
     pub plan_timeout_seconds: u64,
+    pub verification_attempt_limit: u32,
+    pub verification_timeout_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +100,8 @@ pub struct PreparedProviderCall {
     pub body_template: String,
     pub request_timeout_seconds: u64,
     pub plan_timeout_seconds: u64,
+    pub verification_attempt_limit: u32,
+    pub verification_timeout_seconds: u64,
     pub credential_scope_hash: String,
 }
 
@@ -132,6 +136,16 @@ pub struct ProviderExecutionOutput {
     pub packet_ids: Vec<String>,
     pub executed_packets: usize,
     pub resumed_packets: usize,
+    pub candidate_verification: Option<CandidateVerificationReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateVerificationReport {
+    pub manifest_path: String,
+    pub manifest_hash: String,
+    pub bundle_hash: String,
+    pub attempts: u32,
+    pub repairs: u32,
 }
 
 impl ProviderConfig {
@@ -169,6 +183,12 @@ impl ProviderConfig {
             request_timeout_seconds,
             non_empty_env("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
         );
+        let verification_attempt_limit = verification_attempt_limit(
+            non_empty_env("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS").as_deref(),
+        );
+        let verification_timeout_seconds = verification_timeout_seconds(
+            non_empty_env("MATH_ATOMS_VERIFICATION_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -183,6 +203,8 @@ impl ProviderConfig {
             credential_scope_hash,
             request_timeout_seconds,
             plan_timeout_seconds,
+            verification_attempt_limit,
+            verification_timeout_seconds,
         }
     }
 
@@ -230,6 +252,11 @@ impl ProviderConfig {
             request_timeout_seconds,
             lookup("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
         );
+        let verification_attempt_limit =
+            verification_attempt_limit(lookup("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS").as_deref());
+        let verification_timeout_seconds = verification_timeout_seconds(
+            lookup("MATH_ATOMS_VERIFICATION_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -244,6 +271,8 @@ impl ProviderConfig {
             credential_scope_hash,
             request_timeout_seconds,
             plan_timeout_seconds,
+            verification_attempt_limit,
+            verification_timeout_seconds,
         }
     }
 
@@ -294,6 +323,12 @@ impl ProviderConfig {
             request_timeout_seconds,
             non_empty_env("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS").as_deref(),
         );
+        let verification_attempt_limit = verification_attempt_limit(
+            non_empty_env("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS").as_deref(),
+        );
+        let verification_timeout_seconds = verification_timeout_seconds(
+            non_empty_env("MATH_ATOMS_VERIFICATION_TIMEOUT_SECONDS").as_deref(),
+        );
         Self {
             kind,
             wire_format,
@@ -308,6 +343,8 @@ impl ProviderConfig {
             credential_scope_hash,
             request_timeout_seconds,
             plan_timeout_seconds,
+            verification_attempt_limit,
+            verification_timeout_seconds,
         }
     }
 
@@ -383,6 +420,8 @@ impl ProviderConfig {
             body_template: self.body_template.clone(),
             request_timeout_seconds: self.request_timeout_seconds,
             plan_timeout_seconds: self.plan_timeout_seconds,
+            verification_attempt_limit: self.verification_attempt_limit,
+            verification_timeout_seconds: self.verification_timeout_seconds,
             credential_scope_hash: self.credential_scope_hash.clone(),
         })
     }
@@ -406,6 +445,7 @@ impl PreparedProviderCall {
                 packet_ids: Vec::new(),
                 executed_packets: 1,
                 resumed_packets: 0,
+                candidate_verification: None,
             })
     }
 
@@ -474,9 +514,15 @@ impl PreparedProviderCall {
             });
             index += 1;
         }
-        let text = plan.deliverable(&completed).map_err(work_error)?;
+        let candidate = crate::provider_verification::close_candidate_loop(
+            self,
+            &plan,
+            &completed,
+            store.root(),
+            deadline,
+        )?;
         Ok(ProviderExecutionOutput {
-            text,
+            text: candidate.text,
             work_plan_id: plan.id.clone(),
             work_plan_manifest: manifest_path.to_string_lossy().to_string(),
             packet_ids: plan
@@ -486,6 +532,7 @@ impl PreparedProviderCall {
                 .collect(),
             executed_packets,
             resumed_packets,
+            candidate_verification: Some(candidate.report),
         })
     }
 
@@ -493,7 +540,7 @@ impl PreparedProviderCall {
         self.execute_body_with_curl_timeout(body_json, self.request_timeout_seconds)
     }
 
-    fn execute_body_with_curl_timeout(
+    pub(crate) fn execute_body_with_curl_timeout(
         &self,
         body_json: &str,
         timeout_seconds: u64,
@@ -656,7 +703,7 @@ fn non_empty_value(value: &str) -> Option<String> {
 
 fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
     let mut value = format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         config.kind.as_str(),
         config.model,
         config.endpoint,
@@ -667,7 +714,9 @@ fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
         sha256_tagged(config.body_template.as_bytes()),
         config.credential_scope_hash,
         config.request_timeout_seconds,
-        config.plan_timeout_seconds
+        config.plan_timeout_seconds,
+        config.verification_attempt_limit,
+        config.verification_timeout_seconds
     );
     for item in evidence.iter().take(8) {
         value.push('\0');
@@ -705,6 +754,20 @@ fn provider_plan_timeout_seconds(request_timeout: u64, configured: Option<&str>)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|value| (60..=86_400).contains(value))
         .unwrap_or_else(|| request_timeout.saturating_mul(96).clamp(600, 86_400))
+}
+
+fn verification_attempt_limit(configured: Option<&str>) -> u32 {
+    configured
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|value| (1..=math_atoms_verification::MAX_VERIFICATION_ATTEMPTS).contains(value))
+        .unwrap_or(8)
+}
+
+fn verification_timeout_seconds(configured: Option<&str>) -> u64 {
+    configured
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| (10..=1_800).contains(value))
+        .unwrap_or(180)
 }
 
 fn provider_transport_error(error: ProviderTransportError) -> ProviderError {
@@ -805,7 +868,7 @@ fn default_response_key() -> &'static str {
     "output_text"
 }
 
-fn provider_body(
+pub(crate) fn provider_body(
     format: ProviderWireFormat,
     model: &str,
     prompt: &WorkPrompt,
@@ -1224,17 +1287,48 @@ mod tests {
             ("DEEPSEEK_API_KEY", "secret"),
             ("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS", "1200"),
             ("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS", "7200"),
+            ("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS", "12"),
+            ("MATH_ATOMS_VERIFICATION_TIMEOUT_SECONDS", "600"),
         ]);
         assert_eq!(configured.request_timeout_seconds, 1200);
         assert_eq!(configured.plan_timeout_seconds, 7200);
+        assert_eq!(configured.verification_attempt_limit, 12);
+        assert_eq!(configured.verification_timeout_seconds, 600);
         let invalid = ProviderConfig::from_pairs(&[
             ("MATH_ATOMS_PROVIDER_KIND", "deepseek"),
             ("DEEPSEEK_API_KEY", "secret"),
             ("MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS", "999999"),
             ("MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS", "10"),
+            ("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS", "999"),
+            ("MATH_ATOMS_VERIFICATION_TIMEOUT_SECONDS", "2"),
         ]);
         assert_eq!(invalid.request_timeout_seconds, 900);
         assert_eq!(invalid.plan_timeout_seconds, 86_400);
+        assert_eq!(invalid.verification_attempt_limit, 8);
+        assert_eq!(invalid.verification_timeout_seconds, 180);
+    }
+
+    #[test]
+    fn work_plan_identity_includes_candidate_verification_policy() {
+        let first = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_MODEL", "custom-model"),
+            ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
+            ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+            ("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS", "4"),
+        ])
+        .prepare_call("build an app", "provider-model-loop", &[])
+        .unwrap();
+        let second = ProviderConfig::from_pairs(&[
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_MODEL", "custom-model"),
+            ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
+            ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+            ("MATH_ATOMS_VERIFICATION_MAX_ATTEMPTS", "5"),
+        ])
+        .prepare_call("build an app", "provider-model-loop", &[])
+        .unwrap();
+        assert_ne!(first.work_plan.unwrap().id, second.work_plan.unwrap().id);
     }
 
     #[test]
