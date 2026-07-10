@@ -34,7 +34,7 @@ Start with a declared block/inline subset, intrinsic sizing, margins, padding, b
 Convert layout into ordered backgrounds, borders, text, images, clips, stacking contexts, and hit regions. Keep paint data immutable for a frame. Gate: z-order, clipping, opacity, scroll offsets, selection, and overlapping links agree between pixels and hit testing.
 
 ## Step 11 Render through the native 2D engine
-Feed the paint list into the dependency-free 2D recipe rather than duplicating raster, typography, input, and animation logic. Gate: browser rendering inherits every 2D production gate and adds page-specific golden documents. [[wiki:2d-engine-build]]
+Feed the paint list into the dependency-free 2D recipe rather than duplicating raster, typography, input, and animation logic. Gate: browser rendering inherits every 2D production gate and adds page-specific golden documents. [[wiki:recipes:2d-engine-build]]
 
 ## Step 12 Implement navigation and lifecycle
 Separate requested, fetching, committing, active, failed, stopped, and history states. Cancel prior work, isolate document generations, and prevent stale network/layout callbacks from mutating the active page. Gate: rapid navigation, back/forward, reload, stop, errors, and redirects preserve one active generation.
@@ -59,4 +59,3 @@ Forms, downloads, cookies, cache, accessibility depth, international text, SVG, 
 
 ## Step 19 Incomplete-recipe verification rule
 The current acceptable result is a clearly scoped native document browser that passes its declared subset tests. It must label itself incomplete and cannot be learned as general browser success. Promotion requires resolving every open blocker, passing standards and security suites, running hostile-content campaigns, and verifying real navigation, rendering, input, accessibility, persistence, crash recovery, and long sessions.
-

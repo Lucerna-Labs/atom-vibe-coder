@@ -11,6 +11,6 @@ Learning traffic follows the Spiderweb layers: L0 observes the terminal event, L
 
 [[bus:spiderweb]]
 [[rag:wiki-graph]]
-[[proof-loop]]
+[[spiderweb-proof-loop]]
 [[provider-model-loop]]
-[[work-packets]]
+[[wiki:work-packets]]

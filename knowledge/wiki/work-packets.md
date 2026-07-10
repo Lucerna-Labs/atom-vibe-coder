@@ -13,9 +13,9 @@ Envelope output is redacted before persistence. Source artifacts are never rewri
 
 Work-plan execution emits `WorkPlanCreated` at L2, one `WorkPacketExecuted` message per completed packet, and `WorkPlanCompleted` at L3 before a `verification pending` record. Model completion cannot capture production proof. The plan lock serializes identical concurrent plans and only its owner may release it. Resume identity includes the provider request contract and a one-way credential-scope hash, so packets cannot cross provider accounts. A repeated identical route resumes verified packets; it does not call the provider again for completed work.
 
-Complex reference recipes are chunked into individual graph nodes: [[wiki:2d-engine-build]], [[wiki:3d-engine-build]], [[wiki:wifi-adapter-build]], and [[wiki:browser-engine-build]]. The browser recipe is explicitly incomplete and non-proven.
+Complex reference recipes are chunked into individual graph nodes: [[wiki:recipes:2d-engine-build]], [[wiki:recipes:3d-engine-build]], [[wiki:recipes:wifi-adapter-build]], and [[wiki:recipes:browser-engine-build]]. The browser recipe is explicitly incomplete and non-proven.
 
-[[provider-api]]
-[[proof-store]]
-[[self-learning]]
+[[wiki:provider-api]]
+[[wiki:proof-store]]
+[[wiki:self-learning]]
 [[wiki-graph-rag]]

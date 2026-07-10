@@ -10,4 +10,4 @@ Provider requests may include relevant durable learning excerpts. Trusted packet
 [[provider-model-loop]]
 [[gate:fail-closed]]
 [[wiki:self-learning]]
-[[work-packets]]
+[[wiki:work-packets]]

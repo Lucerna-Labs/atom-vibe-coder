@@ -9,8 +9,8 @@ Persistent store reads are also fail-closed. Corrupt or tampered JSONL records b
 
 The proof store and learning ledger have separate authority. `proofs.jsonl` answers whether a route is proven. `learning.jsonl` records what failed, what correction was applied, and which real gate or artifact later passed. A failed learning record may guide a retry but cannot become positive proof evidence.
 
-[[proof-loop]]
+[[spiderweb-proof-loop]]
 [[provider-model-loop]]
 [[wiki-graph-rag]]
 [[wiki:self-learning]]
-[[work-packets]]
+[[wiki:work-packets]]

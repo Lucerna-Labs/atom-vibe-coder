@@ -1,5 +1,5 @@
 use math_atoms_doctrine::{atoms, gates, mission, recipes};
-use math_atoms_hash::{sha256_file, valid_sha256_tag};
+use math_atoms_hash::{sha256_file, sha256_hex, valid_sha256_tag};
 use math_atoms_learning::{LearningOutcome, LearningRecord, DEFAULT_GRAPH_MEMORY_LIMIT};
 use math_atoms_proof::ProofRecord;
 use math_atoms_work::verify_work_plan_evidence;
@@ -183,7 +183,8 @@ impl WikiGraph {
 
     pub fn from_markdown_dir(dir: impl AsRef<Path>) -> io::Result<Self> {
         let mut graph = Self::seeded();
-        graph.load_markdown_dir(dir.as_ref())?;
+        let root = dir.as_ref().canonicalize()?;
+        graph.load_markdown_dir(&root, &root)?;
         Ok(graph)
     }
 
@@ -405,26 +406,39 @@ impl WikiGraph {
         self.edges.retain(|edge| edge.from != id && edge.to != id);
     }
 
-    fn load_markdown_dir(&mut self, dir: &Path) -> io::Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+    fn load_markdown_dir(&mut self, root: &Path, dir: &Path) -> io::Result<()> {
+        let mut entries = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
             let path = entry.path();
-            if path.is_dir() {
-                self.load_markdown_dir(&path)?;
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
-                self.add_markdown_file(&path)?;
+            if file_type.is_dir() {
+                self.load_markdown_dir(root, &path)?;
+            } else if file_type.is_file()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("md")
+            {
+                self.add_markdown_file(root, &path)?;
             }
         }
         Ok(())
     }
 
-    fn add_markdown_file(&mut self, path: &Path) -> io::Result<()> {
+    fn add_markdown_file(&mut self, root: &Path, path: &Path) -> io::Result<()> {
         let text = fs::read_to_string(path)?;
         let stem = path
             .file_stem()
             .and_then(|name| name.to_str())
             .unwrap_or("wiki-node");
-        let id = format!("wiki:{}", slug(stem));
+        let id = markdown_id(root, path)?;
+        if self.nodes.iter().any(|node| node.id == id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("wiki node id collision at {}: {id}", path.display()),
+            ));
+        }
         let title = text
             .lines()
             .find_map(|line| line.strip_prefix("# ").map(str::trim))
@@ -436,7 +450,7 @@ impl WikiGraph {
                 for item in raw.split(',') {
                     let tag = item.trim();
                     if !tag.is_empty() {
-                        node_tags.push(tag.to_ascii_lowercase());
+                        node_tags.push(tag.to_lowercase());
                     }
                 }
             }
@@ -460,6 +474,7 @@ impl WikiGraph {
             excerpt,
             tags: node_tags.clone(),
         });
+        let document_status = markdown_status(&text);
         let mut prior_section = None;
         for (index, (section_title, section_body)) in
             markdown_sections(&text).into_iter().enumerate()
@@ -491,7 +506,13 @@ impl WikiGraph {
             self.nodes.push(WikiNode {
                 id: section_id,
                 title: section_title,
-                excerpt: bounded_excerpt(&section_body, 1_400),
+                excerpt: bounded_excerpt(
+                    &match &document_status {
+                        Some(status) => format!("Document status: {status}\n{section_body}"),
+                        None => section_body,
+                    },
+                    1_400,
+                ),
                 tags: section_tags,
             });
         }
@@ -522,6 +543,16 @@ fn markdown_sections(text: &str) -> Vec<(String, String)> {
     sections
 }
 
+fn markdown_status(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        line.get(..7)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("status:"))
+            .map(|_| line[7..].trim().to_string())
+            .filter(|status| !status.is_empty())
+    })
+}
+
 fn bounded_excerpt(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
@@ -535,16 +566,16 @@ fn bounded_excerpt(value: &str, max_bytes: usize) -> String {
 
 fn tokenize(query: &str) -> Vec<String> {
     query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '-')
         .filter(|part| !part.is_empty())
-        .map(|part| part.to_ascii_lowercase())
+        .map(|part| part.to_lowercase())
         .collect()
 }
 
 fn direct_score(node: &WikiNode, terms: &[String], atom_keys: &[String]) -> i32 {
     let mut score = 0;
-    let title = node.title.to_ascii_lowercase();
-    let excerpt = node.excerpt.to_ascii_lowercase();
+    let title = node.title.to_lowercase();
+    let excerpt = node.excerpt.to_lowercase();
     for term in terms {
         if node.id.eq_ignore_ascii_case(term) {
             score += 8;
@@ -602,18 +633,57 @@ fn default_wiki_dirs() -> Vec<PathBuf> {
 }
 
 fn slug(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
+    let mut output = String::new();
+    let mut separator = false;
+    for ch in value.chars() {
+        if ch.is_alphanumeric() {
+            if separator && !output.is_empty() {
+                output.push('-');
             }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
+            output.extend(ch.to_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if output.is_empty() {
+        format!("node-{}", &sha256_hex(value.as_bytes())[..12])
+    } else {
+        output
+    }
+}
+
+fn markdown_id(root: &Path, path: &Path) -> io::Result<String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("wiki file escaped root: {}", path.display()),
+        )
+    })?;
+    let without_extension = relative.with_extension("");
+    let mut parts = Vec::new();
+    for component in without_extension.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("wiki path has a non-normal component: {}", path.display()),
+            ));
+        };
+        let value = value.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("wiki path is not valid Unicode: {}", path.display()),
+            )
+        })?;
+        parts.push(slug(value));
+    }
+    if parts.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "wiki path has no identity components",
+        ));
+    }
+    Ok(format!("wiki:{}", parts.join(":")))
 }
 
 fn wiki_links(text: &str) -> Vec<String> {
@@ -865,22 +935,22 @@ mod tests {
         for (query, node_id, evidence) in [
             (
                 "2d raster clipping golden images",
-                "wiki:2d-engine-build:04-step-04-rasterize-core-primitives",
+                "wiki:recipes:2d-engine-build:04-step-04-rasterize-core-primitives",
                 "golden images",
             ),
             (
                 "3d homogeneous frustum clipping",
-                "wiki:3d-engine-build:06-step-06-clip-before-rasterization",
+                "wiki:recipes:3d-engine-build:06-step-06-clip-before-rasterization",
                 "homogeneous frustum",
             ),
             (
                 "wifi real hardware matrix",
-                "wiki:wifi-adapter-build:13-step-13-run-the-real-hardware-matrix",
+                "wiki:recipes:wifi-adapter-build:13-step-13-run-the-real-hardware-matrix",
                 "Simulation or a smoke scan cannot promote",
             ),
             (
                 "browser JavaScript runtime incomplete",
-                "wiki:browser-engine-build:16-step-16-open-blocker--script-runtime-is-incomplete",
+                "wiki:recipes:browser-engine-build:16-step-16-open-blocker-script-runtime-is-incomplete",
                 "No JavaScript parser",
             ),
         ] {
@@ -891,6 +961,73 @@ mod tests {
                 "missing precise recipe evidence for {query}: {hits:?}"
             );
         }
+        let browser_sections = graph
+            .nodes
+            .iter()
+            .filter(|node| node.id.starts_with("wiki:recipes:browser-engine-build:"))
+            .collect::<Vec<_>>();
+        assert!(!browser_sections.is_empty());
+        assert!(browser_sections.iter().all(|node| {
+            let excerpt = node.excerpt.to_lowercase();
+            excerpt.contains("document status: incomplete reference only")
+                && excerpt.contains("not a proven or complete browser implementation")
+        }));
+    }
+
+    #[test]
+    fn root_relative_ids_prevent_duplicate_filename_collisions() {
+        let dir = std::env::temp_dir().join(format!(
+            "math-atoms-wiki-path-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join("alpha")).unwrap();
+        fs::create_dir_all(dir.join("beta")).unwrap();
+        fs::write(dir.join("alpha/shared.md"), "# Alpha Shared\nuniquealpha").unwrap();
+        fs::write(dir.join("beta/shared.md"), "# Beta Shared\nuniquebeta").unwrap();
+        let graph = WikiGraph::from_markdown_dir(&dir).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.id == "wiki:alpha:shared"));
+        assert!(graph.nodes.iter().any(|node| node.id == "wiki:beta:shared"));
+    }
+
+    #[test]
+    fn unicode_terms_are_tokenized_without_ascii_loss() {
+        assert_eq!(
+            tokenize("Résumé Привет 東京 Wi-Fi"),
+            vec!["résumé", "привет", "東京", "wi-fi"]
+        );
+    }
+
+    #[test]
+    fn repository_wiki_relationships_resolve_to_real_nodes() {
+        let wiki = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("knowledge")
+            .join("wiki");
+        let graph = WikiGraph::from_markdown_dir(wiki).unwrap();
+        let ids = graph
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
+        let unresolved = graph
+            .edges
+            .iter()
+            .filter(|edge| !ids.contains(edge.from.as_str()) || !ids.contains(edge.to.as_str()))
+            .map(|edge| format!("{} -> {}", edge.from, edge.to))
+            .collect::<Vec<_>>();
+        assert!(
+            unresolved.is_empty(),
+            "unresolved wiki edges: {unresolved:?}"
+        );
     }
 
     #[test]
