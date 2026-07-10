@@ -1,8 +1,9 @@
 use crate::model::{
-    validate_plan_id, CommandEvidence, FileEvidence, VerificationAttempt, VerificationError,
-    VerificationSuccess, VerifiedCandidate, VERIFICATION_SCHEMA_VERSION,
+    bundle_hash, validate_files, validate_plan_id, CandidateFile, CommandEvidence, FileEvidence,
+    RepairEvidence, VerificationAttempt, VerificationError, VerificationSuccess, VerifiedCandidate,
+    VERIFICATION_SCHEMA_VERSION,
 };
-use math_atoms_hash::{sha256_file, valid_sha256_tag};
+use math_atoms_hash::{sha256_file, sha256_tagged, valid_sha256_tag};
 use math_atoms_json::{parse as parse_json, JsonValue};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -67,6 +68,88 @@ pub(crate) fn load_attempt(
     Ok(Some(parsed))
 }
 
+pub(crate) fn store_repair(
+    root: &Path,
+    failed: &VerificationAttempt,
+    model: &str,
+    files: &[CandidateFile],
+) -> Result<RepairEvidence, VerificationError> {
+    verify_attempt(failed)?;
+    if failed.passed {
+        return Err(VerificationError::Evidence(
+            "a passing candidate cannot be repaired".to_string(),
+        ));
+    }
+    validate_model(model)?;
+    validate_files(files)?;
+    let expected_attempt = verification_attempt_dir(root, &failed.plan_id, failed.attempt);
+    let expected_manifest = expected_attempt.join("attempt.json").canonicalize()?;
+    if failed.manifest_path.canonicalize()? != expected_manifest {
+        return Err(VerificationError::Evidence(
+            "repair source attempt is outside this verifier".to_string(),
+        ));
+    }
+
+    let repair_dir = expected_attempt.join("repair");
+    let files_dir = repair_dir.join("files");
+    for file in files {
+        let path = files_dir.join(file.path.replace('\\', "/"));
+        write_immutable_verified(&path, file.content.as_bytes())?;
+    }
+    let repaired_bundle_hash = bundle_hash(files)?;
+    let file_entries = files
+        .iter()
+        .map(|file| repair_file_json(&files_dir, file))
+        .collect::<Result<Vec<_>, _>>()?
+        .join(",");
+    let text = format!(
+        "{{\"schema_version\":{},\"plan_id\":\"{}\",\"after_attempt\":{},\"source_bundle_hash\":\"{}\",\"repaired_bundle_hash\":\"{}\",\"model\":\"{}\",\"files\":[{}]}}",
+        VERIFICATION_SCHEMA_VERSION,
+        escape(&failed.plan_id),
+        failed.attempt,
+        escape(&failed.bundle_hash),
+        escape(&repaired_bundle_hash),
+        escape(model),
+        file_entries
+    );
+    let path = repair_dir.join("repair.json");
+    write_immutable_verified(&path, text.as_bytes())?;
+    let repair = RepairEvidence {
+        plan_id: failed.plan_id.clone(),
+        after_attempt: failed.attempt,
+        source_bundle_hash: failed.bundle_hash.clone(),
+        repaired_bundle_hash,
+        model: model.to_string(),
+        files: files.to_vec(),
+        manifest_path: path.canonicalize()?,
+        manifest_hash: sha256_file(&path)?,
+    };
+    verify_repair(&repair)?;
+    Ok(repair)
+}
+
+pub(crate) fn load_repair(
+    root: &Path,
+    plan_id: &str,
+    after_attempt: u32,
+) -> Result<Option<RepairEvidence>, VerificationError> {
+    validate_plan_id(plan_id)?;
+    if after_attempt == 0 {
+        return Err(VerificationError::Evidence(
+            "repair attempt number is invalid".to_string(),
+        ));
+    }
+    let path = verification_attempt_dir(root, plan_id, after_attempt)
+        .join("repair")
+        .join("repair.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let repair = parse_repair(&path)?;
+    verify_repair(&repair)?;
+    Ok(Some(repair))
+}
+
 pub(crate) fn finalize_success(
     root: &Path,
     attempt: &VerificationAttempt,
@@ -77,15 +160,26 @@ pub(crate) fn finalize_success(
             "final verification attempt did not pass".to_string(),
         ));
     }
+    let (attempts, repairs, history_hash) = load_chain(root, &attempt.plan_id, attempt.attempt)?;
+    let final_attempt = attempts.last().ok_or_else(|| {
+        VerificationError::Evidence("candidate verification chain is empty".to_string())
+    })?;
+    if final_attempt != attempt {
+        return Err(VerificationError::Evidence(
+            "final verification attempt differs from durable evidence".to_string(),
+        ));
+    }
     let dir = root.join(&attempt.plan_id).join("candidate-verification");
     fs::create_dir_all(&dir)?;
     let path = dir.join("verification-final.json");
     let text = format!(
-        "{{\"schema_version\":{},\"plan_id\":\"{}\",\"passed\":true,\"attempts\":{},\"bundle_hash\":\"{}\",\"candidate_dir\":\"{}\",\"attempt_manifest\":\"{}\",\"attempt_manifest_hash\":\"{}\"}}",
+        "{{\"schema_version\":{},\"plan_id\":\"{}\",\"passed\":true,\"attempts\":{},\"repairs\":{},\"bundle_hash\":\"{}\",\"history_hash\":\"{}\",\"candidate_dir\":\"{}\",\"attempt_manifest\":\"{}\",\"attempt_manifest_hash\":\"{}\"}}",
         VERIFICATION_SCHEMA_VERSION,
         escape(&attempt.plan_id),
         attempt.attempt,
+        repairs.len(),
         escape(&attempt.bundle_hash),
+        escape(&history_hash),
         escape(&attempt.candidate_dir.to_string_lossy()),
         escape(&attempt.manifest_path.to_string_lossy()),
         escape(&attempt.manifest_hash)
@@ -94,6 +188,7 @@ pub(crate) fn finalize_success(
     Ok(VerificationSuccess {
         plan_id: attempt.plan_id.clone(),
         attempts: attempt.attempt,
+        repairs: repairs.len() as u32,
         bundle_hash: attempt.bundle_hash.clone(),
         candidate_dir: attempt.candidate_dir.clone(),
         manifest_path: path.canonicalize()?,
@@ -128,7 +223,9 @@ pub fn verify_candidate_evidence(
             "plan_id",
             "passed",
             "attempts",
+            "repairs",
             "bundle_hash",
+            "history_hash",
             "candidate_dir",
             "attempt_manifest",
             "attempt_manifest_hash",
@@ -147,22 +244,66 @@ pub fn verify_candidate_evidence(
     let attempts = u32::try_from(number(&value, "attempts")?).map_err(|_| {
         VerificationError::Evidence("candidate attempt count is invalid".to_string())
     })?;
-    if attempts == 0 {
+    if attempts == 0 || attempts > crate::MAX_VERIFICATION_ATTEMPTS {
         return Err(VerificationError::Evidence(
-            "candidate attempt count is empty".to_string(),
+            "candidate attempt count is invalid".to_string(),
         ));
     }
+    let repairs = u32::try_from(number(&value, "repairs")?).map_err(|_| {
+        VerificationError::Evidence("candidate repair count is invalid".to_string())
+    })?;
+    if repairs != attempts - 1 {
+        return Err(VerificationError::Evidence(
+            "candidate repair count does not close the attempt chain".to_string(),
+        ));
+    }
+    let claimed_history_hash = string(&value, "history_hash")?;
+    if !valid_sha256_tag(claimed_history_hash) {
+        return Err(VerificationError::Evidence(
+            "candidate history hash is invalid".to_string(),
+        ));
+    }
+    let verification_dir = path.parent().ok_or_else(|| {
+        VerificationError::Evidence("candidate final manifest has no parent".to_string())
+    })?;
+    if verification_dir.file_name().and_then(|name| name.to_str()) != Some("candidate-verification")
+    {
+        return Err(VerificationError::Evidence(
+            "candidate final manifest is outside its verification directory".to_string(),
+        ));
+    }
+    let plan_dir = verification_dir.parent().ok_or_else(|| {
+        VerificationError::Evidence("candidate verification directory has no plan".to_string())
+    })?;
+    if plan_dir.file_name().and_then(|name| name.to_str()) != Some(expected_plan_id) {
+        return Err(VerificationError::Evidence(
+            "candidate verification directory does not match its plan".to_string(),
+        ));
+    }
+    let root = plan_dir.parent().ok_or_else(|| {
+        VerificationError::Evidence("candidate verification directory has no root".to_string())
+    })?;
+    let (chain_attempts, chain_repairs, recomputed_history_hash) =
+        load_chain(root, expected_plan_id, attempts)?;
+    if chain_repairs.len() as u32 != repairs || recomputed_history_hash != claimed_history_hash {
+        return Err(VerificationError::Evidence(
+            "candidate verification history does not recompute".to_string(),
+        ));
+    }
+    let attempt = chain_attempts.last().ok_or_else(|| {
+        VerificationError::Evidence("candidate verification chain is empty".to_string())
+    })?;
     let attempt_path = PathBuf::from(string(&value, "attempt_manifest")?).canonicalize()?;
     let attempt_hash = string(&value, "attempt_manifest_hash")?;
-    if !valid_sha256_tag(attempt_hash) || sha256_file(&attempt_path)? != attempt_hash {
+    if !valid_sha256_tag(attempt_hash)
+        || sha256_file(&attempt_path)? != attempt_hash
+        || attempt_path != attempt.manifest_path
+        || attempt_hash != attempt.manifest_hash
+    {
         return Err(VerificationError::Evidence(
             "candidate attempt manifest does not recompute".to_string(),
         ));
     }
-    let mut attempt = parse_attempt(&attempt_path)?;
-    attempt.manifest_path = attempt_path;
-    attempt.manifest_hash = attempt_hash.to_string();
-    verify_attempt(&attempt)?;
     let candidate_dir = PathBuf::from(string(&value, "candidate_dir")?).canonicalize()?;
     if !attempt.passed
         || attempt.attempt != attempts
@@ -177,37 +318,302 @@ pub fn verify_candidate_evidence(
     Ok(VerifiedCandidate {
         plan_id: expected_plan_id.to_string(),
         attempts,
+        repairs,
         bundle_hash: expected_bundle_hash.to_string(),
         candidate_dir,
     })
 }
 
+fn load_chain(
+    root: &Path,
+    plan_id: &str,
+    final_attempt: u32,
+) -> Result<(Vec<VerificationAttempt>, Vec<RepairEvidence>, String), VerificationError> {
+    validate_plan_id(plan_id)?;
+    if final_attempt == 0 || final_attempt > crate::MAX_VERIFICATION_ATTEMPTS {
+        return Err(VerificationError::Evidence(
+            "candidate verification chain length is invalid".to_string(),
+        ));
+    }
+    let mut attempts = Vec::with_capacity(final_attempt as usize);
+    let mut repairs = Vec::with_capacity(final_attempt.saturating_sub(1) as usize);
+    let mut history = format!("schema:{}\nplan:{}\n", VERIFICATION_SCHEMA_VERSION, plan_id);
+    let mut prior_repair: Option<RepairEvidence> = None;
+    for ordinal in 1..=final_attempt {
+        let attempt = load_attempt(root, plan_id, ordinal)?.ok_or_else(|| {
+            VerificationError::Evidence(format!(
+                "candidate verification attempt {ordinal} is missing"
+            ))
+        })?;
+        if attempt.plan_id != plan_id || attempt.attempt != ordinal {
+            return Err(VerificationError::Evidence(format!(
+                "candidate verification attempt {ordinal} has the wrong identity"
+            )));
+        }
+        if ordinal < final_attempt && attempt.passed {
+            return Err(VerificationError::Evidence(format!(
+                "candidate verification attempt {ordinal} passed before the claimed final attempt"
+            )));
+        }
+        if ordinal == final_attempt && !attempt.passed {
+            return Err(VerificationError::Evidence(
+                "candidate verification chain does not end in a pass".to_string(),
+            ));
+        }
+        if let Some(repair) = prior_repair.take() {
+            if repair.repaired_bundle_hash != attempt.bundle_hash {
+                return Err(VerificationError::Evidence(format!(
+                    "repair after attempt {} does not bind attempt {ordinal}",
+                    ordinal - 1
+                )));
+            }
+        }
+        history.push_str(&format!(
+            "attempt:{ordinal}:{}:{}\n",
+            attempt.bundle_hash, attempt.manifest_hash
+        ));
+        attempts.push(attempt.clone());
+
+        if ordinal < final_attempt {
+            let repair = load_repair(root, plan_id, ordinal)?.ok_or_else(|| {
+                VerificationError::Evidence(format!(
+                    "candidate repair after attempt {ordinal} is missing"
+                ))
+            })?;
+            if repair.source_bundle_hash != attempt.bundle_hash
+                || repair.after_attempt != ordinal
+                || repair.plan_id != plan_id
+            {
+                return Err(VerificationError::Evidence(format!(
+                    "candidate repair after attempt {ordinal} is not bound to its failure"
+                )));
+            }
+            history.push_str(&format!(
+                "repair:{ordinal}:{}:{}:{}\n",
+                repair.source_bundle_hash, repair.repaired_bundle_hash, repair.manifest_hash
+            ));
+            prior_repair = Some(repair.clone());
+            repairs.push(repair);
+        }
+    }
+    if load_repair(root, plan_id, final_attempt)?.is_some() {
+        return Err(VerificationError::Evidence(
+            "passing candidate has a trailing repair".to_string(),
+        ));
+    }
+    if final_attempt < crate::MAX_VERIFICATION_ATTEMPTS
+        && load_attempt(root, plan_id, final_attempt + 1)?.is_some()
+    {
+        return Err(VerificationError::Evidence(
+            "candidate verification has an attempt after its claimed final pass".to_string(),
+        ));
+    }
+    Ok((attempts, repairs, sha256_tagged(history.as_bytes())))
+}
+
+fn parse_repair(path: &Path) -> Result<RepairEvidence, VerificationError> {
+    let path = path.canonicalize()?;
+    if path.file_name().and_then(|name| name.to_str()) != Some("repair.json") {
+        return Err(VerificationError::Evidence(
+            "candidate repair manifest name is invalid".to_string(),
+        ));
+    }
+    let value = parse_exact_object(
+        &fs::read_to_string(&path)?,
+        &[
+            "schema_version",
+            "plan_id",
+            "after_attempt",
+            "source_bundle_hash",
+            "repaired_bundle_hash",
+            "model",
+            "files",
+        ],
+        "repair manifest",
+    )?;
+    if number(&value, "schema_version")? != u64::from(VERIFICATION_SCHEMA_VERSION) {
+        return Err(VerificationError::Evidence(
+            "candidate repair schema is invalid".to_string(),
+        ));
+    }
+    let repair_dir = path.parent().ok_or_else(|| {
+        VerificationError::Evidence("candidate repair manifest has no parent".to_string())
+    })?;
+    let files_dir = repair_dir.join("files").canonicalize()?;
+    let mut files = Vec::new();
+    for item in array(&value, "files")? {
+        let item = exact_value_object(item, &["path", "hash", "len"], "repair file")?;
+        let relative = string(item, "path")?;
+        crate::model::validate_relative_path(relative)?;
+        let claimed_hash = string(item, "hash")?;
+        let claimed_len = usize::try_from(number(item, "len")?).map_err(|_| {
+            VerificationError::Evidence("candidate repair file length is invalid".to_string())
+        })?;
+        let file_path = files_dir.join(relative).canonicalize()?;
+        let metadata = fs::metadata(&file_path)?;
+        if !file_path.starts_with(&files_dir)
+            || !valid_sha256_tag(claimed_hash)
+            || metadata.len() != claimed_len as u64
+            || sha256_file(&file_path)? != claimed_hash
+        {
+            return Err(VerificationError::Evidence(format!(
+                "candidate repair file does not recompute: {relative}"
+            )));
+        }
+        files.push(CandidateFile::new(
+            relative,
+            fs::read_to_string(file_path)?,
+        )?);
+    }
+    let repair = RepairEvidence {
+        plan_id: string(&value, "plan_id")?.to_string(),
+        after_attempt: u32::try_from(number(&value, "after_attempt")?).map_err(|_| {
+            VerificationError::Evidence("candidate repair attempt is invalid".to_string())
+        })?,
+        source_bundle_hash: string(&value, "source_bundle_hash")?.to_string(),
+        repaired_bundle_hash: string(&value, "repaired_bundle_hash")?.to_string(),
+        model: string(&value, "model")?.to_string(),
+        files,
+        manifest_hash: sha256_file(&path)?,
+        manifest_path: path,
+    };
+    validate_repair_fields(&repair)?;
+    Ok(repair)
+}
+
+fn verify_repair(repair: &RepairEvidence) -> Result<(), VerificationError> {
+    validate_repair_fields(repair)?;
+    if !valid_sha256_tag(&repair.manifest_hash)
+        || sha256_file(&repair.manifest_path)? != repair.manifest_hash
+    {
+        return Err(VerificationError::Evidence(
+            "candidate repair manifest does not recompute".to_string(),
+        ));
+    }
+    let parsed = parse_repair(&repair.manifest_path)?;
+    if parsed != *repair {
+        return Err(VerificationError::Evidence(
+            "candidate repair differs from its durable manifest".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repair_fields(repair: &RepairEvidence) -> Result<(), VerificationError> {
+    validate_plan_id(&repair.plan_id)?;
+    validate_model(&repair.model)?;
+    validate_files(&repair.files)?;
+    if repair.after_attempt == 0
+        || repair.after_attempt >= crate::MAX_VERIFICATION_ATTEMPTS
+        || !valid_sha256_tag(&repair.source_bundle_hash)
+        || !valid_sha256_tag(&repair.repaired_bundle_hash)
+        || repair.source_bundle_hash == repair.repaired_bundle_hash
+        || bundle_hash(&repair.files)? != repair.repaired_bundle_hash
+    {
+        return Err(VerificationError::Evidence(
+            "candidate repair identity is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_model(model: &str) -> Result<(), VerificationError> {
+    if model.trim() != model
+        || model.is_empty()
+        || model.len() > 240
+        || model.chars().any(char::is_control)
+    {
+        return Err(VerificationError::Evidence(
+            "candidate repair model is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn verify_attempt(attempt: &VerificationAttempt) -> Result<(), VerificationError> {
     validate_plan_id(&attempt.plan_id)?;
-    if attempt.attempt == 0 || !valid_sha256_tag(&attempt.bundle_hash) {
+    if attempt.attempt == 0
+        || attempt.attempt > crate::MAX_VERIFICATION_ATTEMPTS
+        || !valid_sha256_tag(&attempt.bundle_hash)
+        || !valid_sha256_tag(&attempt.manifest_hash)
+        || sha256_file(&attempt.manifest_path)? != attempt.manifest_hash
+    {
         return Err(VerificationError::Evidence(
             "candidate attempt identity is invalid".to_string(),
         ));
     }
+    let manifest_path = attempt.manifest_path.canonicalize()?;
     let candidate_dir = attempt.candidate_dir.canonicalize()?;
-    for file in &attempt.files {
-        verify_file(&candidate_dir, file)?;
-    }
-    let expected = ["cargo-check", "cargo-test", "cargo-clippy"];
-    if attempt.passed
-        && (attempt.commands.len() != expected.len()
-            || attempt
-                .commands
-                .iter()
-                .zip(expected)
-                .any(|(command, name)| command.name != name || !command.passed()))
+    let attempt_dir = manifest_path.parent().ok_or_else(|| {
+        VerificationError::Evidence("candidate attempt manifest has no parent".to_string())
+    })?;
+    if manifest_path.file_name().and_then(|name| name.to_str()) != Some("attempt.json")
+        || candidate_dir.parent() != Some(attempt_dir)
+        || candidate_dir.file_name().and_then(|name| name.to_str()) != Some("candidate")
+        || attempt_dir.file_name().and_then(|name| name.to_str())
+            != Some(format!("attempt-{:03}", attempt.attempt).as_str())
     {
         return Err(VerificationError::Evidence(
-            "passing candidate did not pass every strict command".to_string(),
+            "candidate attempt paths are invalid".to_string(),
         ));
     }
-    for command in &attempt.commands {
-        verify_command(command)?;
+    let mut candidate_files = Vec::new();
+    let mut controller_files = 0_u32;
+    for file in &attempt.files {
+        verify_file(&candidate_dir, file)?;
+        if file.controller_owned {
+            controller_files += 1;
+            if file.path != "Cargo.toml" {
+                return Err(VerificationError::Evidence(
+                    "unexpected controller-owned candidate file".to_string(),
+                ));
+            }
+        } else {
+            candidate_files.push(CandidateFile::new(
+                &file.path,
+                fs::read_to_string(candidate_dir.join(&file.path))?,
+            )?);
+        }
+    }
+    if controller_files > 1 || bundle_hash(&candidate_files)? != attempt.bundle_hash {
+        return Err(VerificationError::Evidence(
+            "candidate bundle does not recompute from attempt files".to_string(),
+        ));
+    }
+    let expected = ["cargo-check", "cargo-test", "cargo-clippy"];
+    if attempt.commands.is_empty()
+        || attempt.commands.len() > expected.len()
+        || attempt
+            .commands
+            .iter()
+            .zip(expected)
+            .any(|(command, name)| command.name != name)
+    {
+        return Err(VerificationError::Evidence(
+            "candidate strict command sequence is invalid".to_string(),
+        ));
+    }
+    for (index, command) in attempt.commands.iter().enumerate() {
+        verify_command(command, attempt_dir, index)?;
+    }
+    if attempt.passed {
+        if attempt.commands.len() != expected.len()
+            || attempt.commands.iter().any(|command| !command.passed())
+            || !attempt.failure.is_empty()
+        {
+            return Err(VerificationError::Evidence(
+                "passing candidate did not pass every strict command".to_string(),
+            ));
+        }
+    } else if attempt.failure.is_empty()
+        || attempt.commands.last().is_none_or(CommandEvidence::passed)
+        || attempt.commands[..attempt.commands.len() - 1]
+            .iter()
+            .any(|command| !command.passed())
+    {
+        return Err(VerificationError::Evidence(
+            "failed candidate does not contain a closed strict-command failure".to_string(),
+        ));
     }
     Ok(())
 }
@@ -229,9 +635,39 @@ fn verify_file(root: &Path, file: &FileEvidence) -> Result<(), VerificationError
     Ok(())
 }
 
-fn verify_command(command: &CommandEvidence) -> Result<(), VerificationError> {
+fn verify_command(
+    command: &CommandEvidence,
+    attempt_dir: &Path,
+    index: usize,
+) -> Result<(), VerificationError> {
+    let expected_args: [&[&str]; 3] = [
+        &["check", "--all-targets", "--offline"],
+        &["test", "--all-targets", "--offline"],
+        &[
+            "clippy",
+            "--all-targets",
+            "--offline",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ];
+    let expected_args = expected_args.get(index).ok_or_else(|| {
+        VerificationError::Evidence("candidate command ordinal is invalid".to_string())
+    })?;
+    let expected_args = expected_args
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    let program_name = Path::new(&command.program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if command.name.is_empty()
         || command.program.is_empty()
+        || !matches!(program_name.as_str(), "cargo" | "cargo.exe")
+        || command.args != expected_args
         || !valid_sha256_tag(&command.stdout_hash)
         || !valid_sha256_tag(&command.stderr_hash)
     {
@@ -241,7 +677,9 @@ fn verify_command(command: &CommandEvidence) -> Result<(), VerificationError> {
     }
     let stdout = command.stdout_path.canonicalize()?;
     let stderr = command.stderr_path.canonicalize()?;
-    if fs::metadata(&stdout)?.len() != command.stdout_len as u64
+    if !stdout.starts_with(attempt_dir)
+        || !stderr.starts_with(attempt_dir)
+        || fs::metadata(&stdout)?.len() != command.stdout_len as u64
         || fs::metadata(&stderr)?.len() != command.stderr_len as u64
         || sha256_file(&stdout)? != command.stdout_hash
         || sha256_file(&stderr)? != command.stderr_hash
@@ -362,6 +800,22 @@ fn file_json(file: &FileEvidence) -> String {
         file.len,
         file.controller_owned
     )
+}
+
+fn repair_file_json(root: &Path, file: &CandidateFile) -> Result<String, VerificationError> {
+    let path = root.join(file.path.replace('\\', "/")).canonicalize()?;
+    if !path.starts_with(root.canonicalize()?) {
+        return Err(VerificationError::Evidence(
+            "candidate repair file escaped its root".to_string(),
+        ));
+    }
+    let metadata = fs::metadata(&path)?;
+    Ok(format!(
+        "{{\"path\":\"{}\",\"hash\":\"{}\",\"len\":{}}}",
+        escape(&file.path.replace('\\', "/")),
+        escape(&sha256_file(&path)?),
+        metadata.len()
+    ))
 }
 
 fn command_json(command: &CommandEvidence) -> String {

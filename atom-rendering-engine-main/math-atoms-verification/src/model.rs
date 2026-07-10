@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 pub const VERIFICATION_SCHEMA_VERSION: u32 = 1;
 pub const MAX_CANDIDATE_FILES: usize = 32;
+pub const MAX_VERIFICATION_ATTEMPTS: u32 = 32;
 pub(crate) const MAX_CANDIDATE_FILE_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_LOG_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_FAILURE_BYTES: usize = 24 * 1024;
@@ -108,6 +109,18 @@ pub struct VerificationAttempt {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepairEvidence {
+    pub plan_id: String,
+    pub after_attempt: u32,
+    pub source_bundle_hash: String,
+    pub repaired_bundle_hash: String,
+    pub model: String,
+    pub files: Vec<CandidateFile>,
+    pub manifest_path: PathBuf,
+    pub manifest_hash: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileEvidence {
     pub path: String,
     pub hash: String,
@@ -119,6 +132,7 @@ pub struct FileEvidence {
 pub struct VerificationSuccess {
     pub plan_id: String,
     pub attempts: u32,
+    pub repairs: u32,
     pub bundle_hash: String,
     pub candidate_dir: PathBuf,
     pub manifest_path: PathBuf,
@@ -129,6 +143,7 @@ pub struct VerificationSuccess {
 pub struct VerifiedCandidate {
     pub plan_id: String,
     pub attempts: u32,
+    pub repairs: u32,
     pub bundle_hash: String,
     pub candidate_dir: PathBuf,
 }
@@ -197,12 +212,13 @@ pub(crate) fn validate_relative_path(value: &str) -> Result<(), VerificationErro
     Ok(())
 }
 
-pub(crate) fn canonical_bundle(files: &[CandidateFile]) -> Result<String, VerificationError> {
+pub fn candidate_output(files: &[CandidateFile]) -> Result<String, VerificationError> {
     validate_files(files)?;
-    let mut ordered = files.to_vec();
-    ordered.sort_by(|left, right| left.path.cmp(&right.path));
+    if files.len() == 1 {
+        return Ok(files[0].content.clone());
+    }
     let mut output = String::new();
-    for file in ordered {
+    for file in files {
         output.push_str("FILE: ");
         output.push_str(&file.path.replace('\\', "/"));
         output.push('\n');
@@ -215,7 +231,7 @@ pub(crate) fn canonical_bundle(files: &[CandidateFile]) -> Result<String, Verifi
 }
 
 pub(crate) fn bundle_hash(files: &[CandidateFile]) -> Result<String, VerificationError> {
-    Ok(sha256_tagged(canonical_bundle(files)?.as_bytes()))
+    Ok(sha256_tagged(candidate_output(files)?.as_bytes()))
 }
 
 pub(crate) fn validate_files(files: &[CandidateFile]) -> Result<(), VerificationError> {

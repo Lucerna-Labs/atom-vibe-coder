@@ -1,10 +1,11 @@
 use crate::model::{
     bundle_hash, clean_failure, validate_files, validate_plan_id, CandidateFile, CommandEvidence,
-    FileEvidence, VerificationAttempt, VerificationError, VerificationPolicy, VerificationSuccess,
-    MAX_LOG_BYTES,
+    FileEvidence, RepairEvidence, VerificationAttempt, VerificationError, VerificationPolicy,
+    VerificationSuccess, MAX_LOG_BYTES, MAX_VERIFICATION_ATTEMPTS,
 };
 use crate::store::{
-    finalize_success, load_attempt, verification_attempt_dir, write_attempt_manifest,
+    finalize_success, load_attempt, load_repair, store_repair, verification_attempt_dir,
+    write_attempt_manifest,
 };
 use math_atoms_hash::sha256_file;
 use math_atoms_lock::acquire_file_lease;
@@ -45,10 +46,10 @@ impl CandidateVerifier {
     ) -> Result<VerificationAttempt, VerificationError> {
         validate_plan_id(plan_id)?;
         validate_files(files)?;
-        if attempt == 0 {
-            return Err(VerificationError::InvalidCandidate(
-                "verification attempt must be positive".to_string(),
-            ));
+        if attempt == 0 || attempt > MAX_VERIFICATION_ATTEMPTS {
+            return Err(VerificationError::InvalidCandidate(format!(
+                "verification attempt must be between 1 and {MAX_VERIFICATION_ATTEMPTS}"
+            )));
         }
         fs::create_dir_all(&self.root)?;
         let lock = self.root.join(format!("{plan_id}.verification.lock"));
@@ -65,7 +66,7 @@ impl CandidateVerifier {
         let attempt_dir = verification_attempt_dir(&self.root, plan_id, attempt);
         let candidate_dir = attempt_dir.join("candidate");
         fs::create_dir_all(&candidate_dir)?;
-        let mut evidence = materialize_candidate(&candidate_dir, files)?;
+        let evidence = materialize_candidate(&candidate_dir, files)?;
         let normalized_files = normalized_files_with_controller_manifest(&candidate_dir, files)?;
         let expected_bundle_hash = bundle_hash(files)?;
         let cargo_target = attempt_dir.join("cargo-target");
@@ -88,7 +89,6 @@ impl CandidateVerifier {
                 break;
             }
         }
-        evidence.sort_by(|left, right| left.path.cmp(&right.path));
         let passed = commands.len() == specs.len() && commands.iter().all(CommandEvidence::passed);
         let failure = if passed {
             String::new()
@@ -123,6 +123,29 @@ impl CandidateVerifier {
             ));
         }
         finalize_success(&self.root, attempt)
+    }
+
+    pub fn load_repair(
+        &self,
+        plan_id: &str,
+        after_attempt: u32,
+    ) -> Result<Option<RepairEvidence>, VerificationError> {
+        load_repair(&self.root, plan_id, after_attempt)
+    }
+
+    pub fn store_repair(
+        &self,
+        failed: &VerificationAttempt,
+        model: &str,
+        files: &[CandidateFile],
+    ) -> Result<RepairEvidence, VerificationError> {
+        if failed.passed {
+            return Err(VerificationError::Evidence(
+                "a passing candidate cannot have a repair".to_string(),
+            ));
+        }
+        validate_files(files)?;
+        store_repair(&self.root, failed, model, files)
     }
 }
 
@@ -489,6 +512,60 @@ mod tests {
         assert!(!attempt.passed);
         assert!(attempt.failure.contains("missing_name"));
         assert!(verifier.finalize(&attempt).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repair_chain_requires_a_fresh_pass_and_recomputes_every_transition() {
+        let root = temp_root("repair-chain");
+        let verifier = CandidateVerifier::new(&root, VerificationPolicy::strict(120).unwrap());
+        let plan_id = "work-fedcbafedcbafedcbafedcba";
+        let failed = verifier
+            .verify_attempt(
+                plan_id,
+                1,
+                &crate_files("pub fn answer() -> i32 { missing_name }\n"),
+            )
+            .unwrap();
+        assert!(!failed.passed);
+
+        let repaired_files = crate_files(
+            "pub fn answer() -> i32 { 42 }\n#[cfg(test)] mod tests { use super::*; #[test] fn answer_is_42() { assert_eq!(answer(), 42); } }\n",
+        );
+        let repair = verifier
+            .store_repair(&failed, "deepseek-chat", &repaired_files)
+            .unwrap();
+        assert_eq!(repair.after_attempt, 1);
+        let passed = verifier.verify_attempt(plan_id, 2, &repair.files).unwrap();
+        assert!(passed.passed, "{}", passed.failure);
+
+        let success = verifier.finalize(&passed).unwrap();
+        let verified = verify_candidate_evidence(
+            &success.manifest_path,
+            &success.manifest_hash,
+            plan_id,
+            &success.bundle_hash,
+        )
+        .unwrap();
+        assert_eq!(verified.attempts, 2);
+        assert_eq!(verified.repairs, 1);
+
+        let repair_source = root
+            .join(plan_id)
+            .join("candidate-verification")
+            .join("attempt-001")
+            .join("repair")
+            .join("files")
+            .join("src")
+            .join("lib.rs");
+        fs::write(&repair_source, "pub fn answer() -> i32 { 7 }\n").unwrap();
+        assert!(verify_candidate_evidence(
+            &success.manifest_path,
+            &success.manifest_hash,
+            plan_id,
+            &success.bundle_hash,
+        )
+        .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
