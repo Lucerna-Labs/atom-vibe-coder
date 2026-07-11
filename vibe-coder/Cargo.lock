@@ -7,6 +7,17 @@ name = "atom-vibe-build-protocol"
 version = "0.1.0"
 
 [[package]]
+name = "atom-vibe-context"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "atom-vibe-scratchpad",
+ "math-atoms-bus",
+ "math-atoms-graph",
+ "math-atoms-json",
+]
+
+[[package]]
 name = "atom-vibe-scratchpad"
 version = "0.1.0"
 dependencies = [
@@ -18,12 +29,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "math-atoms-attestation"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-json",
+]
+
+[[package]]
+name = "math-atoms-bus"
+version = "0.1.0"
+
+[[package]]
+name = "math-atoms-doctrine"
+version = "0.1.0"
+
+[[package]]
+name = "math-atoms-graph"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-doctrine",
+ "math-atoms-hash",
+ "math-atoms-learning",
+ "math-atoms-proof",
+ "math-atoms-verification",
+ "math-atoms-work",
+]
+
+[[package]]
 name = "math-atoms-hash"
 version = "0.1.0"
 
 [[package]]
 name = "math-atoms-json"
 version = "0.1.0"
+
+[[package]]
+name = "math-atoms-learning"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-attestation",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+ "math-atoms-verification",
+ "math-atoms-work",
+]
 
 [[package]]
 name = "math-atoms-lock"
@@ -33,5 +85,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "math-atoms-proof"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+ "math-atoms-verification",
+]
+
+[[package]]
 name = "math-atoms-secrets"
 version = "0.1.0"
+
+[[package]]
+name = "math-atoms-verification"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
+
+[[package]]
+name = "math-atoms-work"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
