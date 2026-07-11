@@ -46,6 +46,7 @@ pub const WIKI_TAB: u32 = 30;
 pub const MCP_TAB: u32 = 31;
 pub const SKILLS_TAB: u32 = 32;
 pub const HOOKS_TAB: u32 = 33;
+pub const PROVIDER_THINKING_INPUT: u32 = 34;
 
 pub fn default_intent() -> &'static str {
     "Build a native Atom Vibe Coder app on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and side artifact preview."
@@ -197,7 +198,7 @@ impl NativeApp {
     pub fn run_current_intent(&mut self, ui: &UiState) {
         let intent = current_intent(ui);
         self.last_intent = intent.clone();
-        let proof = self.runtime.run_intent(&intent);
+        let proof = self.runtime.run_coder_intent(&intent);
         let store_result = self.append_proof_record(true);
         self.last_run_summary = if self.status() == RuntimeStatus::Proven {
             format!(
@@ -282,25 +283,33 @@ impl NativeApp {
             auth_scheme: ui.input_text(PROVIDER_AUTH_SCHEME_INPUT),
             body_template: ui.input_text(PROVIDER_BODY_TEMPLATE_INPUT),
             response_key: ui.input_text(PROVIDER_RESPONSE_KEY_INPUT),
+            thinking_level: ui.input_text(PROVIDER_THINKING_INPUT),
         });
         let ready = config.is_ready();
+        let provider_output = initial_provider_output(&config);
+        let readiness = if ready {
+            "ready"
+        } else if !config.api_key_present {
+            "key missing"
+        } else if config.thinking_level.is_none() {
+            "thinking invalid"
+        } else {
+            "incomplete"
+        };
         let summary = format!(
-            "Provider config applied: {} {} {} via {} ({})",
+            "Provider config applied: {} {} {} with {} thinking via {} ({})",
             config.kind.as_str(),
             config.wire_format.as_str(),
             config.model,
+            config
+                .thinking_level
+                .map(math_atoms_core::ProviderThinkingLevel::as_str)
+                .unwrap_or("invalid"),
             config.endpoint,
-            if ready { "key present" } else { "key missing" }
+            readiness
         );
         self.runtime.set_provider(config);
-        self.last_provider_output = if ready {
-            "Provider has not been executed.".to_string()
-        } else {
-            format!(
-                "Provider blocked: Missing credential in {}",
-                self.runtime.provider().api_key_env
-            )
-        };
+        self.last_provider_output = provider_output;
         self.provider_running = false;
         self.last_run_summary = summary;
     }
@@ -760,6 +769,13 @@ fn seed_provider_inputs(provider: &ProviderConfig, ui: &mut UiState) {
     ui.inputs
         .entry(PROVIDER_RESPONSE_KEY_INPUT)
         .or_insert_with(|| provider.response_key.clone());
+    ui.inputs.entry(PROVIDER_THINKING_INPUT).or_insert_with(|| {
+        provider
+            .thinking_level
+            .map(math_atoms_core::ProviderThinkingLevel::as_str)
+            .unwrap_or("invalid")
+            .to_string()
+    });
 }
 
 fn seed_design_inputs(ui: &mut UiState) {
@@ -789,6 +805,8 @@ fn initial_provider_output(provider: &ProviderConfig) -> String {
         "Provider blocked: Missing provider endpoint".to_string()
     } else if provider.model.trim().is_empty() {
         "Provider blocked: Missing provider model".to_string()
+    } else if provider.thinking_level.is_none() {
+        "Provider blocked: Thinking must be low, medium, or high".to_string()
     } else {
         "Provider blocked: Provider configuration is incomplete".to_string()
     }
@@ -1145,6 +1163,13 @@ mod tests {
         std::env::remove_var(&key);
         assert_eq!(app.runtime.provider().kind.as_str(), "ollama");
         assert_eq!(app.runtime.provider().model, "gpt-oss:120b");
+        assert_eq!(
+            app.runtime
+                .provider()
+                .thinking_level
+                .map(math_atoms_core::ProviderThinkingLevel::as_str),
+            Some("low")
+        );
         assert!(app.runtime.provider().api_key_present);
         assert_eq!(app.status(), RuntimeStatus::Draft);
         assert_eq!(app.provider_title_state(), "provider:idle");
@@ -1183,6 +1208,7 @@ mod tests {
         {
             let build = |state: &UiState| crate::ui::build(&app, state);
             assert!(widget_rect(&build, &ui, PROVIDER_KIND_INPUT).is_some());
+            assert!(widget_rect(&build, &ui, PROVIDER_THINKING_INPUT).is_some());
             assert!(widget_rect(&build, &ui, PROVIDER_BODY_TEMPLATE_INPUT).is_some());
             assert!(widget_rect(&build, &ui, APPLY_PROVIDER).is_some());
         }

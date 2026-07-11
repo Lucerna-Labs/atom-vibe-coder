@@ -14,7 +14,7 @@ $OriginalModel = $env:MATH_ATOMS_PROVIDER_MODEL
 $OriginalKeyEnv = $env:MATH_ATOMS_PROVIDER_KEY_ENV
 $OriginalFakeKey = $env:MATH_ATOMS_FAKE_KEY
 $TestStoreDir = Join-Path ([System.IO.Path]::GetTempPath()) ("math-atoms-provider-responsive-" + [Guid]::NewGuid().ToString("N"))
-$ExpectedProviderOutput = '```text' + "`nslow provider ok`n" + '```'
+$ExpectedProviderOutput = '{"provider":"slow"}' + "`n"
 
 function Get-FreePort() {
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -82,13 +82,13 @@ try {
                         $content = @{
                             packet_id = $packetId
                             status = "complete"
-                            files = @(@{ path = "response.txt"; purpose = "responsive provider proof"; acceptance = @("provider remains responsive") })
+                            files = @(@{ path = "response.json"; purpose = "responsive provider proof"; acceptance = @("provider remains responsive and JSON parses") })
                             checks = @("manifest complete")
                             risks = @()
                         } | ConvertTo-Json -Depth 8 -Compress
                     }
                     elseif ($stage -in @('file-implementation', 'file-correction', 'integration-correction', 'final-correction')) {
-                        $content = '```text' + "`nslow provider ok`n" + '```'
+                        $content = '```json' + "`n{`"provider`":`"slow`"}`n" + '```'
                     }
                     else {
                         $content = @{
@@ -99,7 +99,10 @@ try {
                             risks = @()
                         } | ConvertTo-Json -Depth 6 -Compress
                     }
-                    $body = @{ output_text = $content } | ConvertTo-Json -Depth 5 -Compress
+                    $body = @{
+                        output_text = $content
+                        usage = @{ output_tokens_details = @{ reasoning_tokens = 8 } }
+                    } | ConvertTo-Json -Depth 7 -Compress
                     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
                     $header = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
                     $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)
@@ -225,6 +228,20 @@ public static class MathAtomsProviderResponsive {
     }
     if ($proof.work_plan_id -notmatch '^work-[0-9a-f]{24}$' -or [int]$proof.work_packet_count -ne 19) {
         throw "Slow provider proof did not bind the 19-packet meticulous work plan. Tail: $tail"
+    }
+    if ($null -eq $proof.candidate_verification) {
+        throw "Slow provider proof did not bind candidate verification. Tail: $tail"
+    }
+    if ([string]$proof.candidate_verification.bundle_hash -ne [string]$proof.provider_output_hash) {
+        throw "Slow provider candidate bundle does not match its output artifact. Tail: $tail"
+    }
+    $candidateManifest = [string]$proof.candidate_verification.manifest_path
+    if (-not (Test-Path -LiteralPath $candidateManifest)) {
+        throw "Slow provider candidate manifest does not exist: $candidateManifest"
+    }
+    $candidateHash = "sha256:" + (Get-FileHash -LiteralPath $candidateManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($candidateHash -ne [string]$proof.candidate_verification.manifest_hash) {
+        throw "Slow provider candidate manifest hash does not recompute. Tail: $tail"
     }
 
     Write-Host "native provider responsiveness ok: $(Get-AtomNativeWindowTitle -Process $proc)"

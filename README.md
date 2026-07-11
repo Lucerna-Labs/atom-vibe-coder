@@ -76,6 +76,8 @@ cd "C:\Projects\Atoms Coder by Lucerna Labs"
 
 Provider selection:
 
+Atom Vibe Coder requires a reasoning-capable model. The preferred local minimum is Qwen3.5 9B with thinking enabled; `Q6_K` or better is the quality baseline when memory permits. Thinking is mandatory for every planning, file, review, repair, and final-correction packet. The adapter accepts `low`, `medium`, or `high`, defaults to `low`, rejects disabled thinking and maximum/xhigh modes, and fails closed when the response contains no reasoning evidence.
+
 ```powershell
 $env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
 $env:MATH_ATOMS_PROVIDER_KIND="ollama"  # OLLAMA_API_KEY, Ollama Cloud chat API
@@ -90,13 +92,14 @@ $env:MATH_ATOMS_PROVIDER_URL="https://provider.example/v1/chat/completions"
 $env:MATH_ATOMS_PROVIDER_KEY_ENV="MY_PROVIDER_API_KEY"
 $env:MATH_ATOMS_PROVIDER_AUTH_HEADER="Authorization"
 $env:MATH_ATOMS_PROVIDER_AUTH_SCHEME="Bearer" # use raw/none for x-api-key style headers
+$env:MATH_ATOMS_PROVIDER_THINKING_LEVEL="low" # low | medium | high; always on, never max/xhigh
 $env:MATH_ATOMS_PROVIDER_RESPONSE_KEY="answer" # optional top-level response key for a custom provider
-$env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"system":{{instructions_json}},"data":{{data_json}}}'
+$env:MATH_ATOMS_PROVIDER_BODY_TEMPLATE='{"model":{{model_json}},"system":{{instructions_json}},"data":{{data_json}},"reasoning_effort":{{thinking_json}}}'
 $env:MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS="900" # optional, bounded to 10..1800 seconds
 $env:MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS="21600" # optional total plan budget, bounded to 60..86400 seconds
 ```
 
-The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run.
+The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, thinking level, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. A custom template must carry `{{instructions_json}}`, `{{data_json}}`, and `{{thinking_json}}`. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run. See [Provider Runtime Requirements](atom-rendering-engine-main/docs/PROVIDER_RUNTIME.md).
 
 The native Settings tab also exposes `Design Upload` with HTML and CSS path inputs. `Build Design` runs the PMRE design-upload gate, compiles the uploaded design into a native renderer app, and refreshes the side artifact window.
 

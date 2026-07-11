@@ -174,7 +174,10 @@ try {
                             risks = @()
                         } | ConvertTo-Json -Depth 6 -Compress
                     }
-                    $response = @{ choices = @(@{ message = @{ content = $content } }) } | ConvertTo-Json -Depth 6 -Compress
+                    $response = @{
+                        choices = @(@{ message = @{ content = $content; reasoning_content = "fixture reasoning" } })
+                        usage = @{ completion_tokens_details = @{ reasoning_tokens = 8 } }
+                    } | ConvertTo-Json -Depth 8 -Compress
                     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($response)
                     $header = "HTTP/1.1 200 OK`r`nContent-Type: application/json`r`nContent-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
                     $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($header)

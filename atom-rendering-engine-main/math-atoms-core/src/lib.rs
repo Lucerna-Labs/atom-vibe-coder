@@ -30,6 +30,7 @@ pub use math_atoms_work::{
 pub use provider::{
     default_provider_output_dir, persist_provider_output, provider_output_hash,
     CandidateVerificationReport, PersistedProviderOutput, PreparedProviderCall, ProviderConfig,
-    ProviderConfigInput, ProviderError, ProviderExecutionOutput, ProviderKind, ProviderWireFormat,
+    ProviderConfigInput, ProviderError, ProviderExecutionOutput, ProviderKind,
+    ProviderThinkingLevel, ProviderWireFormat,
 };
 pub use runtime::{MathAtomsRuntime, ProofRun, ProviderExecutionTask, RuntimeState, RuntimeStatus};

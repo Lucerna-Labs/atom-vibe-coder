@@ -138,7 +138,13 @@ fn request_file_repair(
     let mut response_problem = String::new();
     for response_attempt in 1..=REPAIR_RESPONSE_ATTEMPTS {
         let prompt = repair_prompt(plan, failed, files, target, &response_problem);
-        let body = provider_body(call.wire_format, &call.model, &prompt, &call.body_template);
+        let body = provider_body(
+            call.wire_format,
+            &call.model,
+            &prompt,
+            &call.body_template,
+            call.thinking_level,
+        );
         let timeout = request_timeout(call, deadline)?;
         let raw = call
             .execute_body_with_curl_timeout(&body, timeout)
@@ -376,7 +382,7 @@ mod tests {
                         let body = read_request_body(&mut stream);
                         let response = scripted_response(&body, &server_saw_failure);
                         let envelope = format!(
-                            "{{\"choices\":[{{\"message\":{{\"content\":\"{}\"}}}}]}}",
+                            "{{\"choices\":[{{\"message\":{{\"content\":\"{}\",\"reasoning_content\":\"loopback reasoning\"}}}}],\"usage\":{{\"completion_tokens_details\":{{\"reasoning_tokens\":8}}}}}}",
                             escape_json(&response)
                         );
                         write!(

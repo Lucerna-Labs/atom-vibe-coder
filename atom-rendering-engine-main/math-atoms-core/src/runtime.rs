@@ -190,7 +190,15 @@ impl MathAtomsRuntime {
     }
 
     pub fn run_intent(&mut self, intent: &str) -> ProofRun {
-        let provider_route = provider_route_required(intent);
+        self.run_intent_in_mode(intent, false)
+    }
+
+    pub fn run_coder_intent(&mut self, intent: &str) -> ProofRun {
+        self.run_intent_in_mode(intent, true)
+    }
+
+    fn run_intent_in_mode(&mut self, intent: &str, coder_mode: bool) -> ProofRun {
+        let provider_route = coder_mode || provider_route_required(intent);
         let l0 = self.bus.l0_transport(
             BusMessageKind::IntentIngress,
             "operator",
@@ -243,6 +251,7 @@ impl MathAtomsRuntime {
                 auth_scheme: String::new(),
                 wire_format: ProviderWireFormat::OpenAiResponses,
                 response_key: String::new(),
+                thinking_level: crate::ProviderThinkingLevel::Low,
                 body: String::new(),
                 work_plan: None,
                 evidence_context: String::new(),
@@ -905,7 +914,69 @@ fn provider_requested_from_tokens(tokens: &[String]) -> bool {
 }
 
 fn provider_route_required_from_tokens(tokens: &[String], atoms: &[String]) -> bool {
-    provider_requested_from_tokens(tokens) || provider_signature_atoms(atoms) >= 3
+    provider_requested_from_tokens(tokens)
+        || software_generation_requested_from_tokens(tokens)
+        || provider_signature_atoms(atoms) >= 3
+}
+
+fn software_generation_requested_from_tokens(tokens: &[String]) -> bool {
+    if renderer_only_requested_from_tokens(tokens) {
+        return false;
+    }
+    let actions = [
+        "build",
+        "create",
+        "develop",
+        "generate",
+        "implement",
+        "make",
+        "code",
+        "write",
+        "scaffold",
+        "fix",
+        "repair",
+        "update",
+        "modify",
+        "improve",
+        "refactor",
+    ];
+    let artifacts = [
+        "app",
+        "application",
+        "software",
+        "program",
+        "tool",
+        "dashboard",
+        "driver",
+        "engine",
+        "adapter",
+        "service",
+        "website",
+        "browser",
+        "game",
+        "module",
+        "crate",
+        "library",
+        "cli",
+        "interface",
+    ];
+    tokens_contain_any(tokens, &actions) && tokens_contain_any(tokens, &artifacts)
+}
+
+fn renderer_only_requested_from_tokens(tokens: &[String]) -> bool {
+    tokens.iter().any(|token| token == "only")
+        && tokens_contain_any(
+            tokens,
+            &[
+                "renderer", "render", "artifact", "native", "pmre", "surface",
+            ],
+        )
+}
+
+fn tokens_contain_any(tokens: &[String], choices: &[&str]) -> bool {
+    tokens
+        .iter()
+        .any(|token| choices.iter().any(|choice| token == choice))
 }
 
 fn provider_signature_atoms(atoms: &[String]) -> usize {
@@ -1021,7 +1092,8 @@ fn intent_fit_bonus(intent: &str, recipe: &Recipe, provider_route: bool) -> i32 
     match recipe.kind {
         "renderer" if renderer_terms && tokens.iter().any(|token| token == "only") => 95,
         "renderer" if renderer_terms => 42,
-        "provider" if provider_route => 35,
+        "provider" if provider_requested_from_tokens(&tokens) => 35,
+        "provider" if provider_route => 12,
         "retrieval"
             if ["wiki", "graph", "rag"]
                 .iter()
@@ -1036,7 +1108,8 @@ fn intent_fit_bonus(intent: &str, recipe: &Recipe, provider_route: bool) -> i32 
         {
             14
         }
-        "product" if renderer_terms && tokens.iter().any(|token| token == "only") => -40,
+        "product" if renderer_only_requested_from_tokens(&tokens) => -40,
+        "product" if software_generation_requested_from_tokens(&tokens) => 72,
         "product"
             if ["app", "build", "production", "dashboard", "usable"]
                 .iter()
@@ -1269,6 +1342,51 @@ mod tests {
         assert!(provider_requested_from_tokens(&intent_tokens(
             "Run the provider api model with graph rag"
         )));
+    }
+
+    #[test]
+    fn ordinary_software_build_language_requires_provider_route() {
+        let intent = "Build me a small dependency-free Rust command-line inventory app. It should keep sample products in stock.";
+        assert!(software_generation_requested_from_tokens(&intent_tokens(
+            intent
+        )));
+        assert!(provider_route_required(intent));
+    }
+
+    #[test]
+    fn ordinary_software_build_language_selects_product_recipe() {
+        let config = ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]);
+        let mut runtime = MathAtomsRuntime::new(config);
+        let run = runtime.run_intent(
+            "Build me a small dependency-free Rust command-line inventory app. It should keep sample products in stock.",
+        );
+        assert_eq!(run.recipe_id, "production-app-runtime");
+        assert_eq!(run.status, RuntimeStatus::ProviderPending);
+        assert!(run.provider_call.is_some());
+    }
+
+    #[test]
+    fn coder_mode_routes_an_unstructured_brief_without_magic_words() {
+        let config = ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]);
+        let mut runtime = MathAtomsRuntime::new(config);
+        let run = runtime.run_coder_intent(
+            "I need an inventory that keeps products in stock and refuses an oversell.",
+        );
+        assert_eq!(run.status, RuntimeStatus::ProviderPending);
+        assert!(run.provider_call.is_some());
+    }
+
+    #[test]
+    fn renderer_only_build_language_stays_on_native_route() {
+        let intent = "Build a native renderer artifact only";
+        assert!(!software_generation_requested_from_tokens(&intent_tokens(
+            intent
+        )));
+        assert!(!provider_route_required(intent));
+        let mut runtime = MathAtomsRuntime::new(ProviderConfig::from_pairs(&[]));
+        let run = runtime.run_intent(intent);
+        assert_eq!(run.recipe_id, "native-atom-renderer");
+        assert_ne!(run.status, RuntimeStatus::ProviderPending);
     }
 
     #[test]

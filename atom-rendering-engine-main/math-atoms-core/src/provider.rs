@@ -11,10 +11,12 @@ use math_atoms_provider_transport::{
 };
 pub use math_atoms_verification::CandidateVerificationEvidence as CandidateVerificationReport;
 use math_atoms_work::{
-    validate_secure_packet_output, CompletedPacket, WorkError, WorkPlan, WorkPlanStore, WorkPrompt,
-    WorkStage,
+    validate_secure_packet_output, CompletedPacket, ValidatedPacketOutput, WorkError, WorkPacket,
+    WorkPlan, WorkPlanStore, WorkPrompt, WorkStage,
 };
 use std::time::{Duration, Instant};
+
+const PACKET_RESPONSE_ATTEMPTS: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderKind {
@@ -54,6 +56,23 @@ impl ProviderWireFormat {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderThinkingLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl ProviderThinkingLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderConfig {
     pub kind: ProviderKind,
@@ -65,6 +84,7 @@ pub struct ProviderConfig {
     pub auth_scheme: String,
     pub body_template: String,
     pub response_key: String,
+    pub thinking_level: Option<ProviderThinkingLevel>,
     pub api_key_present: bool,
     pub credential_scope_hash: String,
     pub request_timeout_seconds: u64,
@@ -84,6 +104,7 @@ pub struct ProviderConfigInput<'a> {
     pub auth_scheme: &'a str,
     pub body_template: &'a str,
     pub response_key: &'a str,
+    pub thinking_level: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,6 +116,7 @@ pub struct PreparedProviderCall {
     pub auth_scheme: String,
     pub wire_format: ProviderWireFormat,
     pub response_key: String,
+    pub thinking_level: ProviderThinkingLevel,
     pub body: String,
     pub work_plan: Option<WorkPlan>,
     pub evidence_context: String,
@@ -115,6 +137,8 @@ pub enum ProviderError {
     MissingModel,
     EmptyPrompt,
     InvalidBodyTemplate,
+    ThinkingRequired,
+    ThinkingEvidenceMissing,
     CredentialScopeChanged,
     Io(String),
     CurlFailed {
@@ -163,6 +187,11 @@ impl ProviderConfig {
         let body_template = non_empty_env("MATH_ATOMS_PROVIDER_BODY_TEMPLATE").unwrap_or_default();
         let response_key = non_empty_env("MATH_ATOMS_PROVIDER_RESPONSE_KEY")
             .unwrap_or_else(|| default_response_key().to_string());
+        let thinking_level = provider_thinking_level(
+            std::env::var("MATH_ATOMS_PROVIDER_THINKING_LEVEL")
+                .ok()
+                .as_deref(),
+        );
         let api_key = std::env::var(&api_key_env).unwrap_or_default();
         let api_key_present = !api_key.trim().is_empty();
         let credential_scope_hash = credential_scope_hash(&endpoint, &api_key);
@@ -191,6 +220,7 @@ impl ProviderConfig {
             auth_scheme: normalize_auth_scheme(&auth_scheme),
             body_template,
             response_key: normalize_response_key(&response_key),
+            thinking_level,
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
@@ -232,6 +262,12 @@ impl ProviderConfig {
         let body_template = lookup("MATH_ATOMS_PROVIDER_BODY_TEMPLATE").unwrap_or_default();
         let response_key = lookup("MATH_ATOMS_PROVIDER_RESPONSE_KEY")
             .unwrap_or_else(|| default_response_key().to_string());
+        let thinking_level = provider_thinking_level(
+            pairs
+                .iter()
+                .find(|(name, _)| *name == "MATH_ATOMS_PROVIDER_THINKING_LEVEL")
+                .map(|(_, value)| *value),
+        );
         let api_key = lookup(&api_key_env).unwrap_or_default();
         let api_key_present = !api_key.trim().is_empty();
         let credential_scope_hash = credential_scope_hash(&endpoint, &api_key);
@@ -259,6 +295,7 @@ impl ProviderConfig {
             auth_scheme: normalize_auth_scheme(&auth_scheme),
             body_template,
             response_key: normalize_response_key(&response_key),
+            thinking_level,
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
@@ -279,6 +316,7 @@ impl ProviderConfig {
             auth_scheme: "",
             body_template: "",
             response_key: "",
+            thinking_level: "",
         })
     }
 
@@ -303,6 +341,7 @@ impl ProviderConfig {
         let body_template = input.body_template.trim().to_string();
         let response_key = non_empty_value(input.response_key)
             .unwrap_or_else(|| default_response_key().to_string());
+        let thinking_level = provider_thinking_level(Some(input.thinking_level));
         let api_key = std::env::var(&api_key_env).unwrap_or_default();
         let api_key_present = !api_key.trim().is_empty();
         let credential_scope_hash = credential_scope_hash(&endpoint, &api_key);
@@ -331,6 +370,7 @@ impl ProviderConfig {
             auth_scheme,
             body_template,
             response_key: normalize_response_key(&response_key),
+            thinking_level,
             api_key_present,
             credential_scope_hash,
             request_timeout_seconds,
@@ -345,6 +385,7 @@ impl ProviderConfig {
             && !self.endpoint.trim().is_empty()
             && !self.model.trim().is_empty()
             && !self.auth_header.trim().is_empty()
+            && self.thinking_level.is_some()
     }
 
     pub fn prepare_call(
@@ -377,9 +418,11 @@ impl ProviderConfig {
                 env: self.api_key_env.clone(),
             });
         }
+        let thinking_level = self.thinking_level.ok_or(ProviderError::ThinkingRequired)?;
         if !self.body_template.trim().is_empty()
             && (!template_has_value(&self.body_template, "instructions")
-                || !template_has_value(&self.body_template, "data"))
+                || !template_has_value(&self.body_template, "data")
+                || !template_has_value(&self.body_template, "thinking"))
         {
             return Err(ProviderError::InvalidBodyTemplate);
         }
@@ -406,7 +449,14 @@ impl ProviderConfig {
             auth_scheme: self.auth_scheme.clone(),
             wire_format: self.wire_format,
             response_key: self.response_key.clone(),
-            body: provider_body(self.wire_format, &self.model, &prompt, &self.body_template),
+            thinking_level,
+            body: provider_body(
+                self.wire_format,
+                &self.model,
+                &prompt,
+                &self.body_template,
+                thinking_level,
+            ),
             work_plan,
             evidence_context: context,
             body_template: self.body_template.clone(),
@@ -468,22 +518,8 @@ impl PreparedProviderCall {
                         plan.id, self.plan_timeout_seconds
                     )));
                 }
-                let prompt = plan
-                    .prompt(&packet, &completed, &self.evidence_context)
-                    .map_err(work_error)?;
-                let body =
-                    provider_body(self.wire_format, &self.model, &prompt, &self.body_template);
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let packet_timeout = self.request_timeout_seconds.min(remaining.as_secs().max(1));
-                let raw = self
-                    .execute_body_with_curl_timeout(&body, packet_timeout)
-                    .map_err(|error| {
-                        ProviderError::WorkPacketFailed(format!(
-                            "plan {} packet {} provider call failed: {error:?}",
-                            plan.id, packet.id
-                        ))
-                    })?;
-                let validated = validate_secure_packet_output(&packet, &raw).map_err(work_error)?;
+                let validated =
+                    self.execute_packet_with_correction(&plan, &packet, &completed, deadline)?;
                 if packet.stage == WorkStage::FileManifest {
                     plan.expand_files(validated.files.clone())
                         .map_err(work_error)?;
@@ -528,6 +564,57 @@ impl PreparedProviderCall {
         })
     }
 
+    fn execute_packet_with_correction(
+        &self,
+        plan: &WorkPlan,
+        packet: &WorkPacket,
+        completed: &[CompletedPacket],
+        deadline: Instant,
+    ) -> Result<ValidatedPacketOutput, ProviderError> {
+        let mut response_problem = String::new();
+        for response_attempt in 1..=PACKET_RESPONSE_ATTEMPTS {
+            if Instant::now() >= deadline {
+                return Err(ProviderError::WorkPacketFailed(format!(
+                    "plan {} exceeded its total execution budget while correcting packet {}",
+                    plan.id, packet.id
+                )));
+            }
+            let mut prompt = plan
+                .prompt(packet, completed, &self.evidence_context)
+                .map_err(work_error)?;
+            if !response_problem.is_empty() {
+                prompt.instructions.push_str(&format!(
+                    "\nCorrection attempt {response_attempt}/{PACKET_RESPONSE_ATTEMPTS}. The previous response failed the controller gate: {response_problem}. Return a fresh complete response that satisfies the same contract; do not explain the failure."
+                ));
+            }
+            let body = provider_body(
+                self.wire_format,
+                &self.model,
+                &prompt,
+                &self.body_template,
+                self.thinking_level,
+            );
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let packet_timeout = self.request_timeout_seconds.min(remaining.as_secs().max(1));
+            let raw = self
+                .execute_body_with_curl_timeout(&body, packet_timeout)
+                .map_err(|error| {
+                    ProviderError::WorkPacketFailed(format!(
+                        "plan {} packet {} provider call failed: {error:?}",
+                        plan.id, packet.id
+                    ))
+                })?;
+            match validate_secure_packet_output(packet, &raw) {
+                Ok(validated) => return Ok(validated),
+                Err(error) => response_problem = error.to_string(),
+            }
+        }
+        Err(ProviderError::WorkPacketFailed(format!(
+            "plan {} packet {} failed its response contract after {} attempts: {}",
+            plan.id, packet.id, PACKET_RESPONSE_ATTEMPTS, response_problem
+        )))
+    }
+
     fn execute_body_with_curl(&self, body_json: &str) -> Result<String, ProviderError> {
         self.execute_body_with_curl_timeout(body_json, self.request_timeout_seconds)
     }
@@ -547,6 +634,7 @@ impl PreparedProviderCall {
             timeout_seconds,
         })
         .map_err(provider_transport_error)?;
+        validate_thinking_evidence(&body, self.wire_format)?;
         parse_provider_text(&body, self.wire_format, &self.response_key)
     }
 
@@ -609,19 +697,92 @@ fn parse_provider_text(
     if object.is_empty() {
         return Err(ProviderError::ResponseEnvelopeInvalid);
     }
-    validated_provider_text(text.ok_or(ProviderError::ResponseTextMissing)?)
+    validated_provider_text(&text.ok_or(ProviderError::ResponseTextMissing)?)
 }
 
-fn responses_output_text(root: &JsonValue) -> Option<&str> {
+fn validate_thinking_evidence(
+    body: &str,
+    wire_format: ProviderWireFormat,
+) -> Result<(), ProviderError> {
+    let root = parse_json(body).map_err(|_| ProviderError::ResponseEnvelopeInvalid)?;
+    let usage_tokens = match wire_format {
+        ProviderWireFormat::OpenAiResponses => root
+            .get("usage")
+            .and_then(|usage| usage.get("output_tokens_details"))
+            .and_then(|details| details.get("reasoning_tokens"))
+            .and_then(JsonValue::as_u64),
+        ProviderWireFormat::ChatCompletions => root
+            .get("usage")
+            .and_then(|usage| usage.get("completion_tokens_details"))
+            .and_then(|details| details.get("reasoning_tokens"))
+            .and_then(JsonValue::as_u64),
+        ProviderWireFormat::OllamaChat => None,
+    };
+    if usage_tokens.is_some_and(|tokens| tokens > 0) {
+        return Ok(());
+    }
+    let visible = match wire_format {
+        ProviderWireFormat::OpenAiResponses => root
+            .get("output")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    matches!(
+                        item.get("type").and_then(JsonValue::as_str),
+                        Some("reasoning" | "thinking")
+                    )
+                })
+            }),
+        ProviderWireFormat::ChatCompletions => root
+            .get("choices")
+            .and_then(JsonValue::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .is_some_and(chat_message_has_thinking),
+        ProviderWireFormat::OllamaChat => root
+            .get("message")
+            .and_then(|message| message.get("thinking"))
+            .and_then(JsonValue::as_str)
+            .is_some_and(|thinking| !thinking.trim().is_empty()),
+    };
+    if visible {
+        Ok(())
+    } else {
+        Err(ProviderError::ThinkingEvidenceMissing)
+    }
+}
+
+fn chat_message_has_thinking(message: &JsonValue) -> bool {
+    if message
+        .get("reasoning_content")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|thinking| !thinking.trim().is_empty())
+    {
+        return true;
+    }
+    message
+        .get("content")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                matches!(
+                    block.get("type").and_then(JsonValue::as_str),
+                    Some("reasoning" | "thinking")
+                )
+            })
+        })
+}
+
+fn responses_output_text(root: &JsonValue) -> Option<String> {
     if let Some(text) = root.get("output_text").and_then(JsonValue::as_str) {
-        return Some(text);
+        return Some(text.to_string());
     }
     for item in root.get("output")?.as_array()? {
         for content in item.get("content")?.as_array()? {
             let kind = content.get("type").and_then(JsonValue::as_str);
             if matches!(kind, Some("output_text" | "text")) {
                 if let Some(text) = content.get("text").and_then(JsonValue::as_str) {
-                    return Some(text);
+                    return Some(text.to_string());
                 }
             }
         }
@@ -629,17 +790,35 @@ fn responses_output_text(root: &JsonValue) -> Option<&str> {
     None
 }
 
-fn chat_completion_text(root: &JsonValue) -> Option<&str> {
-    root.get("choices")?
+fn chat_completion_text(root: &JsonValue) -> Option<String> {
+    let content = root
+        .get("choices")?
         .as_array()?
         .first()?
         .get("message")?
-        .get("content")?
-        .as_str()
+        .get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let mut output = String::new();
+    for block in content.as_array()? {
+        if matches!(
+            block.get("type").and_then(JsonValue::as_str),
+            Some("text" | "output_text")
+        ) {
+            if let Some(text) = block.get("text").and_then(JsonValue::as_str) {
+                output.push_str(text);
+            }
+        }
+    }
+    (!output.is_empty()).then_some(output)
 }
 
-fn ollama_chat_text(root: &JsonValue) -> Option<&str> {
-    root.get("message")?.get("content")?.as_str()
+fn ollama_chat_text(root: &JsonValue) -> Option<String> {
+    root.get("message")?
+        .get("content")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn validated_provider_text(text: &str) -> Result<String, ProviderError> {
@@ -695,7 +874,7 @@ fn non_empty_value(value: &str) -> Option<String> {
 
 fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
     let mut value = format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
         config.kind.as_str(),
         config.model,
         config.endpoint,
@@ -703,6 +882,10 @@ fn work_fingerprint(config: &ProviderConfig, evidence: &[Evidence]) -> String {
         config.auth_header,
         config.auth_scheme,
         config.response_key,
+        config
+            .thinking_level
+            .map(ProviderThinkingLevel::as_str)
+            .unwrap_or("invalid"),
         sha256_tagged(config.body_template.as_bytes()),
         config.credential_scope_hash,
         config.request_timeout_seconds,
@@ -808,6 +991,15 @@ fn provider_wire_format_from(value: &str) -> ProviderWireFormat {
     }
 }
 
+fn provider_thinking_level(value: Option<&str>) -> Option<ProviderThinkingLevel> {
+    match value.unwrap_or("low").trim().to_ascii_lowercase().as_str() {
+        "" | "low" => Some(ProviderThinkingLevel::Low),
+        "medium" => Some(ProviderThinkingLevel::Medium),
+        "high" => Some(ProviderThinkingLevel::High),
+        _ => None,
+    }
+}
+
 fn default_wire_format(kind: ProviderKind) -> ProviderWireFormat {
     match kind {
         ProviderKind::OpenAiResponses => ProviderWireFormat::OpenAiResponses,
@@ -822,7 +1014,7 @@ fn default_model(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::OpenAiResponses => "gpt-5.5",
         ProviderKind::OllamaCloudChat => "gpt-oss:120b",
-        ProviderKind::MistralChat => "mistral-large-latest",
+        ProviderKind::MistralChat => "mistral-medium-3-5",
         ProviderKind::DeepSeekChat => "deepseek-v4-pro",
         ProviderKind::Custom => "",
     }
@@ -865,44 +1057,60 @@ pub(crate) fn provider_body(
     model: &str,
     prompt: &WorkPrompt,
     body_template: &str,
+    thinking_level: ProviderThinkingLevel,
 ) -> String {
     if !body_template.trim().is_empty() {
-        return render_body_template(body_template, model, prompt);
+        return render_body_template(body_template, model, prompt, thinking_level);
     }
     match format {
-        ProviderWireFormat::OpenAiResponses => responses_body(model, prompt),
+        ProviderWireFormat::OpenAiResponses => responses_body(model, prompt, thinking_level),
         ProviderWireFormat::ChatCompletions if model.eq_ignore_ascii_case("deepseek-v4-pro") => {
             deepseek_pro_body(model, prompt)
         }
-        ProviderWireFormat::ChatCompletions => chat_completions_body(model, prompt),
-        ProviderWireFormat::OllamaChat => ollama_chat_body(model, prompt),
+        ProviderWireFormat::ChatCompletions => chat_completions_body(model, prompt, thinking_level),
+        ProviderWireFormat::OllamaChat => ollama_chat_body(model, prompt, thinking_level),
     }
 }
 
-fn responses_body(model: &str, prompt: &WorkPrompt) -> String {
+fn responses_body(
+    model: &str,
+    prompt: &WorkPrompt,
+    thinking_level: ProviderThinkingLevel,
+) -> String {
     format!(
-        "{{\"model\":\"{}\",\"instructions\":\"{}\",\"input\":[{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}],\"temperature\":0.1}}",
+        "{{\"model\":\"{}\",\"instructions\":\"{}\",\"input\":[{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"{}\"}}]}}],\"reasoning\":{{\"effort\":\"{}\"}},\"temperature\":0.1}}",
         json_escape(model),
         json_escape(&prompt.instructions),
-        json_escape(&prompt.data)
+        json_escape(&prompt.data),
+        thinking_level.as_str()
     )
 }
 
-fn ollama_chat_body(model: &str, prompt: &WorkPrompt) -> String {
+fn ollama_chat_body(
+    model: &str,
+    prompt: &WorkPrompt,
+    thinking_level: ProviderThinkingLevel,
+) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"think\":\"{}\",\"stream\":false}}",
         json_escape(model),
         json_escape(&prompt.instructions),
-        json_escape(&prompt.data)
+        json_escape(&prompt.data),
+        thinking_level.as_str()
     )
 }
 
-fn chat_completions_body(model: &str, prompt: &WorkPrompt) -> String {
+fn chat_completions_body(
+    model: &str,
+    prompt: &WorkPrompt,
+    thinking_level: ProviderThinkingLevel,
+) -> String {
     format!(
-        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"temperature\":0.1,\"stream\":false}}",
+        "{{\"model\":\"{}\",\"messages\":[{{\"role\":\"system\",\"content\":\"{}\"}},{{\"role\":\"user\",\"content\":\"{}\"}}],\"reasoning_effort\":\"{}\",\"temperature\":0.1,\"stream\":false}}",
         json_escape(model),
         json_escape(&prompt.instructions),
-        json_escape(&prompt.data)
+        json_escape(&prompt.data),
+        thinking_level.as_str()
     )
 }
 
@@ -915,7 +1123,12 @@ fn deepseek_pro_body(model: &str, prompt: &WorkPrompt) -> String {
     )
 }
 
-fn render_body_template(template: &str, model: &str, prompt: &WorkPrompt) -> String {
+fn render_body_template(
+    template: &str,
+    model: &str,
+    prompt: &WorkPrompt,
+    thinking_level: ProviderThinkingLevel,
+) -> String {
     template
         .replace("{{model}}", &json_escape(model))
         .replace("{{instructions}}", &json_escape(&prompt.instructions))
@@ -928,6 +1141,11 @@ fn render_body_template(template: &str, model: &str, prompt: &WorkPrompt) -> Str
         .replace(
             "{{data_json}}",
             &format!("\"{}\"", json_escape(&prompt.data)),
+        )
+        .replace("{{thinking}}", thinking_level.as_str())
+        .replace(
+            "{{thinking_json}}",
+            &format!("\"{}\"", thinking_level.as_str()),
         )
 }
 
@@ -970,6 +1188,7 @@ mod tests {
             .unwrap();
         assert!(call.body.contains("\"model\":\"gpt-5.5\""));
         assert!(call.body.contains("\"input\""));
+        assert!(call.body.contains("\"reasoning\":{\"effort\":\"low\"}"));
         let body = parse_json(&call.body).unwrap();
         let instructions = body
             .get("instructions")
@@ -1018,6 +1237,7 @@ mod tests {
         assert_eq!(config.wire_format, ProviderWireFormat::OllamaChat);
         assert_eq!(call.endpoint, "https://ollama.com/api/chat");
         assert!(call.body.contains("\"messages\""));
+        assert!(call.body.contains("\"think\":\"low\""));
         assert!(call.body.contains("\"stream\":false"));
         assert!(!call.body.contains("secret"));
     }
@@ -1042,6 +1262,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(text, "mistral-ok");
+        let chunked = parse_provider_text(
+            r#"{"choices":[{"message":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"private"}]},{"type":"text","text":"chunked-ok"}]}}]}"#,
+            ProviderWireFormat::ChatCompletions,
+            "content",
+        )
+        .unwrap();
+        assert_eq!(chunked, "chunked-ok");
     }
 
     #[test]
@@ -1083,10 +1310,11 @@ mod tests {
             .unwrap();
         assert_eq!(config.kind, ProviderKind::MistralChat);
         assert_eq!(config.wire_format, ProviderWireFormat::ChatCompletions);
-        assert_eq!(config.model, "mistral-large-latest");
+        assert_eq!(config.model, "mistral-medium-3-5");
         assert_eq!(call.endpoint, "https://api.mistral.ai/v1/chat/completions");
         assert!(call.body.contains("\"messages\""));
         assert!(call.body.contains("\"role\":\"user\""));
+        assert!(call.body.contains("\"reasoning_effort\":\"low\""));
         assert!(!call.body.contains("secret"));
     }
 
@@ -1137,6 +1365,7 @@ mod tests {
         assert_eq!(call.auth_header, "x-api-key");
         assert_eq!(call.auth_scheme, "");
         assert!(call.body.contains("\"model\":\"vibe-model\""));
+        assert!(call.body.contains("\"reasoning_effort\":\"low\""));
         assert!(!call.body.contains("secret"));
     }
 
@@ -1161,7 +1390,7 @@ mod tests {
             ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
             (
                 "MATH_ATOMS_PROVIDER_BODY_TEMPLATE",
-                "{\"m\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}}}",
+                "{\"m\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}},\"thinking\":{{thinking_json}}}",
             ),
             ("MATH_ATOMS_PROVIDER_RESPONSE_KEY", "answer"),
             ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
@@ -1174,6 +1403,7 @@ mod tests {
             "{\"m\":\"vibe-model\",\"system\":\"Atom Vibe Coder trusted work-packet controller."
         ));
         assert!(call.body.contains("\"data\":\"{\\\"operator_request\\\""));
+        assert!(call.body.contains("\"thinking\":\"low\""));
         assert_eq!(call.work_plan.as_ref().unwrap().packets.len(), 5);
         assert_eq!(
             parse_provider_text(
@@ -1202,6 +1432,51 @@ mod tests {
     }
 
     #[test]
+    fn provider_rejects_disabled_or_max_thinking_levels() {
+        for level in ["none", "off", "disabled", "max", "xhigh"] {
+            let config = ProviderConfig::from_pairs(&[
+                ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+                ("MATH_ATOMS_PROVIDER_MODEL", "custom-model"),
+                ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
+                ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+                ("MATH_ATOMS_PROVIDER_THINKING_LEVEL", level),
+            ]);
+            assert!(!config.is_ready(), "{level} must not be ready");
+            assert_eq!(
+                config.prepare_call("build an app", "provider-model-loop", &[]),
+                Err(ProviderError::ThinkingRequired),
+                "{level} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_requires_response_side_thinking_evidence() {
+        assert_eq!(
+            validate_thinking_evidence(
+                r#"{"choices":[{"message":{"content":"answer","reasoning_content":""}}],"usage":{"completion_tokens_details":{"reasoning_tokens":0}}}"#,
+                ProviderWireFormat::ChatCompletions,
+            ),
+            Err(ProviderError::ThinkingEvidenceMissing)
+        );
+        assert!(validate_thinking_evidence(
+            r#"{"choices":[{"message":{"content":"answer","reasoning_content":"worked it through"}}]}"#,
+            ProviderWireFormat::ChatCompletions,
+        )
+        .is_ok());
+        assert!(validate_thinking_evidence(
+            r#"{"output_text":"answer","usage":{"output_tokens_details":{"reasoning_tokens":12}}}"#,
+            ProviderWireFormat::OpenAiResponses,
+        )
+        .is_ok());
+        assert!(validate_thinking_evidence(
+            r#"{"message":{"content":"answer","thinking":"worked it through"}}"#,
+            ProviderWireFormat::OllamaChat,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn work_plan_identity_changes_with_provider_request_contract() {
         let base = [
             ("MATH_ATOMS_PROVIDER_KIND", "custom"),
@@ -1215,12 +1490,31 @@ mod tests {
         let mut changed = base.to_vec();
         changed.push((
             "MATH_ATOMS_PROVIDER_BODY_TEMPLATE",
-            "{\"model\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}},\"contract\":\"changed\"}",
+            "{\"model\":{{model_json}},\"system\":{{instructions_json}},\"data\":{{data_json}},\"thinking\":{{thinking_json}},\"contract\":\"changed\"}",
         ));
         let second = ProviderConfig::from_pairs(&changed)
             .prepare_call("build an app", "provider-model-loop", &[])
             .unwrap();
         assert_ne!(first.work_plan.unwrap().id, second.work_plan.unwrap().id);
+    }
+
+    #[test]
+    fn work_plan_identity_includes_thinking_level() {
+        let base = [
+            ("MATH_ATOMS_PROVIDER_KIND", "custom"),
+            ("MATH_ATOMS_PROVIDER_MODEL", "custom-model"),
+            ("MATH_ATOMS_PROVIDER_URL", "https://example.invalid/run"),
+            ("MATH_ATOMS_PROVIDER_API_KEY", "secret"),
+        ];
+        let low = ProviderConfig::from_pairs(&base)
+            .prepare_call("build an app", "provider-model-loop", &[])
+            .unwrap();
+        let mut medium_config = base.to_vec();
+        medium_config.push(("MATH_ATOMS_PROVIDER_THINKING_LEVEL", "medium"));
+        let medium = ProviderConfig::from_pairs(&medium_config)
+            .prepare_call("build an app", "provider-model-loop", &[])
+            .unwrap();
+        assert_ne!(low.work_plan.unwrap().id, medium.work_plan.unwrap().id);
     }
 
     #[test]

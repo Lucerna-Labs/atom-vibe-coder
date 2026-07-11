@@ -4,8 +4,9 @@ use crate::model::{
     EVIDENCE_SCROLL, EXEC_PROVIDER, HOOKS_TAB, INTENT_INPUT, MARK_DRIFT, MCP_TAB,
     PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT, PROVIDER_BODY_TEMPLATE_INPUT,
     PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
-    PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_URL_INPUT, RUNTIME_SETTINGS_TAB,
-    RUN_LOOP, SETTINGS_SCROLL, SETTINGS_TAB, SKILLS_TAB, WIKI_TAB, WORKSPACE_TAB,
+    PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_THINKING_INPUT, PROVIDER_URL_INPUT,
+    RUNTIME_SETTINGS_TAB, RUN_LOOP, SETTINGS_SCROLL, SETTINGS_TAB, SKILLS_TAB, WIKI_TAB,
+    WORKSPACE_TAB,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
 use pmre_kit::{
@@ -658,6 +659,7 @@ fn provider_connections_panel(app: &NativeApp, ui: &UiState) -> Vec<UxNode> {
         provider_input(ui, PROVIDER_KEY_ENV_INPUT, "key env"),
         provider_input(ui, PROVIDER_AUTH_HEADER_INPUT, "auth header"),
         provider_input(ui, PROVIDER_AUTH_SCHEME_INPUT, "auth scheme"),
+        provider_input(ui, PROVIDER_THINKING_INPUT, "thinking: low | medium | high"),
         provider_input(ui, PROVIDER_RESPONSE_KEY_INPUT, "response key"),
         provider_input(ui, PROVIDER_BODY_TEMPLATE_INPUT, "body template"),
         mini_card(

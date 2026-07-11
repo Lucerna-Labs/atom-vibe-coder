@@ -14,7 +14,7 @@ fn main() {
                 .to_string()
         })
     };
-    let run = runtime.run_intent(&intent);
+    let run = runtime.run_coder_intent(&intent);
     if run.status == RuntimeStatus::Blocked {
         eprintln!(
             "provider proof blocked before execution: {:?}",

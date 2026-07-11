@@ -4,6 +4,7 @@
 
 A [Lucerna Labs](https://github.com/Lucerna-Labs) project. Created by [Jesse G. Alicea](https://github.com/Rekonquest).
 **Building on the engine?** Start with the [Developer Guide](docs/DEVELOPER_GUIDE.md).
+Provider-backed app generation must also follow the [Provider Runtime Requirements](docs/PROVIDER_RUNTIME.md).
 
 A from-scratch 2D UI rendering engine built **entirely from mathematical primitives** —
 no GPU vector library (no Vello, Skia, or Cairo), no web engine, no Tauri/Electron. Shapes
