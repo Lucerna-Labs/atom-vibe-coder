@@ -1,0 +1,13 @@
+[package]
+name = "atom-vibe-scratchpad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Build and model scoped working context isolated from Atom long-term memory."
+
+[dependencies]
+atom-vibe-build-protocol = { path = "../atom-vibe-build-protocol" }
+math-atoms-hash = { path = "../../atom-rendering-engine-main/math-atoms-hash" }
+math-atoms-json = { path = "../../atom-rendering-engine-main/math-atoms-json" }
+math-atoms-lock = { path = "../../atom-rendering-engine-main/math-atoms-lock" }
+math-atoms-secrets = { path = "../../atom-rendering-engine-main/math-atoms-secrets" }
