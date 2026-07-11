@@ -1,0 +1,11 @@
+[package]
+name = "atom-vibe-build-gates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Artifact-backed deterministic gates for Atom Vibe Coder's six-stage build spine."
+
+[dependencies]
+atom-vibe-build-protocol = { path = "../atom-vibe-build-protocol" }
+math-atoms-bus = { path = "../../atom-rendering-engine-main/math-atoms-bus" }
+math-atoms-hash = { path = "../../atom-rendering-engine-main/math-atoms-hash" }

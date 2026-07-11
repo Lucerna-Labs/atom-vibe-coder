@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "atom-vibe-build-gates"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "math-atoms-bus",
+ "math-atoms-hash",
+]
+
+[[package]]
 name = "atom-vibe-build-protocol"
 version = "0.1.0"
 
