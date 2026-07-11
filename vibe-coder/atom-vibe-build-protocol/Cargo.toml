@@ -1,0 +1,8 @@
+[package]
+name = "atom-vibe-build-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dependency-free six-stage build-spine contracts for Atom Vibe Coder."
+
+[dependencies]

@@ -9,6 +9,7 @@
 /.agents/
 
 # Runtime/editor noise.
+/vibe-coder/target/
 .DS_Store
 Thumbs.db
 *.log
