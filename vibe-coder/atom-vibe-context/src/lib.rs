@@ -554,6 +554,14 @@ mod tests {
             .evidence
             .iter()
             .any(|item| item.node_id.starts_with("wiki:recipes:2d-engine-build")));
+        assert!(context
+            .evidence
+            .iter()
+            .any(|item| item.node_id.starts_with("wiki:atom-vibe-build-spine")));
+        assert!(context
+            .evidence
+            .iter()
+            .any(|item| item.node_id.starts_with("wiki:model-scratchpad")));
         fs::remove_dir_all(root).unwrap();
     }
 }

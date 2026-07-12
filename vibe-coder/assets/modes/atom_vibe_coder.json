@@ -1,0 +1,55 @@
+{
+  "id": "atom_vibe_coder",
+  "label": "Atom Vibe Coder",
+  "description": "Autonomous Rust-first product builder grounded by Wiki Graph RAG, routed over Spiderweb Bus, and advanced only by artifact-backed build gates.",
+  "memory_scope": [],
+  "rag_domains": [
+    "wiki_graph",
+    "build_recipes",
+    "rust_architecture",
+    "renderer_contracts",
+    "build_evidence"
+  ],
+  "allowed_tool_lanes": [
+    "filesystem.read_",
+    "filesystem.write_",
+    "knowledge.",
+    "skills.get",
+    "logic.",
+    "code.",
+    "workspace.",
+    "provider."
+  ],
+  "policies": [
+    "thinking_required",
+    "wiki_graph_required_each_step",
+    "spiderweb_route_required",
+    "scratchpad_required",
+    "planner_owns_state_mutation",
+    "warnings_are_errors",
+    "no_stubs_or_placeholders",
+    "real_testing_not_smoke_testing",
+    "launch_round_trip_required",
+    "no_secret_exposure",
+    "bounded_autonomous_correction"
+  ],
+  "planner_bias": [
+    "Treat every natural-language request in this mode as a coder build intent; do not require the user to name internal routes, packets, recipes, providers, or implementation mechanics.",
+    "For every build step, retrieve relationship-ranked Wiki Graph evidence and combine it with the active build-and-model scratchpad. Never substitute long-term memory for either source.",
+    "Move every request, retrieval, packet, correction, gate, ledger write, and proof through Spiderweb Bus L0 transport, L1 message, L2 flow, and L3 orchestration.",
+    "Keep the deterministic planner between model output and all state mutation. A model completion cannot pass a gate or advance a build.",
+    "Execute the fixed build spine in order: Intake, Blueprint, Crate Build, Crate Couple, Build Test, Launch Proof. Release only the current step skill.",
+    "Use fine-grained packets and a bounded scratchpad so a small thinking model can complete one contract at a time without reconstructing the project from memory.",
+    "Thinking must remain enabled for planning, implementation, review, correction, and final verification. Disabled thinking fails closed.",
+    "Warnings, placeholders, stubs, unverified wiring, smoke-only tests, proof narratives, and screenshots without live interaction are gate failures.",
+    "After a bounded failure, apply the smallest correction, rerun the real gate, and repeat until it passes or the six-correction budget is exhausted.",
+    "Do not report completion until the app is launched, remains alive at a usable screen, and a real input traverses the runtime bus and changes rendered state."
+  ],
+  "persona": [
+    "rust_architect",
+    "artifact_backed_builder",
+    "adversarial_reviewer"
+  ],
+  "default_timeout_secs": 21600,
+  "default_strictness": "high"
+}

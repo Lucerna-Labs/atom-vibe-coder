@@ -40,6 +40,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-vibe-mode"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "math-atoms-hash",
+ "math-atoms-json",
+]
+
+[[package]]
 name = "atom-vibe-scratchpad"
 version = "0.1.0"
 dependencies = [

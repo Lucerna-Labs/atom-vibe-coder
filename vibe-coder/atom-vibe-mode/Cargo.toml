@@ -1,0 +1,13 @@
+[package]
+name = "atom-vibe-mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mode profile and progressive build-skill disclosure for Atom Vibe Coder."
+
+[dependencies]
+atom-vibe-build-protocol = { path = "../atom-vibe-build-protocol" }
+math-atoms-json = { path = "../../atom-rendering-engine-main/math-atoms-json" }
+
+[dev-dependencies]
+math-atoms-hash = { path = "../../atom-rendering-engine-main/math-atoms-hash" }
