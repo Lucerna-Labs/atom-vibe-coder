@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "atom-vibe-build-gates",
+    "atom-vibe-build-planner",
     "atom-vibe-build-protocol",
     "atom-vibe-context",
     "atom-vibe-scratchpad",

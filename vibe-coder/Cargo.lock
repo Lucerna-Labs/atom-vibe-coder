@@ -12,6 +12,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-vibe-build-planner"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-gates",
+ "atom-vibe-build-protocol",
+ "math-atoms-bus",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
+
+[[package]]
 name = "atom-vibe-build-protocol"
 version = "0.1.0"
 
