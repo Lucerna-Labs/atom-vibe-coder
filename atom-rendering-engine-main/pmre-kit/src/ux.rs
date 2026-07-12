@@ -8,6 +8,7 @@
 //! orchestrator and the app's state-driven `build` function.
 
 use crate::paint::Rgba;
+use pmre_transparency_core::TransparencyMaterial;
 
 /// Main-axis direction of a box's children (the flex axis).
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +109,8 @@ pub struct Style {
     pub radius: f32,
     pub border: Option<(f32, Rgba)>,
     pub shadow: Option<Shadow>,
+    /// Optional screen-space transparent/translucent backdrop material.
+    pub transparency: Option<TransparencyMaterial>,
     pub id: Option<u32>,
     pub role: Role,
 }
@@ -127,6 +130,7 @@ impl Default for Style {
             radius: 0.0,
             border: None,
             shadow: None,
+            transparency: None,
             id: None,
             role: Role::None,
         }
@@ -195,6 +199,10 @@ impl Style {
         self.border = Some((w, c));
         self
     }
+    pub fn transparency(mut self, material: TransparencyMaterial) -> Self {
+        self.transparency = Some(material.sanitized());
+        self
+    }
     /// Make this box hit-testable with the given id and role.
     pub fn interactive(mut self, id: u32, role: Role) -> Self {
         self.id = Some(id);
@@ -222,7 +230,8 @@ impl Style {
 }
 
 /// One styled run inside a rich-text flow. Spans wrap together as a single paragraph,
-/// so bold/linked/colored fragments flow inline the way HTML text does.
+/// so bold/linked/colored fragments flow inline the way HTML text does. A span boundary
+/// is never a break opportunity: a word split across spans still wraps as one word.
 #[derive(Clone, Debug)]
 pub struct Span {
     pub text: String,
@@ -231,6 +240,9 @@ pub struct Span {
     pub background: Option<Rgba>,
     pub bold: bool,
     pub underline: bool,
+    /// Zero-width decoration (e.g. a text caret): painted at its flow position but
+    /// occupying no space, so toggling it never re-wraps the surrounding text.
+    pub overlay: bool,
 }
 
 impl Span {
@@ -242,7 +254,12 @@ impl Span {
             background: None,
             bold: false,
             underline: false,
+            overlay: false,
         }
+    }
+    pub fn overlay(mut self) -> Span {
+        self.overlay = true;
+        self
     }
     pub fn background(mut self, color: Rgba) -> Span {
         self.background = Some(color);

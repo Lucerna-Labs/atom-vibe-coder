@@ -49,6 +49,28 @@ identity. It is not long-term memory and cannot replace graph retrieval.
 The model has no authority to advance a stage. Only the deterministic planner,
 after recomputing on-disk evidence, can mutate build state.
 
+## Runtime Composition
+
+`atom-vibe-runtime` creates an immutable session for each natural-language build,
+opens the current planner ledger and provider-model scratchpad, retrieves pinned
+graph contracts plus relationship-ranked task evidence, releases only the current
+skill, and prepares a stale-safe provider request. Changing the planner revision,
+current step, provider, model, endpoint, wire format, or thinking level invalidates
+that prepared request before HTTP execution.
+
+Accepted provider output is written as a content-addressed artifact. A hash-chained
+turn record binds request, raw response, output, token usage, thinking evidence,
+graph node IDs, context route, provider-result route, scratchpad entry, planner
+revision, provider, and model. Restart reloads the session, planner, scratchpad,
+and turn chain and recomputes every artifact hash.
+
+The native PMRE shell consumes this composition root without moving planner or
+provider ownership into renderer primitives. `Run` creates and prepares the
+durable build session; `Vibe Step` executes only the currently released skill on
+a worker thread, returns ownership of the runtime to the UI, and exposes the
+prepared, running, verification-pending, or blocked state in the native title.
+The original `Provider` control remains the meticulous product-build route.
+
 ## Trust Boundary
 
 Mode policy and the current skill occupy the provider system/instructions role.

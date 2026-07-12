@@ -8,6 +8,7 @@ description = "The single orchestrator: all policy, no mechanism. Drives the kit
 [dependencies]
 pmre-kit = { path = "../pmre-kit" }
 pmre-html = { path = "../pmre-html" }
+pmre-transparency = { path = "../pmre-transparency" }
 wgpu     = { version = "22", optional = true }
 pollster = { version = "0.3", optional = true }
 

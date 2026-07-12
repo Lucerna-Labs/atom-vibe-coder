@@ -14,8 +14,13 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `vibe-coder/atom-vibe-context` joins Wiki Graph RAG and model-scoped scratchpad
   context on a complete L0-L3 Spiderweb route for every build step.
 - `vibe-coder/atom-vibe-mode` owns the product mode and progressive skill release.
+- `vibe-coder/atom-vibe-native-bridge` owns native session state, asynchronous
+  Vibe-step execution, and safe runtime ownership transfer back to the PMRE UI.
 - `vibe-coder/atom-vibe-provider` owns direct, thinking-required model turns over
   the credential-safe renderer transport.
+- `vibe-coder/atom-vibe-runtime` is the composition root for durable sessions,
+  current-skill prompts, provider turns, output receipts, gate submission,
+  provider switching, restart recovery, and provider-result Spiderweb routes.
 - `vibe-coder/atom-vibe-scratchpad` owns isolated, append-only working context for
   one build and one provider-model identity. It does not replace graph RAG.
 - `atom-rendering-engine-main/math-atoms-attestation` owns allowlisted executable harness runs and immutable source/executable/output attestations for learning authority.
@@ -27,13 +32,19 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `atom-rendering-engine-main/math-atoms-lock` owns kernel-released cross-process leases and auditable process-start owner tokens for work, learning, and proof stores.
 - `atom-rendering-engine-main/math-atoms-json` fully parses provider and ledger JSON, including Unicode surrogate pairs, duplicate-key rejection, depth limits, and trailing-data rejection, without third-party dependencies.
 - `atom-rendering-engine-main/math-atoms-native` is the native PMRE app shell; it does not use Chrome, Electron, Tauri, or browser-local state.
+- `atom-rendering-engine-main/pmre-transparency-core` owns allocation-free `no_std` color,
+  Fresnel, refraction/TIR, Beer-Lambert, phase, thin-film, dither, blend, and WBOIT math.
+- `atom-rendering-engine-main/pmre-transparency` owns the live premultiplied backdrop-material
+  mechanism: clipped blur, screen refraction, RGB dispersion, absorption, scatter, and rim paint.
 - `atom-rendering-engine-main/math-atoms-proof` owns the strict append-only proof ledger and backward-compatible proof-record schema.
 - `atom-rendering-engine-main/math-atoms-provider-transport` owns bounded credential-safe single-submit HTTP execution and content-addressed provider output evidence.
+- `atom-rendering-engine-main/math-atoms-repair` owns failed-gate file targeting and bounded repair context construction.
 - `atom-rendering-engine-main/math-atoms-secrets` owns format-preserving credential redaction for every durable evidence boundary.
 - `atom-rendering-engine-main/math-atoms-work` owns strict, resumable, content-addressed provider work packets and expanded-plan verification.
 - `app/` is an archived legacy static doctrine mirror only; it is not a product runtime or production verification path.
 - `scripts/doctrine-check.mjs` validates that archived mirror; it is not a functional readiness test.
 - `scripts/Test-NativeFunctional.ps1` launches the real native window against an isolated temp proof store and exercises typed intent routing, Run, Capture, Provider, and Drift.
+- `scripts/Test-NativeVibeRuntime.ps1` drives the native `Run` and `Vibe Step` controls against a local thinking-provider fixture, requires a responsive window, and verifies durable session, output, turn-chain, and complete L0-L3 route evidence.
 - `scripts/Test-NativeProviderResponsiveness.ps1` launches the native app against a slow local provider and proves the window remains responsive while provider execution is running.
 - `scripts/Test-ProviderExecution.ps1` runs the configured provider through `math-atoms-core` and requires returned model text.
 - `scripts/Test-ProviderBuildSeveralApps.ps1` asks the configured provider to generate several tiny Rust fixtures, compiles them, runs them, and writes side-window artifact rows.
@@ -48,7 +59,7 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 - `scripts/Test-WorkPacketResume.ps1` executes every provider packet, takes the endpoint offline, then requires the identical plan to resume the full canonical DAG from revalidated evidence without a network request.
 - `scripts/Launch-Native.ps1` builds when needed and launches the native PMRE app through an environment-preserving detached Win32 process, preferring job breakaway when Windows permits it, with an explicit working directory.
 - `scripts/verify-production.ps1` is strict by default: warning-fatal Rust doctrine/tests, clippy, native build/artifact, and provider execution must all pass.
-- The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with hue, saturation, light, text scale, radius, glass/frost, animation, typography, control-shape, palette, button, and toggle controls.
+- The interactive PMRE renderer auto-injects a dependency-free `Design` rail into every `render_ui` surface. The rail opens a native customization panel with cookbook material presets (legacy, clear/frosted glass, water, crystal, soap film, wax, smoke, stained glass, and heat haze), collapsed advanced blur/refraction/dispersion/rim controls, hue, saturation, light, output gamma, text scale, radius, glass strength, animation, typography, control shape, palette, button, and toggle controls. Legacy is the default and injects no Customizer material; frames that also contain no app-authored material keep the parallel renderer bit-identical. Gamma is applied after alpha flattening and before presentation quantization, with a neutral `1.00` default and an adjustable `0.50`-`2.50` range.
 - Atom stack order is a production gate. Recipes are scored by canonical stack order, proof state records the selected stack, and provider app-build gates reject shuffled or missing stacks.
 
 ## Durable Self-Learning
@@ -88,6 +99,17 @@ cd "C:\Projects\Atoms Coder by Lucerna Labs"
 .\scripts\Launch-Native.ps1 -Build -Restart
 ```
 
+Run the local LM Studio Qwen diagnostic profile (probes the loaded model and reasoning response
+before launch):
+
+```powershell
+.\scripts\Launch-Native-Qwen-LMStudio.ps1 -Build
+```
+
+The equivalent double-click launcher is `START-ATOM-QWEN-TEST.cmd`. It targets the currently
+validated LM Studio model ID `qwen3.5-9b@q6_k_xl`. Q6 is suitable for integration testing; the
+project's production-qualification baseline remains Qwen3.5 9B Q8 or stronger.
+
 Provider selection:
 
 Atom Vibe Coder requires a reasoning-capable model. The recommended minimum
@@ -122,9 +144,11 @@ $env:MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS="21600" # optional total plan budg
 
 The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, thinking level, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. A custom template must carry `{{instructions_json}}`, `{{data_json}}`, and `{{thinking_json}}`. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run. See [Provider Runtime Requirements](atom-rendering-engine-main/docs/PROVIDER_RUNTIME.md) and the harness-owned [Provider and Model Requirements](vibe-coder/docs/PROVIDER_MODELS.md).
 
+On the native Assistant surface, `Run` creates a durable six-stage Vibe build session and prepares the released skill through the context Spiderweb route. `Vibe Step` executes that prepared skill asynchronously and persists the provider receipt, output artifact, scratchpad checkpoint, and result Spiderweb route. The existing `Provider` control remains the meticulous multi-packet product-build path.
+
 The native Settings tab also exposes `Design Upload` with HTML and CSS path inputs. `Build Design` runs the PMRE design-upload gate, compiles the uploaded design into a native renderer app, and refreshes the side artifact window.
 
-Every generated interactive PMRE app also gets the renderer-owned `Design` rail without app-specific wiring. Open it to tune colors, text scale, typography preset, rounded/square/pill/circle control shape, glass intensity, animation intensity, and preview controls such as mic, mute, and record buttons. The controls are native PMRE widgets, not browser/Electron/Tauri widgets.
+Every generated interactive PMRE app also gets the renderer-owned `Design` rail without app-specific wiring. Open it to choose a live transparency material, expand Advanced optics for frost/blur, refraction, RGB dispersion, and Fresnel-rim controls, and tune colors, output gamma (`0.50`-`2.50`, neutral `1.00`), text scale, typography, control shape, glass strength, animation, and preview controls. The controls are native PMRE widgets, not browser/Electron/Tauri widgets. The exact live/math-only/unsupported boundary is documented in [Transparency Cookbook Coverage](atom-rendering-engine-main/docs/TRANSPARENCY_COOKBOOK.md).
 
 Run a real DeepSeek V4 Pro thinking-model test that asks the provider to generate a dependency-free Rust toy app through meticulous packets, compiles it with `rustc`, runs it, and verifies output:
 

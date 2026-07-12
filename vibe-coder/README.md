@@ -37,7 +37,9 @@ by capability and real gate results, not by brand name.
 | `atom-vibe-build-planner` | Persistent ledger, retries, restart recovery, and planner bus routes |
 | `atom-vibe-context` | Wiki Graph RAG plus scratchpad context over Spiderweb L0-L3 |
 | `atom-vibe-mode` | Mode policy and progressive step-skill disclosure |
+| `atom-vibe-native-bridge` | Native PMRE session state and asynchronous Vibe-step ownership bridge |
 | `atom-vibe-provider` | Thinking-required multi-provider turns using credential-safe transport |
+| `atom-vibe-runtime` | Durable sessions, current-skill turns, provider receipts, gate submission, and restart recovery |
 | `atom-vibe-scratchpad` | Build-and-model scoped append-only working context |
 
 ## Documentation

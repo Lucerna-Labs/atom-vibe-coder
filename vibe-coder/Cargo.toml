@@ -6,7 +6,9 @@ members = [
     "atom-vibe-build-protocol",
     "atom-vibe-context",
     "atom-vibe-mode",
+    "atom-vibe-native-bridge",
     "atom-vibe-provider",
+    "atom-vibe-runtime",
     "atom-vibe-scratchpad",
 ]
 

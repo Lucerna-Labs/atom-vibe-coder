@@ -6,6 +6,10 @@ license = "MIT"
 description = "Native PMRE shell for Atom Vibe Coder."
 
 [dependencies]
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate. The fast single-shot
+# Atom Vibe Coder path vendored from the v1 build, wired to the Run button.
+avc-core = { path = "../avc-core" }
+atom-vibe-native-bridge = { path = "../../vibe-coder/atom-vibe-native-bridge" }
 math-atoms-core = { path = "../math-atoms-core" }
 pmre-kit = { path = "../pmre-kit" }
 pmre-orchestrator = { path = "../pmre-orchestrator" }

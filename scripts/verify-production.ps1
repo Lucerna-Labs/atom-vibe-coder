@@ -58,6 +58,8 @@ try {
         Write-Warning "provider execution gate skipped by -AllowProviderBlock; this is not a production-ready verification"
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeVibeRuntime.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native Vibe runtime gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeIdleCpu.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native idle CPU gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeLaunchEnvironment.ps1")
@@ -87,6 +89,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "design upload build gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeFunctional.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native functional gate failed with exit code $LASTEXITCODE" }
+        powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeVibeRuntime.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "native Vibe runtime gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeIdleCpu.ps1")
         if ($LASTEXITCODE -ne 0) { throw "native idle CPU gate failed with exit code $LASTEXITCODE" }
         powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Test-NativeLaunchEnvironment.ps1")

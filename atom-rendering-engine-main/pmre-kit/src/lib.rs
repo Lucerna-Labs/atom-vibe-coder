@@ -22,6 +22,10 @@ pub mod raster;
 pub mod text;
 pub mod ux;
 
+pub mod transparency {
+    pub use pmre_transparency_core::*;
+}
+
 pub use framebuffer::{BandView, Framebuffer, Surface};
 pub use geom::{Affine, Vec2};
 pub use paint::{Bounds, DrawCmd, Paint, Rgba, Shape};

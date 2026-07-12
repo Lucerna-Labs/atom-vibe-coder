@@ -27,6 +27,102 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-vibe-build-gates"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "math-atoms-bus",
+ "math-atoms-hash",
+]
+
+[[package]]
+name = "atom-vibe-build-planner"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-gates",
+ "atom-vibe-build-protocol",
+ "math-atoms-bus",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
+
+[[package]]
+name = "atom-vibe-build-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "atom-vibe-context"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "atom-vibe-scratchpad",
+ "math-atoms-bus",
+ "math-atoms-graph",
+]
+
+[[package]]
+name = "atom-vibe-mode"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "math-atoms-json",
+]
+
+[[package]]
+name = "atom-vibe-native-bridge"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-runtime",
+ "math-atoms-core",
+]
+
+[[package]]
+name = "atom-vibe-provider"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-core",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-provider-transport",
+]
+
+[[package]]
+name = "atom-vibe-runtime"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-gates",
+ "atom-vibe-build-planner",
+ "atom-vibe-build-protocol",
+ "atom-vibe-context",
+ "atom-vibe-mode",
+ "atom-vibe-provider",
+ "atom-vibe-scratchpad",
+ "math-atoms-bus",
+ "math-atoms-core",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-provider-transport",
+]
+
+[[package]]
+name = "atom-vibe-scratchpad"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-protocol",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
+ "math-atoms-secrets",
+]
+
+[[package]]
+name = "avc-core"
+version = "0.1.0"
+
+[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -484,6 +580,7 @@ dependencies = [
  "math-atoms-learning",
  "math-atoms-proof",
  "math-atoms-provider-transport",
+ "math-atoms-repair",
  "math-atoms-secrets",
  "math-atoms-verification",
  "math-atoms-work",
@@ -537,6 +634,8 @@ dependencies = [
 name = "math-atoms-native"
 version = "0.1.0"
 dependencies = [
+ "atom-vibe-native-bridge",
+ "avc-core",
  "math-atoms-core",
  "pmre-kit",
  "pmre-orchestrator",
@@ -558,6 +657,14 @@ version = "0.1.0"
 dependencies = [
  "math-atoms-hash",
  "math-atoms-secrets",
+]
+
+[[package]]
+name = "math-atoms-repair"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-verification",
+ "math-atoms-work",
 ]
 
 [[package]]
@@ -709,6 +816,7 @@ name = "pmre-kit"
 version = "0.3.0"
 dependencies = [
  "pmre-font",
+ "pmre-transparency-core",
 ]
 
 [[package]]
@@ -717,9 +825,22 @@ version = "0.3.0"
 dependencies = [
  "pmre-html",
  "pmre-kit",
+ "pmre-transparency",
  "pollster",
  "wgpu",
 ]
+
+[[package]]
+name = "pmre-transparency"
+version = "0.1.0"
+dependencies = [
+ "pmre-kit",
+ "pmre-transparency-core",
+]
+
+[[package]]
+name = "pmre-transparency-core"
+version = "0.1.0"
 
 [[package]]
 name = "pollster"

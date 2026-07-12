@@ -98,13 +98,13 @@ try {
                         $content = @{
                             packet_id = $packetId
                             status = "complete"
-                            files = @(@{ path = "response.txt"; purpose = "resumable proof"; acceptance = @("resumes without network") })
+                            files = @(@{ path = "response.json"; purpose = "resumable proof"; acceptance = @("valid JSON resumes without network") })
                             checks = @("manifest complete")
                             risks = @()
                         } | ConvertTo-Json -Depth 8 -Compress
                     }
                     elseif ($stage -in @("file-implementation", "file-correction", "integration-correction", "final-correction")) {
-                        $content = '```text' + "`nresumable provider proof`n" + '```'
+                        $content = '```json' + "`n{`"proof`":`"resumable provider proof`"}`n" + '```'
                     }
                     else {
                         $content = @{

@@ -7,3 +7,4 @@ description = "The single primitive kit: all dumb rendering mechanism, wired fro
 
 [dependencies]
 pmre-font = { path = "../pmre-font" }
+pmre-transparency-core = { path = "../pmre-transparency-core" }

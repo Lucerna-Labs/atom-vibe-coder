@@ -110,6 +110,20 @@ function Send-KeyDown([int]$Code, [string]$Stage) {
     }
 }
 
+function Read-ClipboardText([string]$Stage) {
+    # The app writes the Win32 clipboard from its WM_CHAR handler; a cross-process
+    # Get-Clipboard can observe the moment before it lands (or lose an OpenClipboard
+    # race), returning $null. Retry until it is populated instead of NRE-ing on null.
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $value = Get-Clipboard -Raw
+        if ($null -ne $value -and $value.Length -gt 0) {
+            return $value.TrimEnd("`r", "`n")
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Clipboard was empty after $Stage"
+}
+
 function Clear-FocusedInput() {
     for ($i = 0; $i -lt 180; $i++) {
         $handle = Get-AtomNativeWindowHandle -Process $script:proc
@@ -154,12 +168,12 @@ try {
     Send-KeyDown 0x2E "delete trailing correction at caret"
     Send-WmChar 1 "select corrected intent"
     Send-WmChar 3 "copy corrected intent"
-    $copied = (Get-Clipboard -Raw).TrimEnd("`r", "`n")
+    $copied = Read-ClipboardText "Ctrl+C copy"
     if ($copied -ne $ExpectedIntent) {
         throw "Ctrl+C copied unexpected intent. Expected '$ExpectedIntent', got '$copied'"
     }
     Send-WmChar 24 "cut corrected intent"
-    $cut = (Get-Clipboard -Raw).TrimEnd("`r", "`n")
+    $cut = Read-ClipboardText "Ctrl+X cut"
     if ($cut -ne $ExpectedIntent) {
         throw "Ctrl+X copied unexpected intent. Expected '$ExpectedIntent', got '$cut'"
     }

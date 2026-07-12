@@ -6,6 +6,7 @@
 use crate::geom::{Affine, Vec2};
 use crate::paint::{Bounds, DrawCmd, Paint, Rgba, Shape};
 use crate::ux::{Align, Dim, Dir, Edges, Justify, Role, Shadow, Span, Style, UxNode};
+use pmre_transparency_core::TransparencyMaterial;
 
 /// What a laid-out box paints as.
 #[derive(Clone, Debug)]
@@ -15,6 +16,7 @@ pub enum Painted {
         radius: f32,
         border: Option<(f32, Rgba)>,
         shadow: Option<Shadow>,
+        transparency: Option<TransparencyMaterial>,
     },
     Text {
         content: String,
@@ -107,9 +109,94 @@ pub struct RichLine {
     pub width: f32,
 }
 
+/// One same-style fragment of a flow word: `si` indexes the span it came from.
+struct RichFrag {
+    si: usize,
+    text: String,
+    width: f32,
+    overlay: bool,
+}
+
+/// A wrap-atomic word: consecutive non-whitespace fragments, possibly spanning styles.
+struct RichWord {
+    space_before: bool,
+    frags: Vec<RichFrag>,
+    width: f32,
+}
+
+/// Group styled spans into wrap-atomic words. Whitespace anywhere separates words; a
+/// span boundary does not, so "hel" + "lo" from adjacent spans wraps as one word.
+/// Overlay spans attach as zero-width fragments at their flow position.
+fn rich_words(spans: &[Span]) -> Vec<RichWord> {
+    let mut words: Vec<RichWord> = Vec::new();
+    let mut open: Option<RichWord> = None;
+    let mut pending_space = false;
+    for (si, span) in spans.iter().enumerate() {
+        if span.overlay {
+            let frag = RichFrag {
+                si,
+                text: span.text.clone(),
+                width: 0.0,
+                overlay: true,
+            };
+            match open.as_mut() {
+                Some(word) => word.frags.push(frag),
+                None => {
+                    open = Some(RichWord {
+                        space_before: pending_space,
+                        frags: vec![frag],
+                        width: 0.0,
+                    });
+                    pending_space = false;
+                }
+            }
+            continue;
+        }
+        let mut rest = span.text.as_str();
+        while !rest.is_empty() {
+            let ws = rest.starts_with(char::is_whitespace);
+            let run_end = rest
+                .find(|c: char| c.is_whitespace() != ws)
+                .unwrap_or(rest.len());
+            let run = &rest[..run_end];
+            rest = &rest[run_end..];
+            if ws {
+                if let Some(word) = open.take() {
+                    words.push(word);
+                }
+                pending_space = true;
+            } else {
+                let width = crate::text::advance_styled(run, span.size, span.bold);
+                let word = open.get_or_insert_with(|| {
+                    let space_before = pending_space;
+                    pending_space = false;
+                    RichWord {
+                        space_before,
+                        frags: Vec::new(),
+                        width: 0.0,
+                    }
+                });
+                word.frags.push(RichFrag {
+                    si,
+                    text: run.to_string(),
+                    width,
+                    overlay: false,
+                });
+                word.width += width;
+            }
+        }
+    }
+    if let Some(word) = open.take() {
+        words.push(word);
+    }
+    words
+}
+
 /// Break styled spans into wrapped lines (greedy, word-granular). Returns the lines and
 /// the uniform line height (1.3× the largest span size). Spans flow inline: a word from
-/// a bold span continues the same line as the plain words before it.
+/// a bold span continues the same line as the plain words before it, and a word split
+/// across spans never breaks at the span boundary. A word wider than the line is split
+/// at character granularity. Overlay spans place zero-width pieces that never re-wrap.
 pub fn rich_lines(spans: &[Span], max_width: Option<f32>) -> (Vec<RichLine>, f32) {
     let max_size = spans.iter().map(|s| s.size).fold(1.0f32, f32::max);
     let line_h = max_size * 1.3;
@@ -122,67 +209,118 @@ pub fn rich_lines(spans: &[Span], max_width: Option<f32>) -> (Vec<RichLine>, f32
     };
     // The span index of the piece currently being extended, for run merging.
     let mut cur_span: Option<usize> = None;
-    let mut pending_space = false;
-
-    for (si, span) in spans.iter().enumerate() {
-        let starts_ws = span.text.starts_with(char::is_whitespace);
-        let ends_ws = span.text.ends_with(char::is_whitespace);
-        let mut any_word = false;
-        for (wi, word) in span.text.split_whitespace().enumerate() {
-            any_word = true;
-            let space_before = if wi == 0 {
-                pending_space || (si > 0 && starts_ws)
-            } else {
-                true
-            };
-            let word_w = crate::text::advance_styled(word, span.size, span.bold);
-            let space_w = if space_before && !cur.pieces.is_empty() {
-                crate::text::advance_styled(" ", span.size, span.bold)
-            } else {
-                0.0
-            };
-            if !cur.pieces.is_empty() && cur.width + space_w + word_w > max_w {
-                lines.push(std::mem::replace(
-                    &mut cur,
-                    RichLine {
-                        pieces: Vec::new(),
-                        width: 0.0,
-                    },
-                ));
-                cur_span = None;
-            }
-            if !cur.pieces.is_empty() && cur_span == Some(si) {
-                // same style run continues on this line — extend the piece
-                let piece = cur.pieces.last_mut().unwrap();
-                if space_before {
-                    piece.text.push(' ');
-                }
-                piece.text.push_str(word);
-                piece.width += space_w + word_w;
-                cur.width += space_w + word_w;
-            } else {
-                let space_w = if cur.pieces.is_empty() { 0.0 } else { space_w };
-                let x = cur.width + space_w;
-                cur.pieces.push(RichPiece {
-                    text: word.to_string(),
-                    size: span.size,
-                    color: span.color,
-                    background: span.background,
-                    bold: span.bold,
-                    underline: span.underline,
-                    x,
-                    width: word_w,
-                });
-                cur.width = x + word_w;
-                cur_span = Some(si);
-            }
-            pending_space = false;
+    let new_line = || RichLine {
+        pieces: Vec::new(),
+        width: 0.0,
+    };
+    let piece_for = |frag: &RichFrag, spans: &[Span], x: f32, text: &str, width: f32| {
+        let span = &spans[frag.si];
+        RichPiece {
+            text: text.to_string(),
+            size: span.size,
+            color: span.color,
+            background: span.background,
+            bold: span.bold,
+            underline: span.underline,
+            x,
+            width,
         }
-        if any_word {
-            pending_space = ends_ws;
-        } else if !span.text.is_empty() {
-            // whitespace-only span still separates its neighbors
-            pending_space = true;
+    };
+
+    for word in rich_words(spans) {
+        let first_text = word.frags.iter().find(|f| !f.overlay);
+        let lead = first_text.unwrap_or(&word.frags[0]);
+        let space_w = if word.space_before && !cur.pieces.is_empty() {
+            crate::text::advance_styled(" ", spans[lead.si].size, spans[lead.si].bold)
+        } else {
+            0.0
+        };
+        if first_text.is_none() {
+            // overlay-only word (e.g. a caret between words): zero width, never wraps
+            for frag in &word.frags {
+                cur.pieces
+                    .push(piece_for(frag, spans, cur.width + space_w, &frag.text, 0.0));
+            }
+            cur_span = None;
+            continue;
+        }
+        if word.width > max_w + crate::text::WRAP_SLACK {
+            // wider than a whole line: flush, then split at character granularity. A line
+            // holding only zero-width overlays (a caret at the word start) counts as empty
+            // so the overlay never forces an extra flush.
+            if cur.pieces.iter().any(|p| p.width > 0.0) {
+                lines.push(std::mem::replace(&mut cur, new_line()));
+            }
+            for frag in &word.frags {
+                if frag.overlay {
+                    cur.pieces
+                        .push(piece_for(frag, spans, cur.width, &frag.text, 0.0));
+                    continue;
+                }
+                let span = &spans[frag.si];
+                let mut rest = frag.text.as_str();
+                while !rest.is_empty() {
+                    let avail = max_w - cur.width;
+                    let n = crate::text::fit_chars_styled(rest, span.size, span.bold, avail);
+                    if n == 0 && cur.pieces.iter().any(|p| p.width > 0.0) {
+                        // a positive-width prefix already sits on this line — flush and
+                        // retry; a line with only a zero-width caret is treated as empty
+                        // so the caret overlay never spawns a phantom line.
+                        lines.push(std::mem::replace(&mut cur, new_line()));
+                        continue;
+                    }
+                    let n = n.max(1);
+                    let cut = rest
+                        .char_indices()
+                        .nth(n)
+                        .map(|(i, _)| i)
+                        .unwrap_or(rest.len());
+                    let chunk = &rest[..cut];
+                    let chunk_w = crate::text::advance_styled(chunk, span.size, span.bold);
+                    cur.pieces
+                        .push(piece_for(frag, spans, cur.width, chunk, chunk_w));
+                    cur.width += chunk_w;
+                    rest = &rest[cut..];
+                }
+            }
+            cur_span = None;
+            continue;
+        }
+        if !cur.pieces.is_empty()
+            && cur.width + space_w + word.width > max_w + crate::text::WRAP_SLACK
+        {
+            lines.push(std::mem::replace(&mut cur, new_line()));
+            cur_span = None;
+        }
+        let space_w = if cur.pieces.is_empty() { 0.0 } else { space_w };
+        if word.frags.len() == 1 && cur_span == Some(lead.si) && !cur.pieces.is_empty() {
+            // same style run continues on this line — extend the piece
+            let piece = cur.pieces.last_mut().unwrap();
+            if space_w > 0.0 {
+                piece.text.push(' ');
+            }
+            piece.text.push_str(&lead.text);
+            piece.width += space_w + lead.width;
+            cur.width += space_w + lead.width;
+        } else {
+            let mut x = cur.width + space_w;
+            for frag in &word.frags {
+                if frag.overlay {
+                    cur.pieces.push(piece_for(frag, spans, x, &frag.text, 0.0));
+                } else {
+                    cur.pieces
+                        .push(piece_for(frag, spans, x, &frag.text, frag.width));
+                    x += frag.width;
+                }
+            }
+            cur.width = x;
+            cur_span = word
+                .frags
+                .iter()
+                .rev()
+                .find(|f| !f.overlay)
+                .filter(|_| word.frags.iter().filter(|f| !f.overlay).count() == 1)
+                .map(|f| f.si);
         }
     }
     if !cur.pieces.is_empty() {
@@ -432,6 +570,7 @@ fn layout_node(
                         radius: style.radius,
                         border: style.border,
                         shadow: style.shadow,
+                        transparency: style.transparency,
                     },
                     id: style.id,
                     role: style.role,
@@ -466,6 +605,7 @@ fn layout_node(
                         radius: style.radius,
                         border: style.border,
                         shadow: style.shadow,
+                        transparency: style.transparency,
                     },
                     id: style.id,
                     role: style.role,
@@ -636,6 +776,7 @@ pub fn cmds_for(b: &LaidBox, out: &mut Vec<DrawCmd>) {
         radius,
         border,
         shadow,
+        ..
     } = &b.kind
     {
         let r = radius.min(half.x).min(half.y).max(0.0);
@@ -677,5 +818,104 @@ pub fn cmds_for(b: &LaidBox, out: &mut Vec<DrawCmd>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod rich_flow_tests {
+    use super::*;
+    use crate::paint::Rgba;
+
+    fn plain(text: &str) -> Span {
+        Span::new(text, 14.0, Rgba::rgb8(255, 255, 255))
+    }
+
+    #[test]
+    fn caret_overlay_never_changes_line_breaks() {
+        let text = "the quick brown fox jumps over the lazy dog again and again";
+        let width = 180.0;
+        let (base, _) = rich_lines(&[plain(text)], Some(width));
+        assert!(base.len() > 1, "probe text must wrap for this test to bite");
+        for caret in 0..=text.chars().count() {
+            let before: String = text.chars().take(caret).collect();
+            let after: String = text.chars().skip(caret).collect();
+            let mut spans = Vec::new();
+            if !before.is_empty() {
+                spans.push(plain(before.as_str()));
+            }
+            spans.push(plain("|").overlay());
+            if !after.is_empty() {
+                spans.push(plain(after.as_str()));
+            }
+            let (lines, _) = rich_lines(&spans, Some(width));
+            assert_eq!(lines.len(), base.len(), "caret at {caret} changed the wrap");
+            for (with_caret, plain_line) in lines.iter().zip(&base) {
+                assert!(
+                    (with_caret.width - plain_line.width).abs() < 1e-3,
+                    "caret at {caret} changed a line width"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn caret_overlay_adds_no_line_even_when_a_glyph_exceeds_the_width() {
+        // Degenerate width narrower than a single glyph: the char-split path must still
+        // treat a line holding only the zero-width caret as empty, so the overlay never
+        // spawns a phantom line relative to the caret-less layout.
+        let text = "widecharsWWWW";
+        for tenths in 1..60 {
+            let width = tenths as f32 * 0.5; // 0.5 .. 29.5 px, crossing the glyph width
+            let base = rich_lines(&[plain(text)], Some(width)).0.len();
+            for caret in 0..=text.chars().count() {
+                let before: String = text.chars().take(caret).collect();
+                let after: String = text.chars().skip(caret).collect();
+                let mut spans = Vec::new();
+                if !before.is_empty() {
+                    spans.push(plain(before.as_str()));
+                }
+                spans.push(plain("|").overlay());
+                if !after.is_empty() {
+                    spans.push(plain(after.as_str()));
+                }
+                let with = rich_lines(&spans, Some(width)).0.len();
+                assert_eq!(
+                    with, base,
+                    "caret at {caret} changed line count ({base} -> {with}) at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn words_split_across_spans_wrap_as_one_word() {
+        // "unbrea" + "kable" must wrap exactly like the single-span "unbreakable"
+        let joined = rich_lines(&[plain("fill fill fill unbreakable")], Some(120.0)).0;
+        let split = rich_lines(
+            &[plain("fill fill fill unbrea"), plain("kable")],
+            Some(120.0),
+        )
+        .0;
+        assert_eq!(joined.len(), split.len());
+        for (a, b) in joined.iter().zip(&split) {
+            assert!((a.width - b.width).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn long_words_split_instead_of_overflowing() {
+        let long = "x".repeat(300);
+        let (lines, _) = rich_lines(&[plain(long.as_str())], Some(100.0));
+        assert!(lines.len() > 1, "a 300-char word must wrap");
+        let mut total_chars = 0usize;
+        for line in &lines {
+            assert!(line.width <= 100.0 + 1e-3, "no line may overflow");
+            total_chars += line
+                .pieces
+                .iter()
+                .map(|p| p.text.chars().count())
+                .sum::<usize>();
+        }
+        assert_eq!(total_chars, 300, "splitting must not drop characters");
     }
 }

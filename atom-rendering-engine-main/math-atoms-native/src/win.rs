@@ -1,7 +1,8 @@
 use crate::model::{
     NativeApp, APPLY_PROVIDER, BUILD_DESIGN_UPLOAD, CAPTURE_PROOF, DESIGN_UPLOAD_TAB,
-    EXEC_PROVIDER, HOOKS_TAB, MARK_DRIFT, MCP_TAB, PROVIDER_CONNECTIONS_TAB, RUNTIME_SETTINGS_TAB,
-    RUN_LOOP, SETTINGS_TAB, SKILLS_TAB, WIKI_TAB, WORKSPACE_TAB,
+    EXEC_PROVIDER, EXEC_VIBE_STEP, HOOKS_TAB, INTENT_INPUT, INTENT_INPUT_SCROLL, MARK_DRIFT,
+    MCP_TAB, PROVIDER_CONNECTIONS_TAB, RUNTIME_SETTINGS_TAB, RUN_LOOP, SETTINGS_TAB, SKILLS_TAB,
+    WIKI_TAB, WORKSPACE_TAB,
 };
 use crate::ui;
 use core::ffi::c_void;
@@ -204,6 +205,8 @@ const IDC_ARROW: usize = 32512;
 const PROVIDER_TIMER_ID: usize = 77;
 const DESIGN_TIMER_ID: usize = 78;
 const ANIMATION_TIMER_ID: usize = 79;
+const VIBE_TIMER_ID: usize = 80;
+const FAST_TIMER_ID: usize = 81;
 const CF_UNICODETEXT: u32 = 13;
 const GMEM_MOVEABLE: u32 = 0x0002;
 const VK_CONTROL: i32 = 0x11;
@@ -227,7 +230,9 @@ struct App {
     provider_rx: Option<
         Receiver<Result<math_atoms_core::ProviderExecutionOutput, math_atoms_core::ProviderError>>,
     >,
+    vibe_rx: Option<Receiver<atom_vibe_native_bridge::VibeWorkerResult>>,
     design_rx: Option<Receiver<Result<String, String>>>,
+    fast_rx: Option<Receiver<Result<avc_core::FastBuild, String>>>,
     suppress_ctrl_char: Option<u32>,
     visual_generation: u64,
     frame_cache: [Option<CachedFrame>; 2],
@@ -286,7 +291,9 @@ pub fn run() {
                 quality: Quality::Fast,
                 tracking_leave: false,
                 provider_rx: None,
+                vibe_rx: None,
                 design_rx: None,
+                fast_rx: None,
                 suppress_ctrl_char: None,
                 visual_generation: 0,
                 frame_cache: [None, None],
@@ -491,10 +498,22 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     KillTimer(hwnd, PROVIDER_TIMER_ID);
                     invalidate_visual(hwnd);
                 }
+            } else if wp == VIBE_TIMER_ID {
+                let complete = poll_vibe();
+                if complete {
+                    KillTimer(hwnd, VIBE_TIMER_ID);
+                    invalidate_visual(hwnd);
+                }
             } else if wp == DESIGN_TIMER_ID {
                 let complete = poll_design_upload();
                 if complete {
                     KillTimer(hwnd, DESIGN_TIMER_ID);
+                    invalidate_visual(hwnd);
+                }
+            } else if wp == FAST_TIMER_ID {
+                let complete = poll_fast_build();
+                if complete {
+                    KillTimer(hwnd, FAST_TIMER_ID);
                     invalidate_visual(hwnd);
                 }
             } else if wp == ANIMATION_TIMER_ID {
@@ -514,9 +533,15 @@ unsafe extern "system" fn wndproc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) 
                     if app.ui.focused.is_some() {
                         if let Some(ev) = focused_key_event(hwnd, wp) {
                             app.suppress_ctrl_char = ctrl_char_for_key(wp);
-                            let build = |state: &UiState| ui::build(&app.model, state);
-                            handle_event(&mut app.ui, &build, ev);
+                            let edits_text = edits_input_text(&ev);
+                            {
+                                let build = |state: &UiState| ui::build(&app.model, state);
+                                handle_event(&mut app.ui, &build, ev);
+                            }
                             flush_clipboard(hwnd, &mut app.ui);
+                            if edits_text {
+                                follow_intent_input(&mut app.ui);
+                            }
                         }
                         return;
                     }
@@ -640,6 +665,7 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
         if let Some(app) = cell.borrow_mut().as_mut() {
             let was_move = matches!(ev, UiEvent::PointerMove(..));
             let was_tick = matches!(ev, UiEvent::Tick(..));
+            let edits_text = edits_input_text(&ev);
             let before = (
                 app.ui.hover,
                 app.ui.pressed,
@@ -651,6 +677,9 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
                 handle_event(&mut app.ui, &build, ev);
             }
             flush_clipboard(hwnd, &mut app.ui);
+            if edits_text {
+                follow_intent_input(&mut app.ui);
+            }
             let mut dirty = was_tick
                 || !was_move
                 || before
@@ -660,15 +689,19 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
                         app.ui.drag,
                         app.ui.slider_drag,
                     );
-            if app.ui.drag.is_some() || app.ui.slider_drag.is_some() {
+            if app.ui.drag.is_some()
+                || app.ui.slider_drag.is_some()
+                || app.ui.input_drag_anchor.is_some()
+            {
                 dirty = true;
             }
             if let Some(id) = app.ui.take_click() {
                 dispatch_model_command(hwnd, app, id);
                 dirty = true;
             }
-            if app.ui.take_submit().is_some() {
+            if app.ui.take_submit() == Some(INTENT_INPUT) {
                 app.model.run_current_intent(&app.ui);
+                begin_fast_build_cmd(hwnd, app);
                 dirty = true;
             }
             dirty
@@ -676,6 +709,40 @@ fn dispatch(hwnd: Hwnd, ev: UiEvent) -> bool {
             false
         }
     })
+}
+
+/// Events that mutate the focused input's text — after these the intent box follows
+/// the typing point by pinning its scroll to the bottom (layout clamps it).
+fn edits_input_text(ev: &UiEvent) -> bool {
+    matches!(
+        ev,
+        UiEvent::Char(_) | UiEvent::Backspace | UiEvent::Delete | UiEvent::Paste(_) | UiEvent::Cut
+    )
+}
+
+fn follow_intent_input(ui: &mut UiState) {
+    if ui.focused != Some(INTENT_INPUT) {
+        return;
+    }
+    // Follow only while typing at the end of the text; edits at a caret the user
+    // clicked into the middle must not yank the view to the bottom.
+    let text_len = ui.input_text(INTENT_INPUT).chars().count();
+    if ui.input_caret(INTENT_INPUT) >= text_len {
+        ui.scrolls.insert(INTENT_INPUT_SCROLL, 1.0e9);
+    }
+}
+
+/// Run's contract: after the local proof route selects the recipe and atom stack, kick
+/// off the fast single-shot Atom Vibe Coder build — one provider call, extract the code
+/// — instead of the slow 9-packet work plan. The Provider button still exposes the slow
+/// path for comparison.
+fn begin_fast_build_cmd(hwnd: Hwnd, app: &mut App) {
+    if let Some(rx) = app.model.begin_fast_build(&app.ui) {
+        app.fast_rx = Some(rx);
+        unsafe {
+            SetTimer(hwnd, FAST_TIMER_ID, 100, std::ptr::null());
+        }
+    }
 }
 
 fn advance_animation_clock() -> AnimationChange {
@@ -718,7 +785,10 @@ fn dispatch_command(hwnd: Hwnd, id: u32) {
 
 fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
     match id {
-        RUN_LOOP => app.model.run_current_intent(&app.ui),
+        RUN_LOOP => {
+            app.model.run_current_intent(&app.ui);
+            begin_fast_build_cmd(hwnd, app);
+        }
         EXEC_PROVIDER => {
             if let Some(rx) = app.model.begin_provider_execution() {
                 app.provider_rx = Some(rx);
@@ -727,9 +797,26 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
                 }
             }
         }
+        EXEC_VIBE_STEP => {
+            if let Some(rx) = app.model.begin_vibe_step() {
+                app.vibe_rx = Some(rx);
+                unsafe {
+                    SetTimer(hwnd, VIBE_TIMER_ID, 100, std::ptr::null());
+                }
+            }
+        }
         CAPTURE_PROOF => app.model.capture_current_proof(),
         MARK_DRIFT => app.model.mark_drift(),
-        APPLY_PROVIDER => app.model.apply_provider_config(&app.ui),
+        APPLY_PROVIDER => {
+            // Discard any in-flight provider worker first so its stale result cannot
+            // land inside the freshly applied configuration.
+            if app.provider_rx.take().is_some() {
+                unsafe {
+                    KillTimer(hwnd, PROVIDER_TIMER_ID);
+                }
+            }
+            app.model.apply_provider_config(&app.ui)
+        }
         BUILD_DESIGN_UPLOAD => {
             if let Some(rx) = app.model.begin_design_upload_build(&app.ui) {
                 app.design_rx = Some(rx);
@@ -749,6 +836,32 @@ fn dispatch_model_command(hwnd: Hwnd, app: &mut App, id: u32) {
         HOOKS_TAB => app.model.show_hooks(),
         _ => {}
     }
+}
+
+fn poll_fast_build() -> bool {
+    APP.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(app) = borrow.as_mut() else {
+            return false;
+        };
+        let Some(rx) = app.fast_rx.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                app.fast_rx = None;
+                app.model.complete_fast_build(result);
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                app.fast_rx = None;
+                app.model
+                    .complete_fast_build(Err("fast build worker disconnected".to_string()));
+                true
+            }
+        }
+    })
 }
 
 fn poll_provider() -> bool {
@@ -772,6 +885,31 @@ fn poll_provider() -> bool {
                 app.model.complete_provider_execution_report(Err(
                     math_atoms_core::ProviderError::Io("provider worker disconnected".to_string()),
                 ));
+                true
+            }
+        }
+    })
+}
+
+fn poll_vibe() -> bool {
+    APP.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(app) = borrow.as_mut() else {
+            return false;
+        };
+        let Some(rx) = app.vibe_rx.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                app.vibe_rx = None;
+                app.model.complete_vibe_step(result);
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                app.vibe_rx = None;
+                app.model.vibe_worker_disconnected();
                 true
             }
         }
@@ -878,10 +1016,11 @@ fn paint(hwnd: Hwnd) {
                     SRCCOPY,
                 );
                 let title = format!(
-                    "Atom Vibe Coder by Lucerna Labs - Native PMRE [{:.1}ms {} {} {} {} {} {}]",
+                    "Atom Vibe Coder by Lucerna Labs - Native PMRE [{:.1}ms {} {} {} {} {} {} {}]",
                     app.last_render_ms,
                     app.model.status().as_str(),
                     app.model.provider_title_state(),
+                    app.model.vibe.title_state(),
                     app.model.design_title_state(),
                     app.model.nav_title_state(),
                     app.model.artifact_title_state(),

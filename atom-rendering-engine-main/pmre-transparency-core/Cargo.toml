@@ -1,0 +1,8 @@
+[package]
+name = "pmre-transparency-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-free transparency, optics, volume, and OIT math for PMRE."
+
+[dependencies]

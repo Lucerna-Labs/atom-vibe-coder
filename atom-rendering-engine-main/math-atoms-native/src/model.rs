@@ -1,3 +1,4 @@
+use atom_vibe_native_bridge::{default_runtime_root, NativeVibe, VibeWorkerResult};
 use math_atoms_core::{
     default_provider_output_dir, effective_records, persist_provider_output, LearningOutcome,
     LearningRecord, LearningRecordInput, LearningStore, LearningSummary, MathAtomsRuntime,
@@ -5,12 +6,11 @@ use math_atoms_core::{
     ProviderError, ProviderExecutionOutput, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use pmre_orchestrator::{
-    UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER, DESIGN_LIGHT_SLIDER,
-    DESIGN_RADIUS_SLIDER, DESIGN_SAT_SLIDER, DESIGN_TEXT_SLIDER,
+    UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GAMMA_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER,
+    DESIGN_LIGHT_SLIDER, DESIGN_RADIUS_SLIDER, DESIGN_SAT_SLIDER, DESIGN_TEXT_SLIDER,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -47,12 +47,15 @@ pub const MCP_TAB: u32 = 31;
 pub const SKILLS_TAB: u32 = 32;
 pub const HOOKS_TAB: u32 = 33;
 pub const PROVIDER_THINKING_INPUT: u32 = 34;
+pub const EXEC_VIBE_STEP: u32 = 35;
+pub const INTENT_INPUT_SCROLL: u32 = 36;
+pub const TRANSCRIPT_SCROLL: u32 = 37;
+pub const PROVIDER_OUTPUT_SCROLL: u32 = 38;
 
 pub fn default_intent() -> &'static str {
     "Build a native Atom Vibe Coder app on the Spiderweb Bus with provider API, wiki graph RAG, proof capture, and side artifact preview."
 }
 
-#[derive(Clone, Debug)]
 pub struct NativeApp {
     pub runtime: MathAtomsRuntime,
     pub store: Option<ProofStore>,
@@ -63,23 +66,20 @@ pub struct NativeApp {
     pub last_run_summary: String,
     pub last_provider_output: String,
     pub provider_running: bool,
+    pub fast_build_running: bool,
     pub design_build_running: bool,
     pub last_design_output: String,
     pub active_main_tab: MainTab,
     pub active_settings_tab: SettingsTab,
     pub side_artifacts: Vec<SideArtifact>,
+    pub vibe: NativeVibe,
     last_intent: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SideArtifact {
-    pub name: String,
-    pub status: String,
-    pub output: String,
-    pub source_path: String,
-    pub exe_path: String,
-    pub artifact_path: String,
-}
+/// Built-app row for the side-artifacts pane. The type and its manifest/build helpers
+/// live in `avc-core` (the vibe-build crate); re-exported here under the name the UI and
+/// tests already use.
+pub use avc_core::BuildArtifact as SideArtifact;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MainTab {
@@ -119,10 +119,13 @@ impl StoreOutcome {
 
 impl NativeApp {
     pub fn from_process_env() -> Self {
+        let provider = ProviderConfig::from_process_env();
+        let vibe = NativeVibe::open(default_runtime_root(), provider.clone());
         Self::new_with_stores(
-            ProviderConfig::from_process_env(),
+            provider,
             Some(ProofStore::new(ProofStore::default_path())),
             Some(LearningStore::new(LearningStore::default_path())),
+            vibe,
         )
     }
 
@@ -136,13 +139,19 @@ impl NativeApp {
         let learning_store = store
             .as_ref()
             .map(|proof_store| LearningStore::beside(proof_store.path()));
-        Self::new_with_stores(provider, store, learning_store)
+        Self::new_with_stores(
+            provider,
+            store,
+            learning_store,
+            NativeVibe::unavailable("disabled in unit-test constructor"),
+        )
     }
 
     pub fn new_with_stores(
         provider: ProviderConfig,
         store: Option<ProofStore>,
         learning_store: Option<LearningStore>,
+        vibe: NativeVibe,
     ) -> Self {
         let last_provider_output = initial_provider_output(&provider);
         let archived_learning = learning_store
@@ -176,11 +185,13 @@ impl NativeApp {
             last_run_summary: "No proof run yet.".to_string(),
             last_provider_output,
             provider_running: false,
+            fast_build_running: false,
             design_build_running: false,
             last_design_output: "Design upload has not been built.".to_string(),
             active_main_tab: MainTab::Workspace,
             active_settings_tab: SettingsTab::ProviderConnections,
-            side_artifacts: load_side_artifacts(),
+            side_artifacts: avc_core::load_artifacts(),
+            vibe,
             last_intent: String::new(),
         }
     }
@@ -223,6 +234,15 @@ impl NativeApp {
                 store_result.message()
             )
         };
+        match self.vibe.start_build(&intent) {
+            Ok(()) => {
+                self.last_run_summary.push_str(" Vibe session prepared.");
+            }
+            Err(error) => {
+                self.last_run_summary
+                    .push_str(&format!(" Vibe session blocked: {error}"));
+            }
+        }
     }
 
     pub fn mark_drift(&mut self) {
@@ -308,10 +328,28 @@ impl NativeApp {
             config.endpoint,
             readiness
         );
-        self.runtime.set_provider(config);
+        self.runtime.set_provider(config.clone());
+        if let Err(error) = self.vibe.set_provider(config) {
+            self.last_run_summary = format!("{summary}. Vibe provider blocked: {error}");
+        } else {
+            self.last_run_summary = summary;
+        }
         self.last_provider_output = provider_output;
         self.provider_running = false;
-        self.last_run_summary = summary;
+    }
+
+    pub fn begin_vibe_step(&mut self) -> Option<Receiver<VibeWorkerResult>> {
+        self.vibe.begin_step()
+    }
+
+    pub fn complete_vibe_step(&mut self, result: VibeWorkerResult) {
+        self.vibe.complete_step(result);
+        self.last_run_summary = self.vibe.summary().to_string();
+    }
+
+    pub fn vibe_worker_disconnected(&mut self) {
+        self.vibe.worker_disconnected();
+        self.last_run_summary = self.vibe.summary().to_string();
     }
 
     pub fn capture_current_proof(&mut self) {
@@ -362,6 +400,71 @@ impl NativeApp {
             let _ = tx.send(execute_call(task.call));
         });
         Some(rx)
+    }
+
+    /// Fast single-shot build (vendored from the v1 Atom Vibe Coder): one prompt, one
+    /// provider call, extract the fenced code. This is what the Run button uses instead
+    /// of the slow 9-packet work plan. Returns a receiver the UI polls; the worker runs
+    /// on its own thread so the renderer stays responsive.
+    pub fn begin_fast_build(
+        &mut self,
+        ui: &UiState,
+    ) -> Option<Receiver<Result<avc_core::FastBuild, String>>> {
+        if self.fast_build_running {
+            self.last_provider_output = "Fast build already running.".to_string();
+            return None;
+        }
+        let intent = current_intent(ui);
+        let state = self.runtime.state();
+        let plan = format!(
+            "Recipe: {} | Atom stack: {} | Dependency-free, std-only.",
+            state.selected_recipe,
+            state.selected_atoms.join(" -> ")
+        );
+        let config = avc_core::ProviderConfig::from_process_env();
+        if let Err(error) = config.prepare_build_call(&intent, &plan) {
+            self.last_provider_output = format!("Provider blocked: {error}");
+            return None;
+        }
+        let dir = avc_core::fast_build_dir();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis())
+            .unwrap_or(0);
+        let (tx, rx) = mpsc::channel();
+        self.fast_build_running = true;
+        self.last_provider_output =
+            "Fast build running through a single provider call.".to_string();
+        // OPERATOR_APPROVED_CPU_PARALLEL: I/O worker thread for the blocking curl call,
+        // identical to the existing begin_provider_execution / begin_vibe_step workers in
+        // this file — keeps the renderer responsive, not added compute parallelism.
+        thread::spawn(move || {
+            let _ = tx.send(avc_core::run_fast_build(
+                &config, &intent, &plan, &dir, stamp,
+            ));
+        });
+        Some(rx)
+    }
+
+    pub fn complete_fast_build(&mut self, result: Result<avc_core::FastBuild, String>) {
+        self.fast_build_running = false;
+        match result {
+            Ok(build) => {
+                let name = build.artifact.name.clone();
+                let bytes = build.bytes;
+                let path = build.artifact.source_path.clone();
+                self.last_provider_output = format!(
+                    "Built {name} ({bytes} bytes) -> {path}\n\n{}",
+                    build.preview
+                );
+                self.last_run_summary = format!("Fast build complete: {name} ({bytes} bytes).");
+                self.side_artifacts.insert(0, build.artifact);
+            }
+            Err(reason) => {
+                self.last_provider_output = format!("Provider blocked: {reason}");
+                self.last_run_summary = format!("Fast build blocked: {reason}");
+            }
+        }
     }
 
     #[cfg(test)]
@@ -427,7 +530,7 @@ impl NativeApp {
             self.last_design_output = "Design upload build already running.".to_string();
             return None;
         }
-        let Some(script) = design_upload_script_path() else {
+        let Some(script) = avc_core::design_upload_script_path() else {
             self.last_design_output =
                 "Design upload blocked: scripts/Test-DesignUploadBuild.ps1 was not found."
                     .to_string();
@@ -440,7 +543,9 @@ impl NativeApp {
         self.last_design_output =
             "Design upload running through the native PMRE renderer route.".to_string();
         thread::spawn(move || {
-            let _ = tx.send(run_design_upload_script(script, html_path, css_path));
+            let _ = tx.send(avc_core::run_design_upload_script(
+                script, html_path, css_path,
+            ));
         });
         Some(rx)
     }
@@ -449,7 +554,7 @@ impl NativeApp {
         self.design_build_running = false;
         match result {
             Ok(text) => {
-                self.side_artifacts = load_side_artifacts();
+                self.side_artifacts = avc_core::load_artifacts();
                 self.last_design_output = text;
                 self.last_run_summary = format!(
                     "Design upload built from HTML/CSS. {}",
@@ -480,7 +585,7 @@ impl NativeApp {
     }
 
     pub fn provider_title_state(&self) -> &'static str {
-        if self.provider_running {
+        if self.provider_running || self.fast_build_running {
             "provider:running"
         } else if self.last_provider_output.starts_with("Provider blocked:") {
             "provider:blocked"
@@ -790,6 +895,7 @@ fn seed_lucerna_design_defaults(ui: &mut UiState) {
     ui.set_slider(DESIGN_TEXT_SLIDER, 0.50);
     ui.set_slider(DESIGN_RADIUS_SLIDER, 0.26);
     ui.set_slider(DESIGN_GLASS_SLIDER, 0.24);
+    ui.set_slider(DESIGN_GAMMA_SLIDER, 0.25);
     ui.set_slider(DESIGN_ANIMATION_SLIDER, 0.0);
 }
 
@@ -825,124 +931,6 @@ fn execute_call(
     call: PreparedProviderCall,
 ) -> Result<ProviderExecutionOutput, math_atoms_core::ProviderError> {
     call.execute_with_curl_report()
-}
-
-fn run_design_upload_script(
-    script: PathBuf,
-    html_path: String,
-    css_path: String,
-) -> Result<String, String> {
-    let mut command = Command::new("powershell");
-    command
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-File")
-        .arg(script);
-    if !html_path.trim().is_empty() {
-        command.arg("-HtmlPath").arg(html_path.trim());
-    }
-    if !css_path.trim().is_empty() {
-        command.arg("-CssPath").arg(css_path.trim());
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("failed to launch design upload gate: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if output.status.success() {
-        if stderr.is_empty() {
-            Ok(stdout)
-        } else {
-            Ok(format!("{stdout}\n{stderr}"))
-        }
-    } else {
-        Err(format!(
-            "design upload gate exited {}. stdout: {} stderr: {}",
-            output.status, stdout, stderr
-        ))
-    }
-}
-
-fn design_upload_script_path() -> Option<PathBuf> {
-    let script = "Test-DesignUploadBuild.ps1";
-    let mut candidates = Vec::new();
-    if let Ok(root) = std::env::var("MATH_ATOMS_SCRIPT_ROOT") {
-        candidates.push(PathBuf::from(root).join(script));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("scripts").join(script));
-        candidates.push(cwd.join("..").join("scripts").join(script));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(release_dir) = exe.parent() {
-            if let Some(target_dir) = release_dir.parent() {
-                if let Some(engine_dir) = target_dir.parent() {
-                    candidates.push(engine_dir.join("..").join("scripts").join(script));
-                }
-            }
-        }
-    }
-    candidates.into_iter().find(|path| path.is_file())
-}
-
-fn load_side_artifacts() -> Vec<SideArtifact> {
-    for path in artifact_manifest_candidates() {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let artifacts = parse_artifact_manifest(&text);
-            if !artifacts.is_empty() {
-                return artifacts;
-            }
-        }
-    }
-    Vec::new()
-}
-
-fn artifact_manifest_candidates() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(path) = std::env::var("MATH_ATOMS_ARTIFACT_MANIFEST") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            paths.push(PathBuf::from(trimmed));
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        paths.push(cwd.join("target/provider-built-apps/artifact-window.tsv"));
-        paths.push(
-            cwd.join("atom-rendering-engine-main/target/provider-built-apps/artifact-window.tsv"),
-        );
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(release_dir) = exe.parent() {
-            if let Some(target_dir) = release_dir.parent() {
-                paths.push(target_dir.join("provider-built-apps/artifact-window.tsv"));
-            }
-        }
-    }
-    paths
-}
-
-fn parse_artifact_manifest(text: &str) -> Vec<SideArtifact> {
-    text.lines()
-        .skip(1)
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 5 || parts[0].trim().is_empty() {
-                return None;
-            }
-            Some(SideArtifact {
-                name: parts[0].trim().to_string(),
-                status: parts[1].trim().to_string(),
-                output: parts[2].trim().to_string(),
-                source_path: parts[3].trim().to_string(),
-                exe_path: parts[4].trim().to_string(),
-                artifact_path: parts
-                    .get(5)
-                    .map(|part| part.trim())
-                    .unwrap_or("")
-                    .to_string(),
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1059,6 +1047,7 @@ mod tests {
         let mut ui = UiState::new(1200, 800);
         app.seed_input(&mut ui);
         assert_eq!(ui.slider_value(DESIGN_ANIMATION_SLIDER, 1.0), 0.0);
+        assert_eq!(ui.slider_value(DESIGN_GAMMA_SLIDER, 0.0), 0.25);
         app.run_current_intent(&ui);
         assert_eq!(app.status(), RuntimeStatus::ProviderPending);
         assert!(app.runtime.bus().contains_all_layers());
@@ -1264,7 +1253,7 @@ mod tests {
     #[test]
     fn side_artifact_manifest_loads_generated_apps() {
         let manifest = "name\tstatus\toutput\tsource\texe\tartifact\ncounter\tcompiled\tMATH_ATOMS_APP_OK counter total=4\tC:\\src\\counter.rs\tC:\\bin\\counter.exe\t\nrouter\tcompiled\tMATH_ATOMS_APP_OK router health=200 atoms=3\tC:\\src\\router.rs\tC:\\bin\\router.exe\tC:\\artifacts\\router.bmp\n";
-        let artifacts = parse_artifact_manifest(manifest);
+        let artifacts = avc_core::parse_artifact_manifest(manifest);
         assert_eq!(artifacts.len(), 2);
         assert_eq!(artifacts[0].name, "counter");
         assert_eq!(artifacts[0].status, "compiled");
@@ -1560,6 +1549,7 @@ mod tests {
             ProviderConfig::from_pairs(&[]),
             Some(proofs.clone()),
             Some(learning.clone()),
+            NativeVibe::unavailable("disabled in learning restart test"),
         );
         let mut ui = UiState::new(1200, 800);
         first.seed_input(&mut ui);
@@ -1578,6 +1568,7 @@ mod tests {
             ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
             Some(proofs),
             Some(learning.clone()),
+            NativeVibe::unavailable("disabled in learning restart test"),
         );
         let output_dir = restarted.provider_output_dir();
         restarted.seed_input(&mut ui);
@@ -1602,5 +1593,106 @@ mod tests {
         std::fs::remove_file(learning_path).ok();
         std::fs::remove_dir_all(output_dir).ok();
         std::fs::remove_dir_all(work_root).ok();
+    }
+
+    #[test]
+    #[ignore = "manual visual dump for UI verification"]
+    fn dump_visual_frames_for_manual_inspection() {
+        let out_dir = std::path::PathBuf::from(
+            std::env::var("MATH_ATOMS_VISUAL_DUMP_DIR").unwrap_or_else(|_| ".".to_string()),
+        );
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        let mut ui = UiState::new(1240, 820);
+        app.seed_input(&mut ui);
+        let long_text = "this is a very long chat message typed by the operator to stress the chat box wrapping so it keeps going and going with plenty of words and then one giant unbreakable token Supercalifragilisticexpialidocious-Supercalifragilisticexpialidocious-Supercalifragilisticexpialidocious and then a bit more prose after the long token to prove the flow recovers cleanly and continues wrapping like normal text should";
+        ui.inputs.insert(INTENT_INPUT, long_text.to_string());
+        ui.input_carets
+            .insert(INTENT_INPUT, long_text.chars().count());
+        ui.focused = Some(INTENT_INPUT);
+        ui.scrolls.insert(crate::model::INTENT_INPUT_SCROLL, 1.0e9);
+        let build = |state: &UiState| crate::ui::build(&app, state);
+        ui.animation_time = 0.0; // caret visible
+        let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+        std::fs::write(
+            out_dir.join("chatbox-long-text-caret-on.bmp"),
+            fb.to_bmp(crate::ui::background()),
+        )
+        .unwrap();
+        ui.animation_time = 0.5; // caret hidden
+        let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+        std::fs::write(
+            out_dir.join("chatbox-long-text-caret-off.bmp"),
+            fb.to_bmp(crate::ui::background()),
+        )
+        .unwrap();
+        ui.animation_time = 0.0;
+        ui.width = 1240;
+        ui.height = 1000;
+        let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+        std::fs::write(
+            out_dir.join("chatbox-full-height.bmp"),
+            fb.to_bmp(crate::ui::background()),
+        )
+        .unwrap();
+        ui.inputs.insert(INTENT_INPUT, "hello world".to_string());
+        ui.input_carets.insert(INTENT_INPUT, 0);
+        ui.scrolls.insert(crate::model::INTENT_INPUT_SCROLL, 0.0);
+        let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+        std::fs::write(
+            out_dir.join("chatbox-caret-at-zero.bmp"),
+            fb.to_bmp(crate::ui::background()),
+        )
+        .unwrap();
+        ui.inputs.insert(INTENT_INPUT, String::new());
+        ui.input_carets.insert(INTENT_INPUT, 0);
+        let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+        std::fs::write(
+            out_dir.join("chatbox-empty-input.bmp"),
+            fb.to_bmp(crate::ui::background()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rapid_backspace_clear_never_panics_the_render_loop() {
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]));
+        let mut ui = UiState::new(1240, 820);
+        app.seed_input(&mut ui);
+        let build = |state: &UiState| crate::ui::build(&app, state);
+        for step in 0..200 {
+            handle_event(&mut ui, &build, UiEvent::Backspace);
+            // mimic the caret-follow scroll pin and the blink clock
+            ui.scrolls.insert(INTENT_INPUT_SCROLL, 1.0e9);
+            ui.animation_time = (ui.animation_time + 0.033).rem_euclid(3600.0);
+            let fb = pmre_orchestrator::render_ui(&build, &ui, crate::ui::background());
+            assert!(!fb.pixels().is_empty(), "frame {step} rendered no pixels");
+        }
+        assert_eq!(ui.input_text(INTENT_INPUT), "");
+    }
+
+    #[test]
+    fn clicking_the_chat_input_focuses_it_despite_its_inner_scroll_region() {
+        let app = NativeApp::new(ProviderConfig::from_pairs(&[]));
+        let mut ui = UiState::new(1600, 1000);
+        app.seed_input(&mut ui);
+        ui.focused = None;
+
+        let rect = {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            widget_rect(&build, &ui, INTENT_INPUT).expect("chat input is laid out")
+        };
+        // the inner clip/scroll region must exist so long text cannot paint over the buttons
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            assert!(widget_rect(&build, &ui, INTENT_INPUT_SCROLL).is_some());
+        }
+        let x = (rect.min.x + rect.max.x) * 0.5;
+        let y = (rect.min.y + rect.max.y) * 0.5;
+        {
+            let build = |state: &UiState| crate::ui::build(&app, state);
+            handle_event(&mut ui, &build, UiEvent::PointerDown(x, y));
+            handle_event(&mut ui, &build, UiEvent::PointerUp(x, y));
+        }
+        assert_eq!(ui.focused, Some(INTENT_INPUT));
     }
 }

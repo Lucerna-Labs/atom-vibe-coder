@@ -4,6 +4,7 @@
 //! Run: cargo run -p pmre-orchestrator --example bench --release
 
 use pmre_kit::{
+    transparency::MaterialPreset,
     ux::{Align, Dim, Edges, Justify, Style, UxNode},
     Rgba,
 };
@@ -41,17 +42,21 @@ fn glow_dot(col: Rgba, size: f32) -> UxNode {
     )
 }
 
-fn panel(col: Rgba, label: &str) -> UxNode {
+fn panel(col: Rgba, label: &str, material: Option<MaterialPreset>) -> UxNode {
     let card_bg = Rgba::rgb8(12, 12, 20);
+    let style = Style::col()
+        .w(Dim::Flex(1.0))
+        .h(Dim::Px(130.0))
+        .pad(Edges::all(16.0))
+        .gap(10.0)
+        .radius(14.0)
+        .bg(card_bg)
+        .border(2.0, col);
+    let style = material
+        .map(|preset| style.transparency(preset.material()))
+        .unwrap_or(style);
     UxNode::boxed(
-        Style::col()
-            .w(Dim::Flex(1.0))
-            .h(Dim::Px(130.0))
-            .pad(Edges::all(16.0))
-            .gap(10.0)
-            .radius(14.0)
-            .bg(card_bg)
-            .border(2.0, col),
+        style,
         vec![
             UxNode::boxed(
                 Style::row().align(Align::Center).gap(8.0),
@@ -84,7 +89,7 @@ fn dot_row() -> UxNode {
     )
 }
 
-fn build_scene() -> UxNode {
+fn build_scene(material: Option<MaterialPreset>) -> UxNode {
     UxNode::boxed(
         Style::col()
             .w(Dim::Flex(1.0))
@@ -97,10 +102,10 @@ fn build_scene() -> UxNode {
             UxNode::boxed(
                 Style::row().w(Dim::Flex(1.0)).gap(16.0),
                 vec![
-                    panel(teal(), "ACTIVE"),
-                    panel(amber(), "QUEUED"),
-                    panel(rose(), "STALL"),
-                    panel(violet(), "RELAY"),
+                    panel(teal(), "ACTIVE", material),
+                    panel(amber(), "QUEUED", material),
+                    panel(rose(), "STALL", material),
+                    panel(violet(), "RELAY", material),
                 ],
             ),
             dot_row(),
@@ -117,7 +122,7 @@ fn measure(root: &UxNode, w: u32, h: u32, q: Quality, n: u32) -> f64 {
 }
 
 fn main() {
-    let root = build_scene();
+    let root = build_scene(None);
     let (w, h) = (860u32, 380u32);
     let n = 40u32;
 
@@ -166,5 +171,17 @@ fn main() {
         let ms = measure(&root, w, h, q, n);
         let fps = 1000.0 / ms;
         println!("  {label}  {:6.1} ms/frame  ({:5.0} fps)", ms, fps);
+    }
+
+    println!("\nTransparency barriers (CPU Fast, four material panels):");
+    for preset in [MaterialPreset::ClearGlass, MaterialPreset::FrostedGlass] {
+        let material_root = build_scene(Some(preset));
+        let ms = measure(&material_root, w, h, Quality::Fast, n);
+        println!(
+            "  {:18}  {:6.1} ms/frame  ({:5.0} fps)",
+            preset.name(),
+            ms,
+            1000.0 / ms
+        );
     }
 }

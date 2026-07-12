@@ -2,11 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Engine = Join-Path $Root "atom-rendering-engine-main"
+$Harness = Join-Path $Root "vibe-coder"
 $Limit = 4000
 $violations = @()
 $reports = @()
 
-Get-ChildItem -Path $Engine -Directory | ForEach-Object {
+$CrateRoots = @($Engine, $Harness)
+$CrateRoots | ForEach-Object { Get-ChildItem -Path $_ -Directory } | ForEach-Object {
     $crate = $_
     if (-not (Test-Path -LiteralPath (Join-Path $crate.FullName "Cargo.toml"))) {
         return

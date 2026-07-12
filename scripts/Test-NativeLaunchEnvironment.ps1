@@ -61,7 +61,9 @@ try {
     if (-not (Test-Path -LiteralPath $ProofPath)) {
         throw "detached app did not inherit the session-only store path"
     }
-    $proof = (Get-Content -LiteralPath $ProofPath -Tail 1) | ConvertFrom-Json
+    # Run chains provider execution, so later records may already be blocked against
+    # this gate's unreachable endpoint; the FIRST record is the prepared route.
+    $proof = (Get-Content -LiteralPath $ProofPath -TotalCount 1) | ConvertFrom-Json
     if ($proof.provider_model -ne $ExpectedModel) {
         throw "detached app lost session-only provider model: $($proof.provider_model)"
     }

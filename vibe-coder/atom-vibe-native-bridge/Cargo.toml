@@ -1,0 +1,10 @@
+[package]
+name = "atom-vibe-native-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native PMRE UI bridge for durable Atom Vibe sessions and asynchronous step execution."
+
+[dependencies]
+atom-vibe-runtime = { path = "../atom-vibe-runtime" }
+math-atoms-core = { path = "../../atom-rendering-engine-main/math-atoms-core" }

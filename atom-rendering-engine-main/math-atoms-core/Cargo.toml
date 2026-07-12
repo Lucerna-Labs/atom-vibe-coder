@@ -14,6 +14,7 @@ math-atoms-json = { path = "../math-atoms-json" }
 math-atoms-learning = { path = "../math-atoms-learning" }
 math-atoms-proof = { path = "../math-atoms-proof" }
 math-atoms-provider-transport = { path = "../math-atoms-provider-transport" }
+math-atoms-repair = { path = "../math-atoms-repair" }
 math-atoms-secrets = { path = "../math-atoms-secrets" }
 math-atoms-verification = { path = "../math-atoms-verification" }
 math-atoms-work = { path = "../math-atoms-work" }

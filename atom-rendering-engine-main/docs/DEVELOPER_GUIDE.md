@@ -2,7 +2,7 @@
 
 How to embed, drive, and extend the Atom Rendering Engine.
 
-Atom Rendering Engine is a zero-dependency 2D UI engine: two crates, all CPU, everything built from a
+Atom Rendering Engine is a zero-external-dependency 2D UI engine: focused crates, all CPU, everything built from a
 small set of mathematical primitives. This guide is for developers building apps on the
 engine or extending the engine itself. For the project overview, see the
 [README](../README.md).
@@ -28,13 +28,16 @@ pmre-orchestrator  policy only â€” never touches a pixel directly
 â””â”€ lib             draw order, banded parallel painting, interaction state
                    machine (hover/press/click/toggle/scroll/focus), DPI scaling,
                    scrollbars, Quality tiers
+
+pmre-transparency-core  allocation-free no_std optics/material math
+pmre-transparency       premultiplied screen-space backdrop compositor
 ```
 
 The rule that keeps the design honest: **if a `pmre-kit` function grows an `if` that
 makes a value judgement, that `if` belongs in the orchestrator.** The kit computes;
 the orchestrator decides.
 
-Both crates have **zero external dependencies**. Do not add any. Fonts come from the
+The default renderer crates have **zero external dependencies**. Do not add any. Fonts come from the
 OS font directory via `std::fs`; the window in `examples/app.rs` is raw Win32 FFI.
 
 ---
@@ -77,6 +80,56 @@ fn main() {
 `Framebuffer::to_bmp` needs no image crate â€” the BMP encoder is built in.
 `Framebuffer::to_u32` produces `0x00RRGGBB` pixels ready for any OS blit
 (`StretchDIBits`, softbuffer-style surfaces, etc.).
+
+### Output gamma and the Renderer Customizer
+
+Interactive `render_ui` surfaces automatically include the renderer-owned Design rail. Its
+Gamma slider maps `0.00..1.00` control state to an output gamma of `0.50..2.50`; the neutral
+default is `1.00` (slider value `0.25`). The orchestrator stores that value on the returned
+`Framebuffer`. Both `to_u32` and `to_bmp` apply `channel.powf(1.0 / gamma)` after straight-alpha
+flattening and before 8-bit quantization, so compositing, bloom, and raw RGBA remain unchanged.
+
+Static renderers can opt in directly:
+
+```rust
+let mut fb = render_uxi(&ui, 640, 360, clear);
+fb.set_output_gamma(2.2);
+let pixels = fb.to_u32(clear);
+```
+
+### Transparent and translucent materials
+
+Interactive Customizers default to `Legacy`, which injects no material. A frame with no explicit
+app-authored material preserves the existing parallel lane render. Selecting a cookbook preset
+attaches materials to app surfaces that authored a shadow or use the `Scroll` role; direct
+`Style::transparency(...)` works on any box.
+Because blur and refraction must read pixels painted earlier, the orchestrator inserts a full-frame
+serial backdrop barrier for that frame. Frames without materials stay on the banded parallel path.
+
+Apps can attach a material directly:
+
+```rust
+use pmre_kit::{transparency::MaterialPreset, Rgba, Style};
+
+let glass = Style::col()
+    .radius(18.0)
+    .bg(Rgba::new(0.18, 0.72, 0.82, 0.52))
+    .transparency(MaterialPreset::Water.material());
+```
+
+Backdrop crops are filtered as premultiplied RGBA, then converted back to PMRE's explicit
+straight-alpha framebuffer boundary. That avoids dark blur fringes without silently changing the
+public framebuffer representation. DPI scaling applies to every pixel-distance material field.
+Rounded geometry and active scroll clips remain authoritative.
+
+The live presets and exact unsupported boundary are listed in
+[Transparency Cookbook Coverage](TRANSPARENCY_COOKBOOK.md). Exact dielectric Fresnel, Snell/TIR,
+Henyey-Greenstein, cheap thickness translucency, and WBOIT accumulation are reusable math APIs;
+their presence does not imply a 3D scene pass or path tracer.
+
+Hosts that expose animation must periodically send `UiEvent::Tick(delta_seconds)` and request a
+redraw while the Animation control is nonzero. The native Atom Vibe window and Win32 live example
+do this at 30 Hz; static/headless renderers can leave the clock untouched.
 
 ---
 

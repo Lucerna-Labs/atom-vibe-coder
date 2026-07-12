@@ -1,0 +1,10 @@
+[package]
+name = "pmre-transparency"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Premultiplied screen-space transparency and translucency compositor for PMRE."
+
+[dependencies]
+pmre-kit = { path = "../pmre-kit" }
+pmre-transparency-core = { path = "../pmre-transparency-core" }

@@ -325,7 +325,9 @@ mod win {
     use super::{add_todo, apply_click, build, Todo, BG};
     use core::ffi::c_void;
     use pmre_kit::ux::UxNode;
-    use pmre_orchestrator::{handle_event, render_ui_quality, Quality, UiEvent, UiState};
+    use pmre_orchestrator::{
+        handle_event, render_ui_quality, Quality, UiEvent, UiState, DESIGN_ANIMATION_SLIDER,
+    };
     use std::cell::RefCell;
 
     type HWND = *mut c_void;
@@ -448,6 +450,7 @@ mod win {
         fn DispatchMessageW(msg: *const Msg) -> LRESULT;
         fn PostQuitMessage(code: i32);
         fn InvalidateRect(hwnd: HWND, rect: *const Rect, erase: i32) -> i32;
+        fn SetTimer(hwnd: HWND, id: usize, milliseconds: u32, callback: *const c_void) -> usize;
         fn BeginPaint(hwnd: HWND, ps: *mut PaintStruct) -> HDC;
         fn EndPaint(hwnd: HWND, ps: *const PaintStruct) -> i32;
         fn LoadCursorW(inst: HINSTANCE, name: *const u16) -> HCURSOR;
@@ -491,6 +494,7 @@ mod win {
     const WM_CHAR: u32 = 0x0102;
     const WM_DPICHANGED: u32 = 0x02E0;
     const WM_MOUSELEAVE: u32 = 0x02A3;
+    const WM_TIMER: u32 = 0x0113;
     const TME_LEAVE: u32 = 0x0000_0002;
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_NOACTIVATE: u32 = 0x0010;
@@ -575,6 +579,18 @@ mod win {
                 });
                 dispatch(UiEvent::Resize(w.max(1), h.max(1)));
                 InvalidateRect(hwnd, std::ptr::null(), 0);
+                0
+            }
+            WM_TIMER => {
+                let animate = APP.with(|cell| {
+                    cell.borrow().as_ref().is_some_and(|app| {
+                        app.ui.slider_value(DESIGN_ANIMATION_SLIDER, 0.30) > 0.01
+                    })
+                });
+                if animate {
+                    dispatch(UiEvent::Tick(1.0 / 30.0));
+                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                }
                 0
             }
             WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
@@ -827,6 +843,7 @@ mod win {
                 eprintln!("CreateWindowExW failed");
                 return;
             }
+            SetTimer(hwnd, 1, 33, std::ptr::null());
             // size the window for the monitor it actually opened on
             let dpi = GetDpiForWindow(hwnd);
             let s = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };

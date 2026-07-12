@@ -5,8 +5,15 @@ use math_atoms_secrets::redact_sensitive_text;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+
+/// Windows `CREATE_NO_WINDOW`: keeps the `curl` subprocess from flashing a black console
+/// window over the GUI on every provider call.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 use std::thread;
 
 pub const MAX_PROVIDER_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -126,26 +133,90 @@ pub fn post_json(request: ProviderHttpRequest<'_>) -> Result<String, ProviderTra
         request.auth_scheme,
         request.api_key,
     );
-    let result = run_curl(&body_arg, &config, request.timeout_seconds).and_then(|capture| {
-        let (body, http_status) = split_curl_response(capture.stdout)?;
-        let stderr = String::from_utf8(capture.stderr).map_err(|_| {
-            ProviderTransportError::Io("curl stderr was not valid UTF-8".to_string())
-        })?;
-        if !capture.status.success() || !matches!(http_status, Some(200..=299)) {
-            return Err(ProviderTransportError::CurlFailed {
-                code: capture.status.code(),
-                http_status,
-                stderr: safe_diagnostic(&stderr, request.api_key),
-                body: safe_diagnostic(&body, request.api_key),
-            });
+    // Retry ONLY the class of failure where curl never issued the request — the process
+    // failed to launch/initialize (e.g. Windows STATUS_DLL_INIT_FAILED 0xC0000142 under
+    // resource pressure). Such a retry cannot double-submit, and it keeps one transient
+    // hiccup on a late packet from discarding an entire multi-packet build. HTTP-status
+    // failures (4xx/5xx) and curl's own request-level errors are never retried.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut attempt = 0u32;
+    let result = loop {
+        attempt += 1;
+        let outcome = run_curl(&body_arg, &config, request.timeout_seconds)
+            .and_then(|capture| classify_curl_capture(capture, request.api_key));
+        match &outcome {
+            Err(error) if attempt < MAX_ATTEMPTS && is_transient_launch_failure(error) => {
+                std::thread::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)));
+            }
+            _ => break outcome,
         }
-        Ok(body)
-    });
+    };
     match temp_body.cleanup() {
         Ok(()) => result,
         Err(error) => Err(ProviderTransportError::Io(format!(
             "provider temp cleanup failed: {error}"
         ))),
+    }
+}
+
+/// Turn a completed curl invocation into the response body or a classified error.
+/// When curl itself failed (timeout, connection reset, aborted transfer) it writes no
+/// `--write-out` status marker, so surface its real exit code and stderr — e.g.
+/// "curl: (52) Empty reply from server" — instead of the misleading "omitted the HTTP
+/// status marker", which otherwise hides the true cause. A present marker is always
+/// preferred (curl `--fail` still emits it with the real HTTP code).
+fn classify_curl_capture(
+    capture: CurlCapture,
+    api_key: &str,
+) -> Result<String, ProviderTransportError> {
+    let stderr = String::from_utf8(capture.stderr)
+        .map_err(|_| ProviderTransportError::Io("curl stderr was not valid UTF-8".to_string()))?;
+    let curl_failed = !capture.status.success();
+    let curl_code = capture.status.code();
+    match split_curl_response(capture.stdout) {
+        Ok((body, http_status)) => {
+            if curl_failed || !matches!(http_status, Some(200..=299)) {
+                return Err(ProviderTransportError::CurlFailed {
+                    code: curl_code,
+                    http_status,
+                    stderr: safe_diagnostic(&stderr, api_key),
+                    body: safe_diagnostic(&body, api_key),
+                });
+            }
+            Ok(body)
+        }
+        Err(framing_error) => {
+            if curl_failed {
+                Err(ProviderTransportError::CurlFailed {
+                    code: curl_code,
+                    http_status: None,
+                    stderr: safe_diagnostic(&stderr, api_key),
+                    body: String::new(),
+                })
+            } else {
+                Err(framing_error)
+            }
+        }
+    }
+}
+
+/// True only for a curl failure where the process never issued the HTTP request, so a
+/// retry cannot double-submit: no HTTP status was obtained AND the exit code is an
+/// abnormal OS-level termination (outside curl's documented 1..=99 range) or absent —
+/// e.g. Windows STATUS_DLL_INIT_FAILED (0xC0000142) when the process fails to start.
+/// curl's own request-level exit codes (1..=99) mean the request may have been sent and
+/// are deliberately NOT retried.
+fn is_transient_launch_failure(error: &ProviderTransportError) -> bool {
+    match error {
+        ProviderTransportError::CurlFailed {
+            http_status: None,
+            code,
+            ..
+        } => match code {
+            None => true,
+            Some(c) => !(1..=99).contains(c),
+        },
+        _ => false,
     }
 }
 
@@ -264,12 +335,15 @@ fn run_curl(
     config: &str,
     timeout_seconds: u64,
 ) -> Result<CurlCapture, ProviderTransportError> {
-    let mut child = Command::new(curl_program())
+    let mut command = Command::new(curl_program());
+    command
         .args(curl_args(body_arg, timeout_seconds))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command.spawn()?;
     let stdout = child
         .stdout
         .take()
@@ -557,6 +631,72 @@ mod tests {
         ));
         server.join().unwrap();
         assert_eq!(submissions.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn transient_launch_failures_are_classified_for_retry() {
+        // Process never ran (STATUS_DLL_INIT_FAILED / abnormal OS exit): safe to retry.
+        assert!(is_transient_launch_failure(
+            &ProviderTransportError::CurlFailed {
+                code: Some(-1_073_741_502),
+                http_status: None,
+                stderr: String::new(),
+                body: String::new(),
+            }
+        ));
+        assert!(is_transient_launch_failure(
+            &ProviderTransportError::CurlFailed {
+                code: None,
+                http_status: None,
+                stderr: String::new(),
+                body: String::new(),
+            }
+        ));
+        // HTTP 500 was submitted exactly once — must NOT be retried.
+        assert!(!is_transient_launch_failure(
+            &ProviderTransportError::CurlFailed {
+                code: Some(22),
+                http_status: Some(500),
+                stderr: String::new(),
+                body: String::new(),
+            }
+        ));
+        // curl exit 52 (empty reply) means the request was sent — must NOT be retried.
+        assert!(!is_transient_launch_failure(
+            &ProviderTransportError::CurlFailed {
+                code: Some(52),
+                http_status: None,
+                stderr: String::new(),
+                body: String::new(),
+            }
+        ));
+    }
+
+    #[test]
+    fn curl_transport_failure_surfaces_exit_code_not_missing_marker() {
+        // The peer accepts then closes without any HTTP response, so curl fails
+        // (e.g. "curl: (52) Empty reply from server") and writes no status marker.
+        // OPERATOR_APPROVED_CPU_PARALLEL: test-only TCP server thread, identical to the
+        // existing live_transport_* tests in this module (not product CPU parallelism).
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                drop(stream);
+            }
+        });
+        let result = post_json(request(&format!("http://{address}/reset")));
+        server.join().unwrap();
+        // The real curl exit code must surface, not the misleading framing error.
+        match result {
+            Err(ProviderTransportError::CurlFailed {
+                http_status, code, ..
+            }) => {
+                assert_eq!(http_status, None);
+                assert!(code.is_some(), "expected a concrete curl exit code");
+            }
+            other => panic!("expected CurlFailed carrying the curl exit code, got {other:?}"),
+        }
     }
 
     #[test]

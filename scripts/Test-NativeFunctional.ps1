@@ -290,11 +290,14 @@ try {
     Start-Sleep -Seconds 2
     $proc = Refresh-NativeProcess "Run command"
     $title = Get-AtomNativeWindowTitle -Process $proc
-    if ($title -notmatch "provider pending") {
-        throw "Run button did not reach provider pending state before execution. Title: $title"
-    }
     if ($title -notmatch "provider-model-loop") {
         throw "Typed provider intent did not select provider-model-loop. Title: $title"
+    }
+    # Run chains the full loop: proof route, then provider execution. Against this
+    # gate's unreachable endpoint the chained call must fail closed to provider:blocked.
+    if ($title -notmatch "provider:(running|ran|blocked)") {
+        $proc = Wait-ForTitlePattern "provider:(running|ran|blocked)" "Run chained provider execution" 30
+        $title = Get-AtomNativeWindowTitle -Process $proc
     }
 
     Invoke-NativeCommand (Get-AtomNativeWindowHandle -Process $proc) 3

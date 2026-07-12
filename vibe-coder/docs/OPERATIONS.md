@@ -25,6 +25,11 @@ The current step, retries, completed outputs, deferred debt, wiring status, and
 scratchpad chain are reconstructed from disk. The model is not asked to remember
 or summarize the missing session.
 
+Provider turns are also restart-safe. Each accepted response has a
+content-addressed output artifact and an append-only turn record that binds both
+Spiderweb routes, graph evidence, thinking evidence, token usage, planner revision,
+and scratchpad checkpoint. Missing or modified output bytes invalidate replay.
+
 ## Credentials
 
 Persist only the credential environment-variable name. Set the value in the

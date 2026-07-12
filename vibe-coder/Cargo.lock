@@ -49,12 +49,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-vibe-native-bridge"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-runtime",
+ "math-atoms-core",
+]
+
+[[package]]
 name = "atom-vibe-provider"
 version = "0.1.0"
 dependencies = [
  "math-atoms-core",
  "math-atoms-hash",
  "math-atoms-json",
+ "math-atoms-provider-transport",
+]
+
+[[package]]
+name = "atom-vibe-runtime"
+version = "0.1.0"
+dependencies = [
+ "atom-vibe-build-gates",
+ "atom-vibe-build-planner",
+ "atom-vibe-build-protocol",
+ "atom-vibe-context",
+ "atom-vibe-mode",
+ "atom-vibe-provider",
+ "atom-vibe-scratchpad",
+ "math-atoms-bus",
+ "math-atoms-core",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-lock",
  "math-atoms-provider-transport",
 ]
 
@@ -93,6 +120,7 @@ dependencies = [
  "math-atoms-learning",
  "math-atoms-proof",
  "math-atoms-provider-transport",
+ "math-atoms-repair",
  "math-atoms-secrets",
  "math-atoms-verification",
  "math-atoms-work",
@@ -158,6 +186,14 @@ version = "0.1.0"
 dependencies = [
  "math-atoms-hash",
  "math-atoms-secrets",
+]
+
+[[package]]
+name = "math-atoms-repair"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-verification",
+ "math-atoms-work",
 ]
 
 [[package]]

@@ -1,0 +1,21 @@
+[package]
+name = "atom-vibe-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Durable Atom Vibe Coder runtime composition over graph, scratchpad, provider, planner, gates, and Spiderweb Bus."
+
+[dependencies]
+atom-vibe-build-gates = { path = "../atom-vibe-build-gates" }
+atom-vibe-build-planner = { path = "../atom-vibe-build-planner" }
+atom-vibe-build-protocol = { path = "../atom-vibe-build-protocol" }
+atom-vibe-context = { path = "../atom-vibe-context" }
+atom-vibe-mode = { path = "../atom-vibe-mode" }
+atom-vibe-provider = { path = "../atom-vibe-provider" }
+atom-vibe-scratchpad = { path = "../atom-vibe-scratchpad" }
+math-atoms-bus = { path = "../../atom-rendering-engine-main/math-atoms-bus" }
+math-atoms-core = { path = "../../atom-rendering-engine-main/math-atoms-core" }
+math-atoms-hash = { path = "../../atom-rendering-engine-main/math-atoms-hash" }
+math-atoms-json = { path = "../../atom-rendering-engine-main/math-atoms-json" }
+math-atoms-lock = { path = "../../atom-rendering-engine-main/math-atoms-lock" }
+math-atoms-provider-transport = { path = "../../atom-rendering-engine-main/math-atoms-provider-transport" }

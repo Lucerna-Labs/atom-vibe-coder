@@ -7,6 +7,7 @@ pub struct Framebuffer {
     pub width: u32,
     pub height: u32,
     pixels: Vec<Rgba>,
+    output_gamma: f32,
 }
 
 impl Framebuffer {
@@ -15,6 +16,7 @@ impl Framebuffer {
             width,
             height,
             pixels: vec![clear; (width * height) as usize],
+            output_gamma: 1.0,
         }
     }
 
@@ -54,7 +56,8 @@ impl Framebuffer {
         out.extend_from_slice(&0u32.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
 
-        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let gamma_exponent = 1.0 / self.output_gamma;
+        let to_u8 = |c: f32| (encode_gamma(c, gamma_exponent) * 255.0 + 0.5) as u8;
         for y in (0..h).rev() {
             for x in 0..w {
                 let px = self.pixels[y * w + x];
@@ -73,7 +76,8 @@ impl Framebuffer {
 
     /// Flatten to opaque `0x00RRGGBB` pixels for software presentation (e.g. softbuffer).
     pub fn to_u32(&self, background: Rgba) -> Vec<u32> {
-        let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
+        let gamma_exponent = 1.0 / self.output_gamma;
+        let to_u8 = |c: f32| (encode_gamma(c, gamma_exponent) * 255.0 + 0.5) as u32;
         let mut out = Vec::with_capacity((self.width * self.height) as usize);
         for px in &self.pixels {
             let a = px.a.clamp(0.0, 1.0);
@@ -103,11 +107,38 @@ impl Framebuffer {
         &mut self.pixels
     }
 
+    /// Set presentation gamma without altering raw pixels or alpha compositing.
+    /// A value of `1.0` is neutral; values above one brighten midtones.
+    pub fn set_output_gamma(&mut self, gamma: f32) {
+        self.output_gamma = sanitize_gamma(gamma);
+    }
+
+    pub fn output_gamma(&self) -> f32 {
+        self.output_gamma
+    }
+
     /// Direct pixel write, bypassing Porter-Duff compositing.
     pub fn set_pixel(&mut self, x: u32, y: u32, c: Rgba) {
         if x < self.width && y < self.height {
             self.pixels[(y * self.width + x) as usize] = c;
         }
+    }
+}
+
+fn sanitize_gamma(gamma: f32) -> f32 {
+    if gamma.is_finite() {
+        gamma.clamp(0.1, 5.0)
+    } else {
+        1.0
+    }
+}
+
+fn encode_gamma(channel: f32, exponent: f32) -> f32 {
+    let channel = channel.clamp(0.0, 1.0);
+    if exponent == 1.0 {
+        channel
+    } else {
+        channel.powf(exponent)
     }
 }
 
@@ -180,5 +211,44 @@ impl Surface for BandView<'_> {
         }
         let i = ((y - self.y0) * self.width + x) as usize;
         self.pixels[i] = crate::paint::over(self.pixels[i], src);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neutral_gamma_preserves_existing_quantization() {
+        let fb = Framebuffer::new(1, 1, Rgba::new(0.25, 0.50, 0.75, 1.0));
+        assert_eq!(fb.output_gamma(), 1.0);
+        assert_eq!(fb.to_u32(Rgba::new(0.0, 0.0, 0.0, 1.0))[0], 0x0040_80bf);
+    }
+
+    #[test]
+    fn gamma_is_applied_after_alpha_flattening_without_mutating_raw_pixels() {
+        let raw = Rgba::new(0.5, 0.5, 0.5, 0.5);
+        let mut fb = Framebuffer::new(1, 1, raw);
+        fb.set_output_gamma(2.0);
+        let encoded = fb.to_u32(Rgba::new(0.0, 0.0, 0.0, 1.0))[0];
+        assert_eq!(encoded, 0x0080_8080);
+        assert_eq!(
+            &fb.to_bmp(Rgba::new(0.0, 0.0, 0.0, 1.0))[54..57],
+            &[128, 128, 128]
+        );
+        let stored = fb.pixel(0, 0);
+        assert_eq!(
+            (stored.r, stored.g, stored.b, stored.a),
+            (raw.r, raw.g, raw.b, raw.a)
+        );
+    }
+
+    #[test]
+    fn invalid_gamma_fails_to_neutral_and_finite_values_are_bounded() {
+        let mut fb = Framebuffer::new(1, 1, Rgba::new(0.5, 0.5, 0.5, 1.0));
+        fb.set_output_gamma(f32::NAN);
+        assert_eq!(fb.output_gamma(), 1.0);
+        fb.set_output_gamma(99.0);
+        assert_eq!(fb.output_gamma(), 5.0);
     }
 }

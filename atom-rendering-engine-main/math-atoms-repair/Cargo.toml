@@ -1,0 +1,10 @@
+[package]
+name = "math-atoms-repair"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Focused failed-gate repair targeting and prompt construction for Atom builds."
+
+[dependencies]
+math-atoms-verification = { path = "../math-atoms-verification" }
+math-atoms-work = { path = "../math-atoms-work" }

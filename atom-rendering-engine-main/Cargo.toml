@@ -3,7 +3,10 @@
 # the kit/orchestrator ownership boundary.
 [workspace]
 resolver = "2"
+# OPERATOR_APPROVED_CARGO_DEP: workspace member list only. avc-core is a local,
+# zero-external-dependency crate (the vendored fast Atom Vibe Coder path).
 members = [
+    "avc-core",
     "math-atoms-attestation",
     "math-atoms-bus",
     "math-atoms-core",
@@ -16,12 +19,15 @@ members = [
     "math-atoms-native",
     "math-atoms-proof",
     "math-atoms-provider-transport",
+    "math-atoms-repair",
     "math-atoms-secrets",
     "math-atoms-verification",
     "math-atoms-work",
     "pmre-font",
     "pmre-html",
     "pmre-kit",
+    "pmre-transparency-core",
+    "pmre-transparency",
     "pmre-orchestrator",
     "pmre-examples",
 ]

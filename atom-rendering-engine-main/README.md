@@ -33,6 +33,12 @@ Focused crates, with the same kit/orchestrator ownership boundary:
   (the optional `gpu` feature adds wgpu for the GPU bloom tier).
 - **`pmre-font`** — dependency-free TrueType parsing and glyph rasterization.
 - **`pmre-html`** — reduced HTML/CSS parsing into the PMRE UXI tree.
+- **`pmre-transparency-core`** — allocation-free `no_std` value math for explicit straight
+  and premultiplied alpha, blend policies, Fresnel, Snell/TIR, Beer-Lambert, phase density,
+  thin-film RGB, dithering, screen offsets, material recipes, and WBOIT accumulation.
+- **`pmre-transparency`** — the live screen-space material mechanism. It captures a painter-
+  ordered backdrop crop, filters premultiplied color, applies blur/refraction/dispersion/
+  absorption/scatter/rim effects, respects rounded clips, and composites back into PMRE.
 - **`pmre-examples`** — example programs and artifact renderers kept outside runtime crates.
 
 The pipeline is pure composition all the way to pixels:
@@ -69,6 +75,14 @@ painter's algorithm.
   opacity, box-shadow, per-side margin/padding).
 - **Interaction** — buttons (hover / press / click), toggles, a scrollable region with clipping,
   a live scrollbar (wheel scroll **and** thumb drag), hit-testing, and auto-resize reflow.
+- **Renderer Customizer** — every interactive `render_ui` surface receives a native Design rail
+  with legacy/no-op plus clear glass, frosted glass, water, crystal, soap film, wax, smoke,
+  stained glass, and heat-haze presets. Advanced optics exposes frost/blur, refraction, RGB
+  dispersion, and Fresnel rim. Legacy injects no Customizer material; a frame with no explicit
+  app material keeps the parallel lane path. Active materials use an explicit serial backdrop
+  barrier. Gamma ranges from `0.50` to `2.50`, defaults to neutral
+  `1.00`, and is applied after alpha flattening without mutating raw RGBA. See the
+  [cookbook coverage matrix](docs/TRANSPARENCY_COOKBOOK.md).
 - **Text input** — focusable fields with typed characters, backspace, a caret, and Enter-to-submit.
 - **Live window, zero dependencies** — the interactive todo window (`examples/app.rs`) drives the
   OS window **directly via raw Win32/GDI FFI** — no winit, no softbuffer, no crates — blitting the

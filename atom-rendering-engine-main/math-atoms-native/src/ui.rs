@@ -1,11 +1,12 @@
 use crate::model::{
     MainTab, NativeApp, APPLY_PROVIDER, APP_SCROLL, ARTIFACT_SCROLL, BUILD_DESIGN_UPLOAD,
     BUS_SCROLL, CAPTURE_PROOF, DESIGN_CSS_PATH_INPUT, DESIGN_HTML_PATH_INPUT, DESIGN_UPLOAD_TAB,
-    EVIDENCE_SCROLL, EXEC_PROVIDER, HOOKS_TAB, INTENT_INPUT, MARK_DRIFT, MCP_TAB,
-    PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT, PROVIDER_BODY_TEMPLATE_INPUT,
-    PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT, PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT,
-    PROVIDER_MODEL_INPUT, PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_THINKING_INPUT, PROVIDER_URL_INPUT,
-    RUNTIME_SETTINGS_TAB, RUN_LOOP, SETTINGS_SCROLL, SETTINGS_TAB, SKILLS_TAB, WIKI_TAB,
+    EVIDENCE_SCROLL, EXEC_PROVIDER, EXEC_VIBE_STEP, HOOKS_TAB, INTENT_INPUT, INTENT_INPUT_SCROLL,
+    MARK_DRIFT, MCP_TAB, PROVIDER_AUTH_HEADER_INPUT, PROVIDER_AUTH_SCHEME_INPUT,
+    PROVIDER_BODY_TEMPLATE_INPUT, PROVIDER_CONNECTIONS_TAB, PROVIDER_FORMAT_INPUT,
+    PROVIDER_KEY_ENV_INPUT, PROVIDER_KIND_INPUT, PROVIDER_MODEL_INPUT, PROVIDER_OUTPUT_SCROLL,
+    PROVIDER_RESPONSE_KEY_INPUT, PROVIDER_THINKING_INPUT, PROVIDER_URL_INPUT, RUNTIME_SETTINGS_TAB,
+    RUN_LOOP, SETTINGS_SCROLL, SETTINGS_TAB, SKILLS_TAB, TRANSCRIPT_SCROLL, WIKI_TAB,
     WORKSPACE_TAB,
 };
 use math_atoms_core::{gates, mission, recipes, RuntimeStatus};
@@ -355,6 +356,7 @@ fn transcript_panel(app: &NativeApp) -> UxNode {
     let recipe = selected_recipe(app);
     UxNode::boxed(
         Style::col()
+            .scroll(TRANSCRIPT_SCROLL)
             .h(Dim::Flex(1.0))
             .gap(10.0)
             .pad(Edges::all(14.0))
@@ -372,6 +374,7 @@ fn transcript_panel(app: &NativeApp) -> UxNode {
                 &app.last_run_summary,
                 status_color(app.status()),
             ),
+            mini_card("vibe build spine", app.vibe.summary(), blue()),
             mini_card(
                 "atom stack",
                 &app.runtime.state().selected_atoms.join(" -> "),
@@ -404,6 +407,7 @@ fn chat_box(ui: &UiState) -> UxNode {
                 Style::row().gap(8.0).h(Dim::Px(40.0)).align(Align::Center),
                 vec![
                     button(ui, RUN_LOOP, "Run", lamp(), Rgba::rgb8(15, 18, 22)),
+                    button(ui, EXEC_VIBE_STEP, "Vibe Step", blue(), ink()),
                     button(ui, EXEC_PROVIDER, "Provider", teal_dim(), ink()),
                     button(ui, CAPTURE_PROOF, "Capture", glass_deep(), ink()),
                     button(ui, MARK_DRIFT, "Drift", red(), ink()),
@@ -721,6 +725,7 @@ fn runtime_settings_panel(app: &NativeApp) -> Vec<UxNode> {
                     lamp(),
                 ),
                 compact_metric("artifacts", app.side_artifacts.len().to_string(), teal()),
+                compact_metric("vibe turns", app.vibe.turn_count().to_string(), blue()),
             ],
         ),
         mini_card(
@@ -732,6 +737,18 @@ fn runtime_settings_panel(app: &NativeApp) -> Vec<UxNode> {
             "proof store",
             &app.last_run_summary,
             status_color(app.status()),
+        ),
+        mini_card(
+            "vibe runtime",
+            &format!(
+                "{} | build {} | step {} | context route {} | result route {}",
+                app.vibe.title_state(),
+                app.vibe.active_build_id(),
+                app.vibe.current_step(),
+                app.vibe.context_route_len(),
+                app.vibe.result_route_len()
+            ),
+            blue(),
         ),
         mini_card(
             "learning ledger",
@@ -845,7 +862,10 @@ fn bus_preview(app: &NativeApp) -> UxNode {
 
 fn provider_output_preview(app: &NativeApp) -> UxNode {
     UxNode::boxed(
-        Style::col().h(Dim::Px(110.0)).gap(7.0),
+        Style::col()
+            .scroll(PROVIDER_OUTPUT_SCROLL)
+            .h(Dim::Px(110.0))
+            .gap(7.0),
         vec![mini_card(
             if app.provider_running {
                 "running"
@@ -874,7 +894,12 @@ fn input_box(ui: &UiState) -> UxNode {
                     line()
                 },
             ),
-        vec![focused_input_node(ui, INTENT_INPUT, 14.0)],
+        // The inner scroll region clips wrapped text to the box and lets long intents
+        // scroll instead of painting over the buttons below.
+        vec![UxNode::boxed(
+            Style::col().scroll(INTENT_INPUT_SCROLL).h(Dim::Flex(1.0)),
+            vec![focused_input_node(ui, INTENT_INPUT, 14.0)],
+        )],
     )
 }
 
@@ -929,7 +954,8 @@ fn focused_input_node(ui: &UiState, id: u32, size: f32) -> UxNode {
     let caret = ui.input_caret(id);
     push_span(&mut spans, slice_chars(text, 0, caret), size, ink());
     if caret_visible(ui) {
-        spans.push(Span::new("|", size, lamp()).bold());
+        // overlay: zero width, so the blink never re-wraps the surrounding text
+        spans.push(Span::new("|", size, lamp()).bold().overlay());
     }
     push_span(
         &mut spans,

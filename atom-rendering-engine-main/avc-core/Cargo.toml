@@ -1,0 +1,12 @@
+# Atom Vibe Coder fast path, vendored from the flawless Ordo Pro subsystem
+# (C:\Projects\Ordo Pro\Atom Vibe Coder\crates\math-atoms-core\src\provider.rs).
+# Single-shot code generation: one prompt -> one curl call -> extract the fenced code.
+# Dependency-free, std-only. OPERATOR_APPROVED_CARGO_DEP — no external deps added.
+[package]
+name = "avc-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fast single-shot Atom Vibe Coder provider path vendored from the Ordo Pro subsystem."
+
+[dependencies]

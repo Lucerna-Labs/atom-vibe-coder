@@ -546,6 +546,7 @@ fn make_span(text: &str, inh: Inherited) -> Span {
         background: None,
         bold: inh.bold,
         underline: inh.underline,
+        overlay: false,
     }
 }
 
