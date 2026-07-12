@@ -1,0 +1,12 @@
+[package]
+name = "atom-vibe-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Thinking-required multi-provider adapter for Atom Vibe Coder turns."
+
+[dependencies]
+math-atoms-core = { path = "../../atom-rendering-engine-main/math-atoms-core" }
+math-atoms-hash = { path = "../../atom-rendering-engine-main/math-atoms-hash" }
+math-atoms-json = { path = "../../atom-rendering-engine-main/math-atoms-json" }
+math-atoms-provider-transport = { path = "../../atom-rendering-engine-main/math-atoms-provider-transport" }

@@ -4,6 +4,20 @@ Atom Vibe Coder by Lucerna Labs is a local, recipe-first coding workbench for th
 
 ## Current Surface
 
+- `vibe-coder/` owns the Atom Vibe Coder harness. It is a separate Rust workspace
+  that consumes renderer crates without making the renderer responsible for
+  planning, provider turns, Wiki Graph RAG, scratchpads, or build gates.
+- `vibe-coder/atom-vibe-build-protocol` owns the fixed six-step build protocol.
+- `vibe-coder/atom-vibe-build-gates` owns artifact-backed pass/fail decisions.
+- `vibe-coder/atom-vibe-build-planner` owns persistent state, bounded correction,
+  restart recovery, and planner-visible Spiderweb routes.
+- `vibe-coder/atom-vibe-context` joins Wiki Graph RAG and model-scoped scratchpad
+  context on a complete L0-L3 Spiderweb route for every build step.
+- `vibe-coder/atom-vibe-mode` owns the product mode and progressive skill release.
+- `vibe-coder/atom-vibe-provider` owns direct, thinking-required model turns over
+  the credential-safe renderer transport.
+- `vibe-coder/atom-vibe-scratchpad` owns isolated, append-only working context for
+  one build and one provider-model identity. It does not replace graph RAG.
 - `atom-rendering-engine-main/math-atoms-attestation` owns allowlisted executable harness runs and immutable source/executable/output attestations for learning authority.
 - `atom-rendering-engine-main/math-atoms-bus` owns dependency-free L0-L3 Spiderweb Bus routing, ramps, intersections, backpressure, and fabric-thread evidence.
 - `atom-rendering-engine-main/math-atoms-core` owns provider adapters, recipe selection, proof state, and runtime orchestration over the bus.
@@ -76,7 +90,14 @@ cd "C:\Projects\Atoms Coder by Lucerna Labs"
 
 Provider selection:
 
-Atom Vibe Coder requires a reasoning-capable model. The preferred local minimum is Qwen3.5 9B with thinking enabled; `Q6_K` or better is the quality baseline when memory permits. Thinking is mandatory for every planning, file, review, repair, and final-correction packet. The adapter accepts `low`, `medium`, or `high`, defaults to `low`, rejects disabled thinking and maximum/xhigh modes, and fails closed when the response contains no reasoning evidence.
+Atom Vibe Coder requires a reasoning-capable model. The recommended minimum
+local baseline is **Qwen3.5 9B Q8 with thinking enabled**, or a demonstrably
+stronger thinking model. Lower quantizations may be used for diagnostics, but
+they do not qualify a production build. Thinking is mandatory for every intake,
+planning, implementation, review, repair, test, and launch-verification turn.
+The adapter accepts `low`, `medium`, or `high`, rejects disabled thinking and
+maximum/xhigh modes, and fails closed when the response contains no reasoning
+evidence. See [Provider and Model Requirements](vibe-coder/docs/PROVIDER_MODELS.md).
 
 ```powershell
 $env:MATH_ATOMS_PROVIDER_KIND="openai"  # OPENAI_API_KEY, Responses API
@@ -99,7 +120,7 @@ $env:MATH_ATOMS_PROVIDER_TIMEOUT_SECONDS="900" # optional, bounded to 10..1800 s
 $env:MATH_ATOMS_PROVIDER_PLAN_TIMEOUT_SECONDS="21600" # optional total plan budget, bounded to 60..86400 seconds
 ```
 
-The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, thinking level, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. A custom template must carry `{{instructions_json}}`, `{{data_json}}`, and `{{thinking_json}}`. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run. See [Provider Runtime Requirements](atom-rendering-engine-main/docs/PROVIDER_RUNTIME.md).
+The native PMRE app also exposes provider kind, wire format, model, endpoint, key-env, auth-header, auth-scheme, thinking level, response-key, and body-template controls. Leave the body template blank for the selected wire format defaults; set it only for providers that need a custom JSON shape. A custom template must carry `{{instructions_json}}`, `{{data_json}}`, and `{{thinking_json}}`. `Apply Provider` reloads provider config in the runtime and clears stale proof state before the next run. See [Provider Runtime Requirements](atom-rendering-engine-main/docs/PROVIDER_RUNTIME.md) and the harness-owned [Provider and Model Requirements](vibe-coder/docs/PROVIDER_MODELS.md).
 
 The native Settings tab also exposes `Design Upload` with HTML and CSS path inputs. `Build Design` runs the PMRE design-upload gate, compiles the uploaded design into a native renderer app, and refreshes the side artifact window.
 

@@ -67,6 +67,7 @@ impl ModeManifest {
         }
         for required in [
             "thinking_required",
+            "recommended_model_qwen3_5_9b_q8_or_stronger",
             "wiki_graph_required_each_step",
             "spiderweb_route_required",
             "scratchpad_required",
@@ -272,6 +273,7 @@ mod tests {
         assert!(mode.rag_domains.iter().any(|value| value == "wiki_graph"));
         for policy in [
             "thinking_required",
+            "recommended_model_qwen3_5_9b_q8_or_stronger",
             "spiderweb_route_required",
             "scratchpad_required",
             "real_testing_not_smoke_testing",
@@ -298,6 +300,7 @@ mod tests {
         assert!(prompt.contains("Spiderweb"));
         assert!(prompt.contains("scratchpad"));
         assert!(prompt.contains("thinking enabled"));
+        assert!(prompt.contains("Qwen3.5 9B Q8"));
         assert!(prompt.contains("Smoke checks"));
         assert!(!prompt.to_ascii_lowercase().contains("ordo"));
         assert!(!prompt.contains("# Atom Launch Proof"));

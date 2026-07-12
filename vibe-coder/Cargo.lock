@@ -49,6 +49,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "atom-vibe-provider"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-core",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-provider-transport",
+]
+
+[[package]]
 name = "atom-vibe-scratchpad"
 version = "0.1.0"
 dependencies = [
@@ -70,6 +80,23 @@ dependencies = [
 [[package]]
 name = "math-atoms-bus"
 version = "0.1.0"
+
+[[package]]
+name = "math-atoms-core"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-bus",
+ "math-atoms-doctrine",
+ "math-atoms-graph",
+ "math-atoms-hash",
+ "math-atoms-json",
+ "math-atoms-learning",
+ "math-atoms-proof",
+ "math-atoms-provider-transport",
+ "math-atoms-secrets",
+ "math-atoms-verification",
+ "math-atoms-work",
+]
 
 [[package]]
 name = "math-atoms-doctrine"
@@ -123,6 +150,14 @@ dependencies = [
  "math-atoms-lock",
  "math-atoms-secrets",
  "math-atoms-verification",
+]
+
+[[package]]
+name = "math-atoms-provider-transport"
+version = "0.1.0"
+dependencies = [
+ "math-atoms-hash",
+ "math-atoms-secrets",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@
   ],
   "policies": [
     "thinking_required",
+    "recommended_model_qwen3_5_9b_q8_or_stronger",
     "wiki_graph_required_each_step",
     "spiderweb_route_required",
     "scratchpad_required",
@@ -41,6 +42,7 @@
     "Execute the fixed build spine in order: Intake, Blueprint, Crate Build, Crate Couple, Build Test, Launch Proof. Release only the current step skill.",
     "Use fine-grained packets and a bounded scratchpad so a small thinking model can complete one contract at a time without reconstructing the project from memory.",
     "Thinking must remain enabled for planning, implementation, review, correction, and final verification. Disabled thinking fails closed.",
+    "For local execution, recommend Qwen3.5 9B Q8 or a demonstrably stronger thinking model. Lower quantizations do not qualify release evidence.",
     "Warnings, placeholders, stubs, unverified wiring, smoke-only tests, proof narratives, and screenshots without live interaction are gate failures.",
     "After a bounded failure, apply the smallest correction, rerun the real gate, and repeat until it passes or the six-correction budget is exhausted.",
     "Do not report completion until the app is launched, remains alive at a usable screen, and a real input traverses the runtime bus and changes rendered state."

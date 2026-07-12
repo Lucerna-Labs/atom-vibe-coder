@@ -5,8 +5,8 @@ Atom Vibe Coder is a meticulous software-construction loop, not a one-shot text 
 ## Model floor
 
 - A reasoning-capable model is mandatory.
-- The preferred local minimum is Qwen3.5 9B with thinking enabled.
-- For Qwen3.5 9B GGUF deployments, `Q6_K` or better is the quality baseline when memory permits.
+- The recommended local minimum is Qwen3.5 9B Q8 with thinking enabled, or a demonstrably stronger thinking model.
+- Lower quantizations may be used for diagnostics, but they do not qualify production release evidence.
 - Smaller or lower-precision models may be evaluated, but they are not the documented production baseline.
 - A model that only returns final text without positive reasoning evidence is rejected, even if the text looks plausible.
 
@@ -47,7 +47,7 @@ Missing evidence produces `ThinkingEvidenceMissing` and blocks the packet. This 
 
 ## Preferred local Qwen profile
 
-The validated local profile uses LM Studio's OpenAI-compatible endpoint with Qwen3.5 9B Q6_K and low thinking:
+The previously validated diagnostic profile used LM Studio's OpenAI-compatible endpoint with Qwen3.5 9B Q6_K and low thinking. It proves adapter compatibility only; production qualification requires the Q8-or-stronger baseline and the full real-world gates:
 
 ```powershell
 $env:MATH_ATOMS_PROVIDER_KIND="custom"

@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn resumes_exact_chain_without_memory_lookup() {
         let root = root("resume");
-        let first = store(&root, "qwen3.5-9b@q6");
+        let first = store(&root, "qwen3.5-9b@q8");
         let written = first
             .append(
                 Some(BuildStep::Intake),
@@ -843,7 +843,7 @@ mod tests {
             .unwrap();
         drop(first);
 
-        let resumed = store(&root, "qwen3.5-9b@q6");
+        let resumed = store(&root, "qwen3.5-9b@q8");
         let loaded = resumed.load().unwrap();
         assert_eq!(loaded, vec![written]);
         assert!(!resumed.is_sealed());
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn model_scopes_are_physically_and_logically_isolated() {
         let root = root("scope");
-        let qwen = store(&root, "qwen3.5-9b@q6");
+        let qwen = store(&root, "qwen3.5-9b@q8");
         let deepseek = store(&root, "deepseek-chat");
         qwen.append(
             None,
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn projection_is_bounded_and_labels_data_as_non_memory() {
         let root = root("projection");
-        let store = store(&root, "qwen3.5-9b@q6");
+        let store = store(&root, "qwen3.5-9b@q8");
         for index in 0..12 {
             store
                 .append(
@@ -893,7 +893,7 @@ mod tests {
     #[test]
     fn persisted_content_is_redacted_before_hashing() {
         let root = root("redaction");
-        let store = store(&root, "qwen3.5-9b@q6");
+        let store = store(&root, "qwen3.5-9b@q8");
         let secret = format!("sk-{}", "a".repeat(40));
         let entry = store
             .append(
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn tampering_breaks_resume_evidence() {
         let root = root("tamper");
-        let store = store(&root, "qwen3.5-9b@q6");
+        let store = store(&root, "qwen3.5-9b@q8");
         let entry = store
             .append(
                 Some(BuildStep::BuildTest),
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn seal_is_terminal_and_recomputed_on_load() {
         let root = root("seal");
-        let store = store(&root, "qwen3.5-9b@q6");
+        let store = store(&root, "qwen3.5-9b@q8");
         store
             .append(
                 Some(BuildStep::LaunchProof),
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn concurrent_writers_receive_unique_ordered_entries() {
         let root = root("concurrent");
-        let store = Arc::new(store(&root, "qwen3.5-9b@q6"));
+        let store = Arc::new(store(&root, "qwen3.5-9b@q8"));
         let barrier = Arc::new(Barrier::new(8));
         let handles = (0..8)
             .map(|index| {

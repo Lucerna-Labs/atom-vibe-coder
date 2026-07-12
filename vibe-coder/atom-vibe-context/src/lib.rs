@@ -11,6 +11,20 @@ pub const DEFAULT_EVIDENCE_LIMIT: usize = 12;
 pub const DEFAULT_SCRATCHPAD_BUDGET: usize = 24 * 1024;
 const MAX_INTENT_BYTES: usize = 16 * 1024;
 const MAX_FAILURE_CONTEXT_BYTES: usize = 16 * 1024;
+const REQUIRED_GRAPH_EVIDENCE: [(&str, &str); 3] = [
+    (
+        "wiki:atom-vibe-build-spine",
+        "Atom Vibe Coder fixed build spine gates corrections launch proof",
+    ),
+    (
+        "wiki:model-scratchpad",
+        "model scratchpad scoped working context relationship to wiki graph RAG",
+    ),
+    (
+        "wiki:thinking-model-requirements",
+        "mandatory thinking evidence Qwen3.5 9B Q8 model requirements release gate",
+    ),
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoderContextRequest {
@@ -52,9 +66,10 @@ impl CoderContextRequest {
                 "failure context exceeds {MAX_FAILURE_CONTEXT_BYTES} bytes"
             )));
         }
-        if !(1..=64).contains(&self.evidence_limit) {
+        if !(4..=64).contains(&self.evidence_limit) {
             return Err(ContextError::InvalidRequest(
-                "evidence limit must be between 1 and 64".to_string(),
+                "evidence limit must be between 4 and 64 so mandatory graph contracts and mission evidence fit"
+                    .to_string(),
             ));
         }
         if !(512..=atom_vibe_scratchpad::MAX_PROJECTION_BYTES).contains(&self.scratchpad_budget) {
@@ -167,12 +182,18 @@ impl CoderContextAssembler {
             "wiki-graph-rag",
             &query,
         );
-        let evidence = self
+        let mut evidence = self
             .graph
             .retrieve(&query, &request.atom_stack, request.evidence_limit);
         if evidence.is_empty() {
             return Err(ContextError::MissingGraphEvidence(request.step));
         }
+        pin_required_graph_evidence(
+            &self.graph,
+            &mut evidence,
+            &request.atom_stack,
+            request.evidence_limit,
+        )?;
         let evidence_ids = evidence
             .iter()
             .map(|item| item.node_id.clone())
@@ -243,6 +264,7 @@ pub enum ContextError {
         scratchpad_build: String,
     },
     MissingGraphEvidence(BuildStep),
+    RequiredGraphEvidenceMissing(String),
     IncompleteSpiderwebRoute,
     WikiGraphUnavailable(String),
     Scratchpad(ScratchpadError),
@@ -264,6 +286,9 @@ impl fmt::Display for ContextError {
             Self::MissingGraphEvidence(step) => {
                 write!(output, "wiki graph returned no evidence for {step}")
             }
+            Self::RequiredGraphEvidenceMissing(node) => {
+                write!(output, "wiki graph is missing mandatory evidence {node}")
+            }
             Self::IncompleteSpiderwebRoute => {
                 output.write_str("coder context did not traverse all Spiderweb layers")
             }
@@ -279,7 +304,7 @@ impl std::error::Error for ContextError {}
 
 fn retrieval_query(request: &CoderContextRequest) -> String {
     let mut query = format!(
-        "{}\nBuild step: {}\nCurrent skill: {}\nRequired subsystems: wiki graph RAG, Spiderweb Bus, model scratchpad, independent gate evidence.",
+        "{}\nBuild step: {}\nCurrent skill: {}\nRequired subsystems: wiki graph RAG, Spiderweb Bus, model scratchpad, mandatory thinking evidence, Qwen3.5 9B Q8-or-stronger local baseline, independent gate evidence.",
         request.intent,
         request.step.label(),
         request.step.skill_id()
@@ -293,6 +318,48 @@ fn retrieval_query(request: &CoderContextRequest) -> String {
         query.push_str(&request.failure_context);
     }
     query
+}
+
+fn pin_required_graph_evidence(
+    graph: &WikiGraph,
+    evidence: &mut Vec<Evidence>,
+    atom_stack: &[String],
+    limit: usize,
+) -> Result<(), ContextError> {
+    for (prefix, query) in REQUIRED_GRAPH_EVIDENCE {
+        if evidence.iter().any(|item| item.node_id.starts_with(prefix)) {
+            continue;
+        }
+        let required = graph
+            .retrieve(query, atom_stack, 16)
+            .into_iter()
+            .find(|item| item.node_id.starts_with(prefix))
+            .ok_or_else(|| ContextError::RequiredGraphEvidenceMissing(prefix.to_string()))?;
+        evidence.push(required);
+    }
+    evidence.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+    evidence.dedup_by(|left, right| left.node_id == right.node_id);
+    while evidence.len() > limit {
+        let removable = evidence.iter().rposition(|item| {
+            item.node_id != "mission:production-app-build"
+                && !REQUIRED_GRAPH_EVIDENCE
+                    .iter()
+                    .any(|(prefix, _)| item.node_id.starts_with(prefix))
+        });
+        if let Some(index) = removable {
+            evidence.remove(index);
+        } else {
+            return Err(ContextError::InvalidRequest(
+                "evidence limit cannot contain required graph contracts".to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn discover_project_wiki() -> Option<PathBuf> {
@@ -414,7 +481,7 @@ mod tests {
     fn scratchpad(root: &Path, build_id: &str) -> ScratchpadStore {
         ScratchpadStore::open(
             root,
-            ScratchpadScope::new(build_id, "qwen3.5-9b@q6").unwrap(),
+            ScratchpadScope::new(build_id, "qwen3.5-9b@q8").unwrap(),
         )
         .unwrap()
     }
@@ -432,7 +499,7 @@ mod tests {
                 &["packet:architecture".to_string()],
             )
             .unwrap();
-        let mut assembler = CoderContextAssembler::new(WikiGraph::seeded());
+        let mut assembler = CoderContextAssembler::from_default_wiki().unwrap();
         let mut request = CoderContextRequest::new(
             build_id,
             "Build a native inventory dashboard",
@@ -471,7 +538,7 @@ mod tests {
         let root = root("steps");
         let build_id = "work-abcdefabcdefabcdefabcdef";
         let scratchpad = scratchpad(&root, build_id);
-        let mut assembler = CoderContextAssembler::new(WikiGraph::seeded());
+        let mut assembler = CoderContextAssembler::from_default_wiki().unwrap();
         for step in BuildStep::ALL {
             let context = assembler
                 .prepare(
@@ -502,7 +569,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let mut assembler = CoderContextAssembler::new(WikiGraph::seeded());
+        let mut assembler = CoderContextAssembler::from_default_wiki().unwrap();
         let context = assembler
             .prepare(
                 &CoderContextRequest::new(build_id, attack, BuildStep::Intake),
@@ -562,6 +629,18 @@ mod tests {
             .evidence
             .iter()
             .any(|item| item.node_id.starts_with("wiki:model-scratchpad")));
+        assert!(
+            context
+                .evidence
+                .iter()
+                .any(|item| item.node_id.starts_with("wiki:thinking-model-requirements")),
+            "retrieved ids: {:?}",
+            context
+                .evidence
+                .iter()
+                .map(|item| item.node_id.as_str())
+                .collect::<Vec<_>>()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -16,3 +16,33 @@ The runtime has three mandatory foundations:
 The fixed build spine is Intake, Blueprint, Crate Build, Crate Couple, Build
 Test, and Launch Proof. A model completion cannot advance this state machine;
 only independently evaluated gate evidence can.
+
+## Model Baseline
+
+Thinking is mandatory for every model turn. A configured thinking flag is not
+enough: the response must include provider-side reasoning tokens, a reasoning
+field, or a typed thinking block. Missing evidence fails closed.
+
+The recommended minimum local model is **Qwen3.5 9B Q8 with thinking enabled**,
+or a demonstrably stronger thinking model. Lower quantizations are useful for
+diagnostics but do not qualify a release. Cloud and custom models are accepted
+by capability and real gate results, not by brand name.
+
+## Workspace Crates
+
+| Crate | Ownership |
+| --- | --- |
+| `atom-vibe-build-protocol` | Fixed steps, gate outcomes, artifacts, and planner events |
+| `atom-vibe-build-gates` | Deterministic evaluation of on-disk evidence |
+| `atom-vibe-build-planner` | Persistent ledger, retries, restart recovery, and planner bus routes |
+| `atom-vibe-context` | Wiki Graph RAG plus scratchpad context over Spiderweb L0-L3 |
+| `atom-vibe-mode` | Mode policy and progressive step-skill disclosure |
+| `atom-vibe-provider` | Thinking-required multi-provider turns using credential-safe transport |
+| `atom-vibe-scratchpad` | Build-and-model scoped append-only working context |
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Provider and model requirements](docs/PROVIDER_MODELS.md)
+- [Operations and recovery](docs/OPERATIONS.md)
+- [Verification contract](docs/VERIFICATION.md)

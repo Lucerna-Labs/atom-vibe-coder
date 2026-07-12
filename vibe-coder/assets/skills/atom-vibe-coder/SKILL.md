@@ -34,15 +34,17 @@ Wiki Graph evidence. It never replaces graph retrieval.
 1. The planner stays between model output and state mutation.
 2. Only the current step skill is active in full; all other skills are summaries.
 3. Thinking is always enabled. A response without reasoning evidence fails.
-4. No placeholder, stub, omitted section, fake output, or deferred completion.
-5. Warnings are errors. Check, test, and Clippy run with warnings denied.
-6. Smoke tests do not count as functional testing.
-7. Proof claims do not count as production confirmation.
-8. A screenshot does not count as launch proof without a live bus round-trip and
+4. The recommended local minimum is Qwen3.5 9B Q8 or a demonstrably stronger
+   thinking model. Lower quantizations cannot qualify release evidence.
+5. No placeholder, stub, omitted section, fake output, or deferred completion.
+6. Warnings are errors. Check, test, and Clippy run with warnings denied.
+7. Smoke tests do not count as functional testing.
+8. Proof claims do not count as production confirmation.
+9. A screenshot does not count as launch proof without a live bus round-trip and
    visible rendered state change.
-9. Provider, graph, scratchpad, bus, gate, correction, and launch activity is
+10. Provider, graph, scratchpad, bus, gate, correction, and launch activity is
    logged with recomputable artifacts.
-10. A bounded correction is always reverified by the same real gate.
+11. A bounded correction is always reverified by the same real gate.
 
 ## Build Spine
 
