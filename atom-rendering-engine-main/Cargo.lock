@@ -75,6 +75,8 @@ name = "atom-vibe-native-bridge"
 version = "0.1.0"
 dependencies = [
  "atom-vibe-runtime",
+ "atom-vibe-scratchpad",
+ "avc-core",
  "math-atoms-core",
 ]
 
@@ -121,6 +123,9 @@ dependencies = [
 [[package]]
 name = "avc-core"
 version = "0.1.0"
+dependencies = [
+ "math-atoms-provider-transport",
+]
 
 [[package]]
 name = "bit-set"
@@ -637,8 +642,17 @@ dependencies = [
  "atom-vibe-native-bridge",
  "avc-core",
  "math-atoms-core",
+ "math-atoms-native-ledger",
  "pmre-kit",
  "pmre-orchestrator",
+]
+
+[[package]]
+name = "math-atoms-native-ledger"
+version = "0.1.0"
+dependencies = [
+ "avc-core",
+ "math-atoms-core",
 ]
 
 [[package]]

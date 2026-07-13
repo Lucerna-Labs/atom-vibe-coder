@@ -11,5 +11,8 @@ description = "Native PMRE shell for Atom Vibe Coder."
 avc-core = { path = "../avc-core" }
 atom-vibe-native-bridge = { path = "../../vibe-coder/atom-vibe-native-bridge" }
 math-atoms-core = { path = "../math-atoms-core" }
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate. Pure record-builders
+# extracted from this crate's model.rs to stay under the Painted-Fence line cap.
+math-atoms-native-ledger = { path = "../math-atoms-native-ledger" }
 pmre-kit = { path = "../pmre-kit" }
 pmre-orchestrator = { path = "../pmre-orchestrator" }

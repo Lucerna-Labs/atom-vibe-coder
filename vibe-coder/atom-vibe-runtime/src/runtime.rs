@@ -89,6 +89,25 @@ impl AtomVibeRuntime {
         Ok(())
     }
 
+    /// Append a note to the durable scratchpad for `build_id`. Public entry point so
+    /// out-of-runtime callers (e.g. the native fast-build path) can persist observations,
+    /// decisions/plans, packet outputs, gate failures, corrections, or checkpoints as
+    /// memory that projects into future prompts. `source_ids` tag provenance (each <=512
+    /// bytes, up to 64). Content is redacted for secrets before persistence.
+    pub fn append_scratchpad_note(
+        &self,
+        build_id: &str,
+        kind: ScratchpadEntryKind,
+        content: &str,
+        source_ids: &[String],
+    ) -> Result<(), RuntimeError> {
+        let store = self.scratchpad(build_id)?;
+        store
+            .append(None, kind, content, source_ids)
+            .map_err(|error| RuntimeError::Scratchpad(error.to_string()))?;
+        Ok(())
+    }
+
     pub fn start_build(
         &mut self,
         project_id: &str,

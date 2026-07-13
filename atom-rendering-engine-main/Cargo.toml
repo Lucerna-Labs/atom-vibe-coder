@@ -17,6 +17,7 @@ members = [
     "math-atoms-learning",
     "math-atoms-lock",
     "math-atoms-native",
+    "math-atoms-native-ledger",
     "math-atoms-proof",
     "math-atoms-provider-transport",
     "math-atoms-repair",

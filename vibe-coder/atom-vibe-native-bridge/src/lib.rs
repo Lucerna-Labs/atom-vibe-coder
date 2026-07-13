@@ -1,6 +1,7 @@
 //! Native PMRE bridge for the durable Atom Vibe build runtime.
 
 use atom_vibe_runtime::{AtomVibeRuntime, ExecutedTurn, PreparedTurn, RuntimeError};
+pub use atom_vibe_scratchpad::ScratchpadEntryKind;
 use math_atoms_core::ProviderConfig;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -170,6 +171,89 @@ impl NativeVibe {
         self.state = VibeState::Blocked;
         self.detail = "Vibe provider worker disconnected; apply a provider to reopen the runtime."
             .to_string();
+    }
+
+    /// The current scratchpad PROJECTION for the active build — the text `prepare_turn`
+    /// packed for the model (operator request + prior stage notes + prior corrections,
+    /// budget-clamped). Callers inject this into the generation prompt so persistent
+    /// memory is actually READ, not merely stored.
+    pub fn scratchpad_projection(&self) -> Option<&str> {
+        self.prepared
+            .as_ref()
+            .map(|prepared| prepared.context.scratchpad.text.as_str())
+    }
+
+    /// Append a persistent-memory note to the active build's scratchpad. The next
+    /// `prepare_turn` will project it back into the prompt, closing the read/write loop.
+    /// Returns Ok(false) when there is no active build (fail-open, not an error).
+    pub fn append_scratchpad_note(
+        &self,
+        kind: ScratchpadEntryKind,
+        content: &str,
+        source_ids: &[String],
+    ) -> Result<bool, String> {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return Ok(false);
+        };
+        let Some(build_id) = self.active_build_id.as_deref() else {
+            return Ok(false);
+        };
+        runtime
+            .append_scratchpad_note(build_id, kind, content, source_ids)
+            .map(|_| true)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Persist a planner-first blueprint as a `Decision` scratchpad entry BEFORE code
+    /// generation. Called by Run to record the intent + recipe + atom stack as the plan.
+    pub fn append_planner_blueprint(&self, blueprint: &str) -> Result<bool, String> {
+        self.append_scratchpad_note(
+            ScratchpadEntryKind::Decision,
+            blueprint,
+            &["native:planner-first-blueprint".to_string()],
+        )
+    }
+
+    /// Persist a fast-build outcome as scratchpad memory: `GateFailure` when rustc-verified
+    /// but failing, `PacketOutput` otherwise. The next stage or rerun projects it back.
+    pub fn append_fast_build_outcome(&self, build: &avc_core::FastBuild) -> Result<bool, String> {
+        let name = &build.artifact.name;
+        let (kind, note) = if build.verified && !build.compiled {
+            (
+                ScratchpadEntryKind::GateFailure,
+                format!(
+                    "Fast build {name} FAILED rustc after {} repair(s). Errors:\n{}",
+                    build.repair_attempts, build.compile_errors
+                ),
+            )
+        } else {
+            let verdict = if build.verified && build.compiled {
+                if build.repair_attempts == 0 {
+                    "compiles".to_string()
+                } else {
+                    format!("compiles after {} repair(s)", build.repair_attempts)
+                }
+            } else {
+                "unverified".to_string()
+            };
+            (
+                ScratchpadEntryKind::PacketOutput,
+                format!(
+                    "Fast build {name}: {verdict}, {} bytes -> {}",
+                    build.bytes, build.artifact.source_path
+                ),
+            )
+        };
+        self.append_scratchpad_note(kind, &note, &["native:fast-build-outcome".to_string()])
+    }
+
+    /// Record that a fast build was blocked before it even reached the model.
+    pub fn append_fast_build_blocked(&self, reason: &str) -> Result<bool, String> {
+        self.append_scratchpad_note(
+            ScratchpadEntryKind::GateFailure,
+            &format!("Fast build blocked before generation: {reason}"),
+            &["native:fast-build-blocked".to_string()],
+        )
     }
 
     pub fn set_provider(&mut self, provider: ProviderConfig) -> Result<(), String> {
@@ -344,6 +428,86 @@ mod tests {
         assert_eq!(vibe.title_state(), "vibe:idle");
         vibe.start_build("Recover the vibe runtime").unwrap();
         assert_eq!(vibe.title_state(), "vibe:prepared");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn native_vibe_scratchpad_write_loop_persists_observation_blueprint_and_outcome() {
+        let root = std::env::temp_dir().join(format!(
+            "math-atoms-native-vibe-scratchpad-{}-{}",
+            std::process::id(),
+            stamp()
+        ));
+        let mut vibe = NativeVibe::open(
+            root.clone(),
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "configured")]),
+        );
+        // start_build writes an Observation entry (operator request).
+        vibe.start_build("Build a stack calculator with error handling")
+            .unwrap();
+        let build_id = vibe.active_build_id().to_string();
+        assert!(build_id.starts_with("build-"));
+
+        // append_planner_blueprint writes a Decision entry.
+        assert_eq!(
+            vibe.append_planner_blueprint("STRUCTURED BUILD BLUEPRINT: test plan")
+                .unwrap(),
+            true
+        );
+        // append_fast_build_outcome with a compiled build writes a PacketOutput.
+        let compiled = avc_core::FastBuild {
+            artifact: avc_core::BuildArtifact {
+                name: "vibe-build-ok".to_string(),
+                status: "compiles".to_string(),
+                output: "MATH_ATOMS_APP_OK".to_string(),
+                source_path: "vibe-build-ok.rs".to_string(),
+                exe_path: String::new(),
+                artifact_path: "vibe-build-ok.rs".to_string(),
+            },
+            bytes: 64,
+            preview: "fn main() {}".to_string(),
+            verified: true,
+            compiled: true,
+            repair_attempts: 0,
+            compile_errors: String::new(),
+        };
+        assert_eq!(vibe.append_fast_build_outcome(&compiled).unwrap(), true);
+        // A rustc-failing build writes a GateFailure.
+        let failed = avc_core::FastBuild {
+            compiled: false,
+            compile_errors: "error[E0277]: `Foo` doesn't implement `Debug`".to_string(),
+            ..compiled.clone()
+        };
+        assert_eq!(vibe.append_fast_build_outcome(&failed).unwrap(), true);
+
+        // Walk on-disk entries: root/scratchpads/<build_id>/<hash>/entries/*.json
+        let scope_dir = root.join("scratchpads").join(&build_id);
+        let hash_dir = std::fs::read_dir(&scope_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entries_dir = hash_dir.join("entries");
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&entries_dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+            .collect();
+        files.sort();
+        let bodies: Vec<String> = files
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(bodies.len(), 4, "one observation + blueprint + 2 outcomes");
+        assert!(bodies[0].contains("\"kind\":\"observation\""));
+        assert!(bodies[0].contains("Build a stack calculator"));
+        assert!(bodies[1].contains("\"kind\":\"decision\""));
+        assert!(bodies[1].contains("STRUCTURED BUILD BLUEPRINT"));
+        assert!(bodies[2].contains("\"kind\":\"packet_output\""));
+        assert!(bodies[2].contains("vibe-build-ok"));
+        assert!(bodies[3].contains("\"kind\":\"gate_failure\""));
+        assert!(bodies[3].contains("E0277"));
         std::fs::remove_dir_all(root).ok();
     }
 

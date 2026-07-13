@@ -1,9 +1,9 @@
 use atom_vibe_native_bridge::{default_runtime_root, NativeVibe, VibeWorkerResult};
 use math_atoms_core::{
     default_provider_output_dir, effective_records, persist_provider_output, LearningOutcome,
-    LearningRecord, LearningRecordInput, LearningStore, LearningSummary, MathAtomsRuntime,
-    PreparedProviderCall, ProofRecord, ProofStore, ProviderConfig, ProviderConfigInput,
-    ProviderError, ProviderExecutionOutput, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
+    LearningRecord, LearningStore, LearningSummary, MathAtomsRuntime, PreparedProviderCall,
+    ProofRecord, ProofStore, ProviderConfig, ProviderConfigInput, ProviderError,
+    ProviderExecutionOutput, RuntimeStatus, WikiGraph, DEFAULT_GRAPH_MEMORY_LIMIT,
 };
 use pmre_orchestrator::{
     UiState, DESIGN_ANIMATION_SLIDER, DESIGN_GAMMA_SLIDER, DESIGN_GLASS_SLIDER, DESIGN_HUE_SLIDER,
@@ -415,13 +415,43 @@ impl NativeApp {
             return None;
         }
         let intent = current_intent(ui);
+        // Structured blueprint for THIS run (C1: pass directly, don't wait for
+        // scratchpad round-trip). Also persisted as a Decision so a future Run's
+        // prepare_turn projects it back — per-run scratchpad memory, distinct from the
+        // cross-run wiki-graph learning ledger (H5).
+        let blueprint = {
+            let state = self.runtime.state();
+            avc_core::format_build_blueprint(&intent, &state.selected_recipe, &state.selected_atoms)
+        };
+        if let Some(warn) = math_atoms_native_ledger::warn_if_memory_lost(
+            self.vibe.append_planner_blueprint(&blueprint),
+            "blueprint",
+        ) {
+            self.last_provider_output.push_str(&warn);
+        }
         let state = self.runtime.state();
-        let plan = format!(
-            "Recipe: {} | Atom stack: {} | Dependency-free, std-only.",
-            state.selected_recipe,
-            state.selected_atoms.join(" -> ")
+        let scratchpad_memory = self.vibe.scratchpad_projection().unwrap_or("").to_string();
+        let evidence: Vec<(String, String)> = state
+            .evidence
+            .iter()
+            .take(6)
+            .map(|item| (item.title.clone(), item.excerpt.clone()))
+            .collect();
+        let budget = std::env::var("VIBE_CONTEXT_BUDGET_CHARS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(16000);
+        let plan = avc_core::build_fast_plan(
+            &state.selected_recipe,
+            &state.selected_atoms,
+            &evidence,
+            &intent,
+            &blueprint,
+            &scratchpad_memory,
+            budget,
         );
-        let config = avc_core::ProviderConfig::from_process_env();
+        // C2: use the UI-applied provider (via runtime), not process env.
+        let config = math_atoms_native_ledger::provider_config_to_avc(self.runtime.provider());
         if let Err(error) = config.prepare_build_call(&intent, &plan) {
             self.last_provider_output = format!("Provider blocked: {error}");
             return None;
@@ -453,16 +483,60 @@ impl NativeApp {
                 let name = build.artifact.name.clone();
                 let bytes = build.bytes;
                 let path = build.artifact.source_path.clone();
-                self.last_provider_output = format!(
-                    "Built {name} ({bytes} bytes) -> {path}\n\n{}",
+                // NAT-review fix: `compile_check` runs `rustc --emit=metadata` (typeck +
+                // borrowck only, no codegen/monomorphization) -- "typechecks" is what was
+                // actually verified; "compiles" overstated it.
+                let verdict = if !build.verified {
+                    "unverified (no rustc)".to_string()
+                } else if build.compiled {
+                    if build.repair_attempts == 0 {
+                        "typechecks".to_string()
+                    } else {
+                        format!("typechecks after {} repair(s)", build.repair_attempts)
+                    }
+                } else {
+                    format!("still failing after {} repair(s)", build.repair_attempts)
+                };
+                let mut output = format!(
+                    "Built {name} ({bytes} bytes, {verdict}) -> {path}\n\n{}",
                     build.preview
                 );
-                self.last_run_summary = format!("Fast build complete: {name} ({bytes} bytes).");
+                if build.verified && !build.compiled && !build.compile_errors.is_empty() {
+                    output.push_str("\n\n--- remaining rustc errors ---\n");
+                    output.push_str(&build.compile_errors);
+                }
+                self.last_provider_output = output;
+                self.last_run_summary = format!("Fast build {verdict}: {name} ({bytes} bytes).");
+                // H6: surface silent scratchpad failures. Per-run memory only; cross-run
+                // memory is the wiki-graph learning ledger below (H5).
+                if let Some(warn) = math_atoms_native_ledger::warn_if_memory_lost(
+                    self.vibe.append_fast_build_outcome(&build),
+                    "outcome",
+                ) {
+                    self.last_provider_output.push_str(&warn);
+                }
+                let fallback_model = self.runtime.provider().model.clone();
+                math_atoms_native_ledger::record_fast_build_learning(
+                    &mut self.runtime,
+                    &self.last_intent,
+                    &fallback_model,
+                    self.learning_store.as_ref(),
+                    &mut self.learning_records,
+                    &mut self.learning_summary,
+                    &mut self.learning_attempts,
+                    &build,
+                );
                 self.side_artifacts.insert(0, build.artifact);
             }
             Err(reason) => {
                 self.last_provider_output = format!("Provider blocked: {reason}");
                 self.last_run_summary = format!("Fast build blocked: {reason}");
+                if let Some(warn) = math_atoms_native_ledger::warn_if_memory_lost(
+                    self.vibe.append_fast_build_blocked(&reason),
+                    "block",
+                ) {
+                    self.last_provider_output.push_str(&warn);
+                }
             }
         }
     }
@@ -692,131 +766,20 @@ impl NativeApp {
     }
 
     fn current_learning_record(&self) -> Option<LearningRecord> {
-        let state = self.runtime.state();
-        let outcome = match state.status {
-            RuntimeStatus::Proven => LearningOutcome::Succeeded,
-            RuntimeStatus::Blocked => LearningOutcome::Failed,
-            _ => return None,
-        };
-        let provider_gate = state.last_provider_call.is_some()
-            || state
-                .blockers
-                .iter()
-                .any(|blocker| blocker.to_ascii_lowercase().contains("provider"));
-        let gate = if provider_gate {
-            "native-provider-execution"
-        } else {
-            "native-proof-route"
-        };
-        let attempt = self
-            .learning_attempts
-            .get(&(self.last_intent.clone(), gate.to_string()))
-            .copied()
-            .unwrap_or(0)
-            + 1;
-        let correction = if outcome == LearningOutcome::Succeeded {
-            self.learning_records
-                .iter()
-                .rev()
-                .find(|record| {
-                    record.intent == self.last_intent
-                        && record.gate == gate
-                        && record.outcome == LearningOutcome::Failed
-                })
-                .map(|record| record.failure.clone())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        let failure = if outcome == LearningOutcome::Failed {
-            let blockers = state.blockers.join("; ");
-            if blockers.is_empty() {
-                self.last_provider_output.clone()
-            } else {
-                blockers
-            }
-        } else {
-            String::new()
-        };
-        Some(LearningRecord::new(LearningRecordInput {
-            source: "native-app".to_string(),
-            intent: self.last_intent.clone(),
-            recipe_id: state.selected_recipe.clone(),
-            atom_stack: state.selected_atoms.clone(),
-            gate: gate.to_string(),
-            attempt,
-            outcome,
-            failure,
-            correction,
-            artifact_path: state.last_provider_output_artifact.clone(),
-            artifact_hash: state.last_provider_output_hash.clone(),
-            provider_model: state
-                .last_provider_call
-                .as_ref()
-                .map(|call| call.model.clone())
-                .unwrap_or_default(),
-            work_plan_id: state.last_work_plan_id.clone(),
-            work_plan_manifest: state.last_work_plan_manifest.clone(),
-            work_packet_count: state.last_work_packet_count,
-            candidate_verification: state.last_candidate_verification.clone(),
-            harness_attestation_path: String::new(),
-            harness_attestation_hash: String::new(),
-            route_len: state.last_route.len(),
-        }))
+        math_atoms_native_ledger::learning_record_from_state(
+            self.runtime.state(),
+            &self.last_intent,
+            &self.learning_attempts,
+            &self.learning_records,
+            &self.last_provider_output,
+        )
     }
 
     fn current_proof_record(&self) -> ProofRecord {
-        let state = self.runtime.state();
-        let provider = state.last_provider_call.as_ref();
-        let provider_output_hash = if self.provider_title_state() == "provider:ran" {
-            state.last_provider_output_hash.clone()
-        } else {
-            String::new()
-        };
-        ProofRecord {
-            recipe_id: state.selected_recipe.clone(),
-            status: state.status.as_str().to_string(),
-            atoms: state.selected_atoms.clone(),
-            evidence_count: state.evidence.len(),
-            blockers: state.blockers.clone(),
-            provider_state: self.provider_title_state().to_string(),
-            provider_model: provider.map(|call| call.model.clone()).unwrap_or_default(),
-            provider_endpoint: provider
-                .map(|call| call.endpoint.clone())
-                .unwrap_or_default(),
-            provider_output_artifact: if self.provider_title_state() == "provider:ran" {
-                state.last_provider_output_artifact.clone()
-            } else {
-                String::new()
-            },
-            provider_output_hash,
-            provider_output_len: if self.provider_title_state() == "provider:ran" {
-                state.last_provider_output_len
-            } else {
-                0
-            },
-            work_plan_id: if self.provider_title_state() == "provider:ran" {
-                state.last_work_plan_id.clone()
-            } else {
-                String::new()
-            },
-            work_plan_manifest: if self.provider_title_state() == "provider:ran" {
-                state.last_work_plan_manifest.clone()
-            } else {
-                String::new()
-            },
-            work_packet_count: if self.provider_title_state() == "provider:ran" {
-                state.last_work_packet_count
-            } else {
-                0
-            },
-            candidate_verification: if self.provider_title_state() == "provider:ran" {
-                state.last_candidate_verification.clone()
-            } else {
-                None
-            },
-            route_len: state.last_route.len(),
-        }
+        math_atoms_native_ledger::proof_record_from_state(
+            self.runtime.state(),
+            self.provider_title_state(),
+        )
     }
 
     fn provider_output_dir(&self) -> PathBuf {
@@ -1593,6 +1556,72 @@ mod tests {
         std::fs::remove_file(learning_path).ok();
         std::fs::remove_dir_all(output_dir).ok();
         std::fs::remove_dir_all(work_root).ok();
+    }
+
+    #[test]
+    fn fast_build_learns_from_failures_but_never_fabricates_successes() {
+        let path = std::env::temp_dir().join(format!(
+            "math-atoms-fastbuild-learn-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ProofStore::new(&path);
+        let learning_path = LearningStore::beside(&path).path().to_path_buf();
+        let mut app = NativeApp::new_with_store(
+            ProviderConfig::from_pairs(&[("OPENAI_API_KEY", "set")]),
+            Some(store),
+        );
+        let mut ui = UiState::new(1200, 800);
+        app.seed_input(&mut ui);
+        // Select the recipe + retrieve Wiki Graph evidence into the state the record reads.
+        app.run_current_intent(&ui);
+
+        let make = |compiled: bool, errors: &str| avc_core::FastBuild {
+            artifact: avc_core::BuildArtifact {
+                name: "vibe-build-test".to_string(),
+                status: if compiled { "typechecks" } else { "errors" }.to_string(),
+                output: "MATH_ATOMS_APP".to_string(),
+                source_path: "vibe-build-test.rs".to_string(),
+                exe_path: String::new(),
+                artifact_path: "vibe-build-test.rs".to_string(),
+            },
+            bytes: 128,
+            preview: "fn main() {}".to_string(),
+            verified: true,
+            compiled,
+            repair_attempts: 2,
+            compile_errors: errors.to_string(),
+        };
+
+        // A compile failure is recorded as a reusable "correct this" lesson.
+        let before_failed = app.learning_summary.failed;
+        app.complete_fast_build(Ok(make(
+            false,
+            "error[E0277]: `AtomMeasure` doesn't implement `Debug`",
+        )));
+        assert_eq!(app.learning_summary.failed, before_failed + 1);
+
+        // A compiling build must NOT fabricate a provider-grade success record.
+        let before_total = app.learning_summary.total;
+        app.complete_fast_build(Ok(make(true, "")));
+        assert_eq!(app.learning_summary.total, before_total);
+
+        let learned = LearningStore::new(&learning_path)
+            .read_records()
+            .unwrap_or_default();
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&learning_path).ok();
+        assert!(
+            learned
+                .iter()
+                .any(|record| record.gate == "native-fast-build"
+                    && record.outcome == LearningOutcome::Failed
+                    && record.failure.contains("E0277")),
+            "the persisted lesson should carry the fast-build gate and the rustc error"
+        );
     }
 
     #[test]

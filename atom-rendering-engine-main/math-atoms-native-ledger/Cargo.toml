@@ -1,0 +1,17 @@
+# Pure record-builders for the native Atom Vibe Coder shell. Extracted from
+# math-atoms-native/src/model.rs to keep that crate under its Painted-Fence line cap.
+# OPERATOR_APPROVED_CARGO_DEP: single local, zero-external-dep workspace crate.
+[package]
+name = "math-atoms-native-ledger"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Build durable LearningRecord/ProofRecord values from native RuntimeState."
+
+[dependencies]
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate that re-exports the record
+# and runtime-state types this crate builds from.
+math-atoms-core = { path = "../math-atoms-core" }
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate that owns FastBuild and the
+# avc-side ProviderConfig this crate converts to.
+avc-core = { path = "../avc-core" }

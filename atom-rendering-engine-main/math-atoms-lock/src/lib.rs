@@ -139,7 +139,15 @@ fn acquire_platform_guard(path: &Path, timeout: Duration) -> io::Result<Platform
     for unit in path.as_os_str().encode_wide() {
         identity.extend_from_slice(&unit.to_le_bytes());
     }
-    let name = format!("Global\\MathAtomsLease-{}", sha256_hex(&identity));
+    // NAT-review fix: `Global\` requires `SeCreateGlobalPrivilege`, granted by default
+    // only to Administrators/LOCAL SERVICE/NETWORK SERVICE. A standard non-elevated
+    // interactive user (including a UAC-filtered admin token) gets ACCESS_DENIED from
+    // CreateMutexW here, breaking every lease-dependent subsystem (build ledger,
+    // session/turn stores, scratchpad, proof store, candidate verification, provider
+    // transport temp files) on first use. `Local\` is session-scoped and needs no
+    // privilege; cross-session locking was never required since lease keys are
+    // per-user path hashes, not shared across sessions/users.
+    let name = format!("Local\\MathAtomsLease-{}", sha256_hex(&identity));
     let wide = name
         .encode_utf16()
         .chain(std::iter::once(0))

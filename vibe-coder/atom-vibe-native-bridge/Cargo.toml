@@ -7,4 +7,10 @@ description = "Native PMRE UI bridge for durable Atom Vibe sessions and asynchro
 
 [dependencies]
 atom-vibe-runtime = { path = "../atom-vibe-runtime" }
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate. The scratchpad is the
+# persistent memory the native fast-build path reads and writes through the bridge.
+atom-vibe-scratchpad = { path = "../atom-vibe-scratchpad" }
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate. The bridge formats the
+# fast-build outcome into a scratchpad note so the native UI crate stays under its cap.
+avc-core = { path = "../../atom-rendering-engine-main/avc-core" }
 math-atoms-core = { path = "../../atom-rendering-engine-main/math-atoms-core" }

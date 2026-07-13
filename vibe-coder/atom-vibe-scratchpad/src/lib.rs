@@ -457,6 +457,7 @@ impl ScratchpadStore {
         let build_id = string_field(&root, "build_id")?;
         let model_scope_hash = string_field(&root, "model_scope_hash")?;
         let last_hash = string_field(&root, "last_entry_hash")?;
+        let sealed_at_unix_ms = number_field(&root, "sealed_at_unix_ms")?;
         let expected_last = entries
             .last()
             .map(|entry| entry.entry_hash.as_str())
@@ -469,6 +470,36 @@ impl ScratchpadStore {
             return Err(ScratchpadError::Evidence(
                 "scratchpad seal does not match the entry chain".to_string(),
             ));
+        }
+        // NAT-review fix: the chain checks above alone accept a truncate-and-reseal
+        // attack -- an on-disk actor deletes the tail entries and rewrites seal.json to
+        // match the now-shorter (but internally self-consistent) chain. Deleting files
+        // does not touch the mtimes of the SURVIVING entries (they still predate the
+        // real seal time either way), so checking entry mtimes against the claimed
+        // `sealed_at_unix_ms` catches nothing. What a forger CAN'T easily fake without an
+        // extra deliberate step is the seal FILE's own filesystem mtime: a genuine
+        // `seal()` call writes `sealed_at_unix_ms` equal to the moment it writes the
+        // file, so the file's real mtime and its embedded claim should always be within
+        // a few seconds of each other. A forged seal.json rewritten later while claiming
+        // an earlier `sealed_at_unix_ms` (to make truncated entries look pre-seal) shows
+        // up as a mismatch here. This does not fully close the attack (an attacker who
+        // also backdates the seal file's mtime defeats it), but it catches the
+        // straightforward case for free with no new secret store; binding the seal to an
+        // out-of-band HMAC is the stronger follow-up fix.
+        const SEAL_CLOCK_TOLERANCE_MS: u64 = 60_000;
+        if let Ok(metadata) = fs::metadata(self.seal_path()) {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    let file_mtime_ms = duration.as_millis();
+                    let claimed_ms = u128::from(sealed_at_unix_ms);
+                    let tolerance_ms = u128::from(SEAL_CLOCK_TOLERANCE_MS);
+                    if file_mtime_ms > claimed_ms.saturating_add(tolerance_ms) {
+                        return Err(ScratchpadError::Evidence(
+                            "scratchpad seal file's on-disk write time does not match its recorded seal time".to_string(),
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -951,6 +982,55 @@ mod tests {
             Err(ScratchpadError::Sealed)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn truncate_and_reseal_attack_is_detected_via_seal_file_mtime_mismatch() {
+        // Reproduces the NAT-review finding: an on-disk actor deletes the tail entries
+        // and rewrites seal.json to match the now-shorter chain. The chain-hash checks
+        // alone (entry_count/build_id/model_scope_hash/last_entry_hash) all still pass
+        // because the forged seal is internally self-consistent with the surviving
+        // entries. The only thing a lazy forger doesn't get right for free is the seal
+        // FILE's own filesystem write time vs. the `sealed_at_unix_ms` it claims.
+        let root = root("reseal-attack");
+        let store = store(&root, "qwen3.5-9b@q8");
+        let first = store
+            .append(
+                Some(BuildStep::Intake),
+                ScratchpadEntryKind::Observation,
+                "first entry, survives the attack",
+                &[],
+            )
+            .unwrap();
+        let second = store
+            .append(
+                Some(BuildStep::BuildTest),
+                ScratchpadEntryKind::GateFailure,
+                "second entry, deleted by the attacker",
+                &[],
+            )
+            .unwrap();
+        store.seal().unwrap();
+        assert!(store.is_sealed());
+
+        // Attack: delete the tail entry, then forge a seal that matches the truncated
+        // chain but claims an old `sealed_at_unix_ms` (far outside the tolerance window)
+        // to make the truncation look like it happened at the original seal time.
+        fs::remove_file(store.entry_path(&second)).unwrap();
+        let forged_sealed_at = 1_000_000_u64; // arbitrarily old; well outside the tolerance
+        let forged_seal = format!(
+            "{{\"schema_version\":{SCRATCHPAD_SCHEMA_VERSION},\"build_id\":\"{}\",\"model_scope_hash\":\"{}\",\"entry_count\":1,\"last_entry_hash\":\"{}\",\"sealed_at_unix_ms\":{}}}",
+            json_escape(&store.scope().build_id),
+            json_escape(&store.scope().model_scope_hash),
+            json_escape(&first.entry_hash),
+            forged_sealed_at
+        );
+        fs::write(store.seal_path(), forged_seal).unwrap();
+
+        // The forged seal is written to disk NOW, so its real mtime is far newer than
+        // the ancient `sealed_at_unix_ms` it claims -- load() must reject it.
+        assert!(matches!(store.load(), Err(ScratchpadError::Evidence(_))));
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

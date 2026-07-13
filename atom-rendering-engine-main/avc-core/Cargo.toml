@@ -10,3 +10,8 @@ license = "MIT"
 description = "Fast single-shot Atom Vibe Coder provider path vendored from the Ordo Pro subsystem."
 
 [dependencies]
+# OPERATOR_APPROVED_CARGO_DEP: local, zero-external-dep crate. Routes this crate's HTTP
+# calls through the hardened, bounded, credential-safe transport (NAT-review fix: this
+# crate previously had its own divergent curl stack with no response-size bound, no
+# curl-field injection validation, and a TOCTTOU-unsafe temp file).
+math-atoms-provider-transport = { path = "../math-atoms-provider-transport" }

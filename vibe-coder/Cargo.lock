@@ -53,6 +53,8 @@ name = "atom-vibe-native-bridge"
 version = "0.1.0"
 dependencies = [
  "atom-vibe-runtime",
+ "atom-vibe-scratchpad",
+ "avc-core",
  "math-atoms-core",
 ]
 
@@ -95,6 +97,10 @@ dependencies = [
  "math-atoms-lock",
  "math-atoms-secrets",
 ]
+
+[[package]]
+name = "avc-core"
+version = "0.1.0"
 
 [[package]]
 name = "math-atoms-attestation"

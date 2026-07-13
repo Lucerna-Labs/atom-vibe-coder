@@ -310,12 +310,15 @@ impl MathAtomsRuntime {
             }
         };
 
-        if !evidence
-            .iter()
-            .any(|item| item.node_id == "mission:production-app-build")
-        {
-            blockers.push("Production app mission evidence was not retrieved".to_string());
-        }
+        // NAT-review fix: a runtime "was mission evidence retrieved" check here was dead
+        // code. `WikiGraph::retrieve` (via `pin_mission_evidence`) unconditionally force-
+        // injects the `mission:production-app-build` node whenever `limit > 0` and the
+        // node exists in the graph -- and it always exists, because `seeded()` (the
+        // fallback `from_default_dirs()` uses on any load failure) always includes it.
+        // So the evidence-presence blocker below could never fire; it only advertised a
+        // fail-closed guarantee that the graph already enforces architecturally. See
+        // `math_atoms_graph`'s `pin_mission_evidence` and its covering test
+        // (`retrieve` always yields the mission node) for the real guarantee.
         if !self
             .graph
             .has_relationship_path(recipe.id, "mission:production-app-build", 6)
