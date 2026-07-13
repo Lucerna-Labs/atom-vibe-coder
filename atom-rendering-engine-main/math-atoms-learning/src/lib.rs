@@ -186,6 +186,17 @@ impl LearningRecord {
 
     pub fn validate(&self) -> Result<(), String> {
         self.validate_structure()?;
+        // Fast-build successes are gated by a real `rustc --emit=metadata` typecheck
+        // (see `avc_core::compile_check`). They deliberately do NOT carry work-plan
+        // evidence, harness attestation, or candidate verification -- those are
+        // provider-audited artifacts only the slow proof route produces. Admitting
+        // fast-build successes to the wiki-graph on the typecheck gate alone lets
+        // future runs see WHICH shapes have already worked, not just which failed.
+        // Failure records on their own only teach "avoid X" -- a matching success
+        // teaches "do Y instead," which is the pair the model needs to converge.
+        if self.outcome == LearningOutcome::Succeeded && self.gate == "native-fast-build" {
+            return Ok(());
+        }
         if self.outcome == LearningOutcome::Succeeded
             && self.schema_version >= LEGACY_WORK_SCHEMA_VERSION
             && self.requires_work_evidence()
@@ -272,6 +283,14 @@ impl LearningRecord {
         if self.outcome == LearningOutcome::Failed && self.failure.trim().is_empty() {
             return Err("failed learning record requires failure evidence".to_string());
         }
+        // Structural short-circuit for fast-build successes -- see the matching
+        // block in `validate()`. All universal checks above still ran (schema,
+        // non-empty id/source/intent/gate, timestamp/attempt, non-empty atoms);
+        // the strict artifact-hash / work-plan / harness / candidate checks
+        // below are only meaningful for the provider-audited slow proof route.
+        if self.outcome == LearningOutcome::Succeeded && self.gate == "native-fast-build" {
+            return Ok(());
+        }
         let native_route_success = self.source == "native-app" && self.route_len >= 4;
         if self.outcome == LearningOutcome::Succeeded {
             if self.schema_version == LEGACY_LEARNING_SCHEMA_VERSION {
@@ -353,6 +372,13 @@ impl LearningRecord {
     pub fn is_promotable_success(&self) -> bool {
         if self.validate().is_err() || self.outcome != LearningOutcome::Succeeded {
             return false;
+        }
+        // Fast-build successes are promotable on the strength of the rustc typecheck
+        // gate alone -- see the matching short-circuit in `validate()`. Promoting
+        // them creates the record->recipe back-edge in the wiki-graph, so retrieval
+        // scores the recipe higher on future runs of the same shape.
+        if self.gate == "native-fast-build" {
+            return true;
         }
         if self.source == "native-app"
             && self.provider_model.trim().is_empty()
@@ -1000,6 +1026,65 @@ mod tests {
             std::process::id(),
             now_ms()
         ))
+    }
+
+    fn fast_build_success_record(provider_model: &str) -> LearningRecord {
+        LearningRecord::new(LearningRecordInput {
+            source: "native-app".to_string(),
+            intent: "make me a notebook app".to_string(),
+            recipe_id: "provider-model-loop".to_string(),
+            atom_stack: vec![
+                "measure".to_string(),
+                "compose".to_string(),
+                "flow".to_string(),
+                "preserve".to_string(),
+            ],
+            gate: "native-fast-build".to_string(),
+            attempt: 1,
+            outcome: LearningOutcome::Succeeded,
+            failure: String::new(),
+            correction: "error[E0596]: cannot borrow `reader` as mutable".to_string(),
+            artifact_path: "vibe-build-1.rs".to_string(),
+            // No hash on purpose -- fast-build successes are gated by the rustc
+            // typecheck, not by artifact_hash equality against a full-route bundle.
+            artifact_hash: String::new(),
+            provider_model: provider_model.to_string(),
+            work_plan_id: String::new(),
+            work_plan_manifest: String::new(),
+            work_packet_count: 0,
+            candidate_verification: None,
+            harness_attestation_path: String::new(),
+            harness_attestation_hash: String::new(),
+            route_len: 0,
+        })
+    }
+
+    #[test]
+    fn fast_build_success_record_is_admitted_without_provider_grade_evidence() {
+        // Positive: a native-fast-build success without work-plan / harness /
+        // candidate evidence must PASS validation on the strength of the gate name
+        // (the rustc typecheck is what actually gated it). This is the invariant
+        // the ledger now depends on so success records reach the wiki-graph.
+        let success = fast_build_success_record("qwen/qwen3.5-122b-a10b");
+        assert!(
+            success.validate().is_ok(),
+            "fast-build success must validate on the gate alone: {:?}",
+            success.validate()
+        );
+        assert!(
+            success.is_promotable_success(),
+            "fast-build success must be promotable so the recipe gets the back-edge"
+        );
+        // Negative control: swap the gate and the SAME record body must NOT
+        // validate -- it lacks the provider-audited evidence a slow-path success
+        // requires. This proves the short-circuit is scoped to the fast-build
+        // gate, not a global weakening of Succeeded validation.
+        let mut wrong_gate = fast_build_success_record("qwen/qwen3.5-122b-a10b");
+        wrong_gate.gate = "native-provider-execution".to_string();
+        assert!(
+            wrong_gate.validate().is_err(),
+            "slow-path success without evidence must still be rejected"
+        );
     }
 
     fn record(outcome: LearningOutcome, attempt: u32) -> LearningRecord {

@@ -93,6 +93,61 @@ pub fn learning_record_from_state(
     }))
 }
 
+/// Build the learning record for a fast-build compile SUCCESS — the reusable
+/// "this shape worked" lesson written back to the Wiki Graph so future runs of the
+/// same intent see both halves of the pair (failures teach "avoid X", successes
+/// teach "do Y instead"). `fallback_model` is used only when the run has no
+/// recorded provider call of its own. When a prior FAILED record for the same
+/// intent + gate exists, its error text is carried into the success record's
+/// `correction` field so the excerpt reads as the full "avoided-this / did-this"
+/// story instead of a bare "it worked."
+pub fn fast_build_success_record(
+    state: &RuntimeState,
+    last_intent: &str,
+    fallback_model: &str,
+    attempt: u32,
+    prior_records: &[LearningRecord],
+    artifact_path: &str,
+) -> LearningRecord {
+    let provider_model = state
+        .last_provider_call
+        .as_ref()
+        .map(|call| call.model.clone())
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| fallback_model.to_string());
+    let correction = prior_records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.intent == last_intent
+                && record.gate == "native-fast-build"
+                && record.outcome == LearningOutcome::Failed
+        })
+        .map(|record| record.failure.clone())
+        .unwrap_or_default();
+    LearningRecord::new(LearningRecordInput {
+        source: "native-app".to_string(),
+        intent: last_intent.to_string(),
+        recipe_id: state.selected_recipe.clone(),
+        atom_stack: state.selected_atoms.clone(),
+        gate: "native-fast-build".to_string(),
+        attempt,
+        outcome: LearningOutcome::Succeeded,
+        failure: String::new(),
+        correction,
+        artifact_path: artifact_path.to_string(),
+        artifact_hash: String::new(),
+        provider_model,
+        work_plan_id: String::new(),
+        work_plan_manifest: String::new(),
+        work_packet_count: 0,
+        candidate_verification: None,
+        harness_attestation_path: String::new(),
+        harness_attestation_hash: String::new(),
+        route_len: state.last_route.len(),
+    })
+}
+
 /// Build the learning record for a fast-build compile FAILURE — the reusable
 /// "correct this failure" lesson written back to the Wiki Graph. `fallback_model` is used
 /// only when the run has no recorded provider call of its own.
@@ -212,10 +267,20 @@ pub fn provider_config_to_avc(cfg: &ProviderConfig) -> avc_core::ProviderConfig 
     }
 }
 
-/// Persist a fast-build FAILURE as a durable learning lesson. Extracted from
+/// Persist a fast-build outcome as a durable learning lesson. Extracted from
 /// `NativeApp::record_fast_build_learning` so the native crate stays under its line cap.
-/// Only real rustc failures with error text are recorded; a fast-path success can't meet
-/// the provider-grade proof gates, so the ledger never fabricates one.
+///
+/// Operator directive 2026-07-13: BOTH outcomes are now recorded. Failures teach
+/// "avoid this rustc error pattern," successes teach "this shape worked" (paired
+/// with the prior failure's error text as `correction` when one exists). Recording
+/// only failures gave `graph.retrieve` a one-sided view -- the model saw what to
+/// avoid but nothing to imitate, so it burned rewrite rounds re-inventing a
+/// working structure the graph had already seen produced. The fast-build success
+/// gate is a real `rustc --emit=metadata` typecheck (see `avc_core::compile_check`);
+/// the paired short-circuits in `LearningRecord::validate` and
+/// `is_promotable_success` accept this gate specifically without demanding the
+/// provider-audited work-plan / harness-attestation / candidate-verification
+/// evidence that the slow proof route produces.
 #[allow(clippy::too_many_arguments)]
 pub fn record_fast_build_learning(
     runtime: &mut MathAtomsRuntime,
@@ -227,7 +292,7 @@ pub fn record_fast_build_learning(
     learning_attempts: &mut HashMap<(String, String), u32>,
     build: &avc_core::FastBuild,
 ) {
-    if !build.verified || build.compiled || build.compile_errors.is_empty() {
+    if !build.verified {
         return;
     }
     let gate = "native-fast-build".to_string();
@@ -236,14 +301,28 @@ pub fn record_fast_build_learning(
         .copied()
         .unwrap_or(0)
         + 1;
-    let record = fast_build_failure_record(
-        runtime.state(),
-        last_intent,
-        fallback_model,
-        attempt,
-        &build.compile_errors,
-        &build.artifact.source_path,
-    );
+    let record = if build.compiled {
+        fast_build_success_record(
+            runtime.state(),
+            last_intent,
+            fallback_model,
+            attempt,
+            learning_records,
+            &build.artifact.source_path,
+        )
+    } else {
+        if build.compile_errors.is_empty() {
+            return;
+        }
+        fast_build_failure_record(
+            runtime.state(),
+            last_intent,
+            fallback_model,
+            attempt,
+            &build.compile_errors,
+            &build.artifact.source_path,
+        )
+    };
     if let Some(store) = learning_store {
         if store.append(&record).is_err() {
             return;
@@ -251,10 +330,15 @@ pub fn record_fast_build_learning(
     }
     runtime.learn_learning_record(&record);
     learning_attempts.insert((last_intent.to_string(), gate), attempt);
+    let is_success = record.outcome == LearningOutcome::Succeeded;
     learning_records.push(record);
     *learning_records = effective_records(learning_records, DEFAULT_GRAPH_MEMORY_LIMIT);
     learning_summary.total += 1;
-    learning_summary.failed += 1;
+    if is_success {
+        learning_summary.succeeded += 1;
+    } else {
+        learning_summary.failed += 1;
+    }
 }
 
 /// Convert a bridge `append_...` result into a UI-facing warning string when the

@@ -1640,10 +1640,18 @@ mod tests {
         )));
         assert_eq!(app.learning_summary.failed, before_failed + 1);
 
-        // A compiling build must NOT fabricate a provider-grade success record.
+        // Operator directive 2026-07-13: a compiling build now records a SUCCESS
+        // learning record on the fast-build gate so the wiki-graph sees "this shape
+        // worked" alongside "this shape failed." Records only make it through if
+        // `LearningRecord::validate` accepts them; the paired short-circuit in
+        // math-atoms-learning admits native-fast-build successes without demanding
+        // the provider-audited work-plan/harness/candidate evidence the slow proof
+        // route produces, since the rustc typecheck is a real gate on its own.
         let before_total = app.learning_summary.total;
+        let before_succeeded = app.learning_summary.succeeded;
         app.complete_fast_build(Ok(make(true, "")));
-        assert_eq!(app.learning_summary.total, before_total);
+        assert_eq!(app.learning_summary.total, before_total + 1);
+        assert_eq!(app.learning_summary.succeeded, before_succeeded + 1);
 
         let learned = LearningStore::new(&learning_path)
             .read_records()
@@ -1657,6 +1665,15 @@ mod tests {
                     && record.outcome == LearningOutcome::Failed
                     && record.failure.contains("E0277")),
             "the persisted lesson should carry the fast-build gate and the rustc error"
+        );
+        // The success record carries the prior failure's error text as `correction`
+        // so the pair reads as the full "avoided-this / did-this" story.
+        assert!(
+            learned.iter().any(|record| record.gate == "native-fast-build"
+                && record.outcome == LearningOutcome::Succeeded
+                && record.failure.is_empty()
+                && record.correction.contains("E0277")),
+            "the persisted success should carry the fast-build gate and the prior failure's rustc error as its correction"
         );
     }
 
