@@ -4,7 +4,7 @@
 //           the pattern. Publish fans out to every subscriber whose declared
 //           input Socket matches by (name, TypeId); the strand does not know
 //           any other strand exists.
-// tags: bus, strand, socket, kernel, dispatcher, router, pub-sub, publish-subscribe,
+// tags: bus, strand, socket, dispatcher, router, pub-sub, publish-subscribe,
 //       typed, type-id, trait, plug-and-play, plugin, message-bus, event, runtime,
 //       in-process, sequential, tick, deterministic, dependency-free, std-only,
 //       no-async, single-threaded, enum, error-handling, exhaustive-match, display
