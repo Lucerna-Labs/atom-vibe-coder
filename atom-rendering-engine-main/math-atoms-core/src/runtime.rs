@@ -189,6 +189,20 @@ impl MathAtomsRuntime {
         self.state.last_route.clear();
     }
 
+    /// Read-only graph query for the given intent, using the same tokenization/scoring
+    /// that `run_intent_in_mode` uses internally. This lets the fast-build (Run button)
+    /// path fetch fresh evidence for its ACTUAL intent instead of reusing the stale
+    /// `state.evidence` populated by the last slow-mission run — the fast path never
+    /// touches `run_intent_in_mode`, so `state.evidence` was for a different intent
+    /// (usually the boot-time mission), and `learning:failed:*` records from the prior
+    /// same-intent Run were never surfaced to the model. See `atoms-hard-rules` rule #2
+    /// (wiki-graph+RAG mandatory as core runtime — must actually inject evidence FOR
+    /// THIS RUN'S intent, not a stale one).
+    pub fn retrieve_evidence(&self, intent: &str) -> Vec<Evidence> {
+        let atoms = classify_intent(intent);
+        self.graph.retrieve(intent, &atoms, 8)
+    }
+
     pub fn run_intent(&mut self, intent: &str) -> ProofRun {
         self.run_intent_in_mode(intent, false)
     }

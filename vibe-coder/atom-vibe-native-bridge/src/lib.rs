@@ -449,11 +449,9 @@ mod tests {
         assert!(build_id.starts_with("build-"));
 
         // append_planner_blueprint writes a Decision entry.
-        assert_eq!(
-            vibe.append_planner_blueprint("STRUCTURED BUILD BLUEPRINT: test plan")
-                .unwrap(),
-            true
-        );
+        assert!(vibe
+            .append_planner_blueprint("STRUCTURED BUILD BLUEPRINT: test plan")
+            .unwrap());
         // append_fast_build_outcome with a compiled build writes a PacketOutput.
         let compiled = avc_core::FastBuild {
             artifact: avc_core::BuildArtifact {
@@ -471,14 +469,14 @@ mod tests {
             repair_attempts: 0,
             compile_errors: String::new(),
         };
-        assert_eq!(vibe.append_fast_build_outcome(&compiled).unwrap(), true);
+        assert!(vibe.append_fast_build_outcome(&compiled).unwrap());
         // A rustc-failing build writes a GateFailure.
         let failed = avc_core::FastBuild {
             compiled: false,
             compile_errors: "error[E0277]: `Foo` doesn't implement `Debug`".to_string(),
             ..compiled.clone()
         };
-        assert_eq!(vibe.append_fast_build_outcome(&failed).unwrap(), true);
+        assert!(vibe.append_fast_build_outcome(&failed).unwrap());
 
         // Walk on-disk entries: root/scratchpads/<build_id>/<hash>/entries/*.json
         let scope_dir = root.join("scratchpads").join(&build_id);

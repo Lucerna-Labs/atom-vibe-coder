@@ -101,6 +101,9 @@ dependencies = [
 [[package]]
 name = "avc-core"
 version = "0.1.0"
+dependencies = [
+ "math-atoms-provider-transport",
+]
 
 [[package]]
 name = "math-atoms-attestation"

@@ -415,6 +415,16 @@ impl NativeApp {
             return None;
         }
         let intent = current_intent(ui);
+        // Bug #1 fix (wrong-intent ledger writes): the fast-build path never touched
+        // `self.last_intent`, so `complete_fast_build` was calling
+        // `record_fast_build_learning(&self.last_intent, ...)` with whatever intent the
+        // SLOW mission path last processed — usually the boot-time mission intent.
+        // Every notebook/orchestration/kernel failure was therefore written to the
+        // learning ledger + wiki-graph tagged with the wrong intent tokens, and the
+        // NEXT same-intent Run's `graph.retrieve` couldn't find its own prior failure.
+        // Mirror the slow path (`run_current_intent`), which sets `last_intent` before
+        // the run begins.
+        self.last_intent = intent.clone();
         // Structured blueprint for THIS run (C1: pass directly, don't wait for
         // scratchpad round-trip). Also persisted as a Decision so a future Run's
         // prepare_turn projects it back — per-run scratchpad memory, distinct from the
@@ -429,12 +439,33 @@ impl NativeApp {
         ) {
             self.last_provider_output.push_str(&warn);
         }
-        let state = self.runtime.state();
-        let scratchpad_memory = self.vibe.scratchpad_projection().unwrap_or("").to_string();
-        let evidence: Vec<(String, String)> = state
-            .evidence
+        // Bug #2 fix (stale evidence): `state.evidence` is populated only by the SLOW
+        // `run_intent_in_mode` path. On the Run button, that field held evidence for
+        // whatever intent last hit the slow path (often the boot-time mission), NOT
+        // the current fast-build intent — so `learning:failed:*` records for the
+        // current intent from prior Runs never reached the model. Re-query the graph
+        // here with the ACTUAL intent so cross-Run learning works.
+        let fresh_evidence = self.runtime.retrieve_evidence(&intent);
+        let evidence: Vec<(String, String)> = fresh_evidence
             .iter()
             .take(6)
+            .map(|item| (item.title.clone(), item.excerpt.clone()))
+            .collect();
+        // Prior failed-build lessons specifically. `run_fast_build`'s internal rewrite
+        // loop can't itself hit the graph (it runs on a worker thread with no runtime
+        // handle), so we pre-fetch the top few `learning:failed:*` records for this
+        // intent NOW and pass them in; the rewrite prompt then names them explicitly
+        // as "avoid this pattern" alongside the fresh rustc errors. Learning within a
+        // SINGLE Run (round 2 seeing round 1's failure) still requires the threading
+        // refactor and is captured in `nat-review-backlog` — this pass unblocks the
+        // cross-Run half, which is what the operator asked for.
+        let selected_recipe = self.runtime.state().selected_recipe.clone();
+        let selected_atoms = self.runtime.state().selected_atoms.clone();
+        let scratchpad_memory = self.vibe.scratchpad_projection().unwrap_or("").to_string();
+        let prior_lessons: Vec<(String, String)> = fresh_evidence
+            .iter()
+            .filter(|item| item.node_id.starts_with("learning:failed:"))
+            .take(4)
             .map(|item| (item.title.clone(), item.excerpt.clone()))
             .collect();
         let budget = std::env::var("VIBE_CONTEXT_BUDGET_CHARS")
@@ -442,8 +473,8 @@ impl NativeApp {
             .and_then(|value| value.trim().parse::<usize>().ok())
             .unwrap_or(16000);
         let plan = avc_core::build_fast_plan(
-            &state.selected_recipe,
-            &state.selected_atoms,
+            &selected_recipe,
+            &selected_atoms,
             &evidence,
             &intent,
             &blueprint,
@@ -470,7 +501,12 @@ impl NativeApp {
         // this file — keeps the renderer responsive, not added compute parallelism.
         thread::spawn(move || {
             let _ = tx.send(avc_core::run_fast_build(
-                &config, &intent, &plan, &dir, stamp,
+                &config,
+                &intent,
+                &plan,
+                &dir,
+                stamp,
+                &prior_lessons,
             ));
         });
         Some(rx)
