@@ -3,7 +3,7 @@ tags: spiderweb, bus, strand, socket, kernel, spider, orchestrator, fabric, thre
 
 Atom-lineage reference project at https://github.com/Lucerna-Labs/spiderweb-bus — a layered, organic in-process message bus for Rust. No Tokio, no async, no `Pin`, no `Send` futures. Just threads, channels, and types. The kernel is `std`-only, zero external dependencies, and `#![forbid(unsafe_code)]`. This is a durable knowledge node describing the reference bus's structural pattern so agents building any message router, plugin runtime, worker pool, or event fabric have a concrete Rust shape to imitate. The source is on GitHub.
 
-## Distinct from the local wiki's [[spiderweb-bus]] node
+## Distinct from the local wiki's [[wiki:spiderweb-bus]] node
 
 The existing [`spiderweb-bus.md`](spiderweb-bus.md) describes the FOUR-LAYER envelope discipline (L0 transport, L1 message, L2 flow, L3 orchestration) that the Atom Vibe Coder's INTERNAL proof loop uses. The reference implementation described here is the general-purpose bus that inspired that layering: strands + sockets + a kernel + a spider. Both are correct; they describe different scales of the same pattern.
 
@@ -90,10 +90,8 @@ Every lane is the same shape: an **ingress** strand (external -> decode -> publi
 - `crates/spiderweb-lane-*` — every focused external protocol lane, each the same ingress + egress shape.
 - `PERMANENT-LANES.md` and `PRODUCTION-READINESS.md` — the frozen lane profile and the actual production posture, both source-backed.
 
-[[spiderweb-bus]]
-[[atom-quantizer]]
-[[atoms-hard-rules]]
-[[wiki:examples/typed_bus_strand]]
-[[wiki:examples/atom_stack_kernel]]
-[[wiki:examples/cross_domain_atom_stack]]
+[[wiki:spiderweb-bus]]
+[[wiki:atom-quantizer]]
+[[wiki:production-app-build]]
+[[bus:spiderweb]]
 [[rag:wiki-graph]]

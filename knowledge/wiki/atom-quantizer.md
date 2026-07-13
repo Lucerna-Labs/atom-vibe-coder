@@ -52,13 +52,11 @@ Atom Quantizer's docs draw a hard line between "wired into the current path" and
 
 - When asked to build a codec, quantizer, kernel, driver, pipeline, scheduler, or any staged mechanism, name your atoms and choose their roles BEFORE writing code. The role decides the shape of the type and the shape of the tests.
 - Every atom needs a bounded contract (input, output, state_shape, cost). Anonymous helpers are not atoms.
-- Compose across roles in a fixed order. The order matters — see [[atoms-hard-rules]] rule #3.
+- Compose across roles in a fixed order. Order matters.
 - Add a VERIFY stage even when the immediate task doesn't demand one. Two independent gates (KL + cosine in the reference) catch what one misses.
 - Distinguish live-path atoms from discovery-path atoms. Do not let discovery silently claim authority.
 - Do not use `AtomicBool` / `Mutex` / worker threads to fake "kernel" complexity at small model scale — see the local exemplar [atom_stack_kernel.rs](examples/atom_stack_kernel.rs) for the plain single-threaded shape that actually converges.
 
-[[atoms-hard-rules]]
-[[production-app-build]]
-[[wiki:examples/atom_stack_kernel]]
-[[wiki:examples/cross_domain_atom_stack]]
+[[wiki:production-app-build]]
+[[wiki:spiderweb-bus]]
 [[rag:wiki-graph]]
