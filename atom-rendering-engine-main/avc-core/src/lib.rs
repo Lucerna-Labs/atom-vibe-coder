@@ -1528,129 +1528,161 @@ pub fn run_design_upload_script(
 /// can't emit patterns that aren't in their weights; handing them working code to ADAPT
 /// is far more reliable than asking them to generate from scratch.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CodeExemplar {
+/// A retrieved pattern reference. This carries the PROSE DESCRIPTION of an architectural
+/// pattern from a companion note in `knowledge/wiki/patterns/*.md`, not raw code. The
+/// `source_link` names the reference implementation file as a plain text path the
+/// prompt can mention conceptually but never as content — the code is deliberately not
+/// loaded into memory by this path, which is the Companion Sidecar Pattern the wiki
+/// architecture blueprint prescribes to prevent verbatim regurgitation on small models.
+pub struct PatternReference {
     pub title: String,
     pub tags: String,
-    pub code: String,
+    pub description: String,
+    pub source_link: String,
     pub score: i32,
 }
 
-/// Locate the proven code-exemplar library (`knowledge/wiki/examples`). Mirrors the wiki
-/// graph's directory resolution so exemplars sit beside the graph knowledge:
-/// `MATH_ATOMS_WIKI_DIR/examples`, else `knowledge/wiki/examples` at or above the cwd,
-/// else an exe-relative repo path. Returns the first directory that exists.
-pub fn exemplars_dir() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(wiki) = std::env::var("MATH_ATOMS_WIKI_DIR") {
-        let trimmed = wiki.trim();
-        if !trimmed.is_empty() {
-            candidates.push(PathBuf::from(trimmed).join("examples"));
-        }
+/// Parse a `PatternReference` out of a wiki-graph pattern node — the caller supplies
+/// the node id (of the form `wiki:patterns:<slug>`), its full markdown body (as
+/// returned by `WikiGraph::body_of`), and the graph-retrieval score to preserve. The
+/// caller stays inside the graph; this function is a pure parser and never reads the
+/// filesystem, so the "single source of retrieval" contract is upheld. Returns `None`
+/// when the node id does not look like a pattern id (which is a fail-closed guard for
+/// callers that mixed evidence types).
+pub fn parse_pattern_reference(node_id: &str, body: &str, score: i32) -> Option<PatternReference> {
+    let slug = node_id.strip_prefix("wiki:patterns:")?;
+    if slug.is_empty() || slug == "index" {
+        return None;
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("knowledge/wiki/examples"));
-        candidates.push(cwd.join("../knowledge/wiki/examples"));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        // <repo>/atom-rendering-engine-main/target/release/exe -> up 4 to <repo>.
-        if let Some(repo) = exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-        {
-            candidates.push(repo.join("knowledge/wiki/examples"));
-        }
-    }
-    candidates.into_iter().find(|dir| dir.is_dir())
+    let title = extract_markdown_title(body).unwrap_or_else(|| slug.to_string());
+    let tags = extract_tags_line(body);
+    let description = extract_pattern_description(body);
+    let source_link = extract_pattern_source_link(body).unwrap_or_else(|| {
+        // Fall back to the graph slug when the note omits an explicit source-link
+        // sentence. The graph turns `_` into `-`, so a slug-derived guess would miss
+        // the underscore form of the file name; using the slug verbatim is the
+        // conservative default when the note itself does not name the file.
+        format!("knowledge/wiki/examples/{slug}.rs")
+    });
+    Some(PatternReference {
+        title,
+        tags,
+        description,
+        source_link,
+        score,
+    })
 }
 
-/// Retrieve up to `limit` proven `.rs` exemplars most relevant to `intent`, scored by
-/// keyword overlap with each file's `tags:` line and file name. Empty when none match.
-pub fn retrieve_code_exemplars(intent: &str, dir: &Path, limit: usize) -> Vec<CodeExemplar> {
-    let terms = tokenize_lower(intent);
-    if terms.is_empty() {
-        return Vec::new();
-    }
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
-    };
-    let mut scored: Vec<CodeExemplar> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let Ok(code) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let title = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("exemplar")
-            .to_string();
-        let tags = extract_tags_line(&code);
-        let hay = tokenize_lower(&format!("{title} {tags}"));
-        let mut score = 0i32;
-        for term in &terms {
-            if hay.iter().any(|word| word == term) {
-                score += 3;
-            } else if hay
-                .iter()
-                .any(|word| word.contains(term.as_str()) || term.contains(word.as_str()))
-            {
-                score += 1;
-            }
-        }
-        if score > 0 {
-            scored.push(CodeExemplar {
-                title,
-                tags,
-                code,
-                score,
-            });
-        }
-    }
-    scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
-    scored.truncate(limit);
-    scored
-}
-
-/// Format retrieved exemplars into a build-prompt block the model can adapt.
-pub fn exemplar_prompt_block(exemplars: &[CodeExemplar]) -> String {
-    if exemplars.is_empty() {
+/// Format retrieved pattern references into a build-prompt block. Emits PROSE only,
+/// never a fenced code block — the Companion Sidecar Pattern's whole point is that the
+/// model receives a described architecture to STUDY, not source text to reproduce.
+pub fn pattern_reference_block(references: &[PatternReference]) -> String {
+    if references.is_empty() {
         return String::new();
     }
     let mut block = String::from(
-        "\n\nProven, COMPILING reference programs from the Atom example library. Reuse their structure, idioms, and error handling (custom error enums, exhaustive matches, borrow-safe strings) — adapt to the task, do not copy verbatim:",
+        "\n\nREFERENCE ARCHITECTURE — study the pattern below to understand a proven structural shape, then adapt it to the operator's DIFFERENT intent. Your final answer MUST be your OWN build for the operator's intent, NOT a reproduction of any reference block; the reference is architecture-understanding context. Each reference is described in prose; the raw source file is named as a pointer for auditability only and is intentionally not included as text:",
     );
-    for exemplar in exemplars {
+    for reference in references {
         block.push_str(&format!(
-            "\n\n--- reference: {} [{}] ---\n```rust\n{}\n```",
-            exemplar.title,
-            exemplar.tags,
-            exemplar.code.trim_end()
+            "\n\n--- reference architecture: {} [{}] ---\n{}\nReference implementation on disk: {} (not included in this prompt).",
+            reference.title,
+            reference.tags,
+            reference.description.trim(),
+            reference.source_link,
         ));
     }
     block
 }
 
-fn extract_tags_line(code: &str) -> String {
-    for line in code.lines().take(40) {
+fn extract_markdown_title(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.strip_prefix("# ").map(|s| s.trim().to_string()))
+}
+
+/// Extract the plain-prose pattern description from a companion note. Keeps the body
+/// between the `tags:` frontmatter line (exclusive) and the first `## Reference implementation`
+/// or `## Related` heading (exclusive). Strips `[[wikilink]]` markers so they do not read as
+/// a stray token to the model. When no `tags:` line or terminator heading is present, uses
+/// sane fallbacks so a partially-shaped note still returns some description.
+fn extract_pattern_description(body: &str) -> String {
+    let mut lines: Vec<&str> = body.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("tags:"))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let mut end = lines.len();
+    for (idx, line) in lines.iter().enumerate().skip(start) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("## Reference implementation") || trimmed.starts_with("## Related") {
+            end = idx;
+            break;
+        }
+    }
+    lines.truncate(end);
+    let slice = &lines[start..];
+    strip_wikilinks(slice.join("\n").trim())
+}
+
+fn strip_wikilinks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        out.push_str(&rest[..start]);
+        if let Some(end) = rest[start + 2..].find("]]") {
+            let link = &rest[start + 2..start + 2 + end];
+            // Drop `wiki:` / `bus:` / `rag:` schema prefixes so the residual token
+            // reads as plain english; the pattern description is prose the model
+            // studies, not a place to render graph identifiers.
+            let raw = link.rsplit_once(':').map(|(_, tail)| tail).unwrap_or(link);
+            let visible: String = raw
+                .chars()
+                .map(|ch| if ch == '-' || ch == '_' { ' ' } else { ch })
+                .collect();
+            out.push_str(visible.trim());
+            rest = &rest[start + 2 + end + 2..];
+        } else {
+            out.push_str(&rest[start..]);
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Find the first line of the form `knowledge/wiki/examples/<name>.rs` inside the
+/// note body (the "Reference implementation" section prints one). Returned as-is so
+/// underscore-vs-hyphen quirks of the exemplar file names round-trip verbatim through
+/// the graph's slug transform.
+fn extract_pattern_source_link(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(start) = trimmed.find("knowledge/wiki/examples/") {
+            let tail = &trimmed[start..];
+            let end = tail
+                .find(char::is_whitespace)
+                .unwrap_or(tail.len())
+                .min(tail.find(".rs").map(|i| i + 3).unwrap_or(tail.len()));
+            if end > 0 {
+                let path = &tail[..end];
+                if path.ends_with(".rs") {
+                    return Some(path.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_tags_line(body: &str) -> String {
+    for line in body.lines().take(40) {
         let trimmed = line.trim_start_matches('/').trim();
         if let Some(rest) = trimmed.strip_prefix("tags:") {
             return rest.trim().to_string();
         }
     }
     String::new()
-}
-
-fn tokenize_lower(text: &str) -> Vec<String> {
-    text.split(|ch: char| !ch.is_alphanumeric())
-        .filter(|token| token.len() >= 3)
-        .map(|token| token.to_ascii_lowercase())
-        .collect()
 }
 
 /// A labeled build-prompt section with a keep-priority (higher = kept first when the
@@ -1716,13 +1748,15 @@ pub fn compact_sections(sections: &[PromptSection], budget_chars: usize) -> Stri
 /// the projected persistent memory for the active build (empty when no session or empty
 /// projection); it is kept ahead of everything else because it carries operator intent
 /// + prior stage notes + prior corrections that the model MUST honor.
+#[allow(clippy::too_many_arguments)]
 pub fn build_fast_plan(
     recipe: &str,
     atom_stack: &[String],
     evidence: &[(String, String)],
-    intent: &str,
+    _intent: &str,
     blueprint: &str,
     scratchpad_memory: &str,
+    pattern_references: &[PatternReference],
     budget_chars: usize,
 ) -> String {
     let mut sections: Vec<PromptSection> = Vec::new();
@@ -1774,15 +1808,13 @@ pub fn build_fast_plan(
             priority: 2,
         });
     }
-    if let Some(dir) = exemplars_dir() {
-        let block = exemplar_prompt_block(&retrieve_code_exemplars(intent, &dir, 1));
-        if !block.is_empty() {
-            sections.push(PromptSection {
-                label: "exemplar".to_string(),
-                body: block,
-                priority: 5,
-            });
-        }
+    let block = pattern_reference_block(pattern_references);
+    if !block.is_empty() {
+        sections.push(PromptSection {
+            label: "pattern-reference".to_string(),
+            body: block,
+            priority: 5,
+        });
     }
     compact_sections(&sections, budget_chars)
 }
@@ -1794,7 +1826,12 @@ pub fn build_fast_plan(
 /// planner-first flow (via `AtomVibeRuntime::execute_turn` on the intake stage) is a
 /// follow-up; today the harness runs: structured-prefix + retrieval + single-shot codegen
 /// with rustc verify+repair.
-pub fn format_build_blueprint(intent: &str, recipe: &str, atom_stack: &[String]) -> String {
+pub fn format_build_blueprint(
+    intent: &str,
+    recipe: &str,
+    atom_stack: &[String],
+    pattern_titles: &[String],
+) -> String {
     let mut blueprint =
         String::from("STRUCTURED BUILD BLUEPRINT (deterministic prefix, atoms doctrine):\n");
     blueprint.push_str(&format!("- Intent: {intent}\n"));
@@ -1805,16 +1842,10 @@ pub fn format_build_blueprint(intent: &str, recipe: &str, atom_stack: &[String])
             atom_stack.join(" -> ")
         ));
     }
-    let mut exemplar_titles: Vec<String> = Vec::new();
-    if let Some(dir) = exemplars_dir() {
-        for hit in retrieve_code_exemplars(intent, &dir, 2) {
-            exemplar_titles.push(hit.title);
-        }
-    }
-    if !exemplar_titles.is_empty() {
+    if !pattern_titles.is_empty() {
         blueprint.push_str(&format!(
-            "- Prior-art exemplars to adapt: {}\n",
-            exemplar_titles.join(", ")
+            "- Prior-art pattern references to adapt: {}\n",
+            pattern_titles.join(", ")
         ));
     }
     blueprint.push_str(
@@ -2137,34 +2168,50 @@ mod tests {
     }
 
     #[test]
-    fn retrieves_and_formats_the_relevant_code_exemplar() {
-        let dir = std::env::temp_dir().join(format!(
-            "avc-exemplars-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("stack_calculator.rs"),
-            "// EXEMPLAR\n// tags: calculator, stack, rpn, parser, error-handling\nfn main() {}\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.join("graphics_blit.rs"),
-            "// EXEMPLAR\n// tags: graphics, raster, blit, pixels\nfn main() {}\n",
-        )
-        .unwrap();
+    fn parse_pattern_reference_parses_a_graph_body_into_a_reference() {
+        let body = "# Stack Calculator Pattern\ntags: calculator, stack, rpn, parser, error-handling\n\nA reference architecture for a small stdin REPL that reads one expression per line and evaluates it against a stack. The tokenizer splits on whitespace; the evaluator pops operands and pushes results; each failure mode is a distinct variant on a typed error enum with an exhaustive Display impl.\n\n## Related\n\n[[wiki:production-app-build]]\n\n## Reference implementation\n\nknowledge/wiki/examples/stack_calculator.rs\n";
+        let reference = parse_pattern_reference("wiki:patterns:stack-calculator", body, 42)
+            .expect("pattern id + body should parse");
+        assert_eq!(reference.title, "Stack Calculator Pattern");
+        assert!(reference.tags.contains("rpn"));
+        assert!(
+            reference.description.contains("stdin REPL"),
+            "description prose should surface: {}",
+            reference.description
+        );
+        assert_eq!(
+            reference.source_link,
+            "knowledge/wiki/examples/stack_calculator.rs"
+        );
+        assert_eq!(reference.score, 42);
+    }
 
-        let hits =
-            retrieve_code_exemplars("build an rpn stack calculator with error handling", &dir, 1);
-        let block = exemplar_prompt_block(&hits);
-        let _ = fs::remove_dir_all(&dir);
+    #[test]
+    fn parse_pattern_reference_rejects_non_pattern_node_ids() {
+        // Callers who mixed evidence types must not accidentally materialise a doctrine
+        // node into a PatternReference — the parser fails closed.
+        let body = "# Doctrine\ntags: doctrine\nProse.\n";
+        assert!(parse_pattern_reference("wiki:atom-quantizer", body, 1).is_none());
+        assert!(parse_pattern_reference("bus:spiderweb", body, 1).is_none());
+        assert!(parse_pattern_reference("wiki:patterns:index", body, 1).is_none());
+    }
 
-        assert_eq!(hits.len(), 1, "only the calculator exemplar should match");
-        assert_eq!(hits[0].title, "stack_calculator");
-        assert!(hits[0].tags.contains("rpn"));
-        assert!(block.contains("reference: stack_calculator"));
-        assert!(block.contains("```rust"));
+    #[test]
+    fn pattern_reference_block_never_emits_a_fenced_code_block() {
+        let refs = vec![PatternReference {
+            title: "T".to_string(),
+            tags: "a, b".to_string(),
+            description: "prose description ```rust let x = 1; ``` more prose".to_string(),
+            source_link: "knowledge/wiki/examples/t.rs".to_string(),
+            score: 3,
+        }];
+        let block = pattern_reference_block(&refs);
+        // The block header itself must not open a rust fence. If the description
+        // happens to CONTAIN a fence string, that is user content passing through,
+        // but the block scaffolding must never introduce a new one on its own.
+        assert!(!block.contains("```rust\n"));
+        assert!(block.contains("REFERENCE ARCHITECTURE"));
+        assert!(block.contains("not included in this prompt"));
     }
 
     #[test]
@@ -2210,6 +2257,7 @@ mod tests {
             "stack calculator",
             "",
             memory,
+            &[],
             700,
         );
         assert!(plan.contains(memory), "scratchpad memory must survive");
@@ -2218,13 +2266,13 @@ mod tests {
             "scratchpad header must label the content untrusted, not ground truth"
         );
         // Empty sections simply drop.
-        let no_memory = build_fast_plan("r", &atoms, &[], "x", "", "", 500);
+        let no_memory = build_fast_plan("r", &atoms, &[], "x", "", "", &[], 500);
         assert!(!no_memory.contains("Scratchpad projection"));
         assert!(!no_memory.contains("Structured build blueprint"));
         // C1 fix: a non-empty blueprint (priority 8) beats scratchpad memory when only
         // one section fits — the blueprint is for THIS run, so it must not be dropped.
         let blueprint = "STRUCTURED BUILD BLUEPRINT: build a calc with a Stack";
-        let tight = build_fast_plan("r", &atoms, &[], "calc", blueprint, memory, 400);
+        let tight = build_fast_plan("r", &atoms, &[], "calc", blueprint, memory, &[], 400);
         assert!(tight.contains(blueprint), "blueprint outranks scratchpad");
     }
 
@@ -2235,12 +2283,23 @@ mod tests {
             "compose".to_string(),
             "flow".to_string(),
         ];
-        let blueprint =
-            format_build_blueprint("build a json parser", "spiderweb-proof-loop", &atoms);
+        let blueprint = format_build_blueprint(
+            "build a json parser",
+            "spiderweb-proof-loop",
+            &atoms,
+            &["Recursive descent parser".to_string()],
+        );
         assert!(blueprint.contains("STRUCTURED BUILD BLUEPRINT"));
         assert!(blueprint.contains("build a json parser"));
         assert!(blueprint.contains("spiderweb-proof-loop"));
         assert!(blueprint.contains("measure -> compose -> flow"));
         assert!(blueprint.contains("order is significant"));
+        assert!(
+            blueprint.contains("Prior-art pattern references to adapt: Recursive descent parser")
+        );
+
+        // Empty pattern list: header omitted, blueprint still valid.
+        let empty = format_build_blueprint("x", "r", &["measure".to_string()], &[]);
+        assert!(!empty.contains("Prior-art pattern references"));
     }
 }

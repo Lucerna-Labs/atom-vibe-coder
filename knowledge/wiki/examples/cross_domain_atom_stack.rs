@@ -1,29 +1,3 @@
-// EXEMPLAR: cross-domain atom composition -- PRE -> EXTRACT -> QUANTIZE -> POST -> VERIFY
-//           pipeline over a flat sample vector, with a typed error enum, a bounded
-//           contract per stage, and two independent VERIFY gates that must both pass.
-// tags: atom, atoms, atom-stack, atom-composition, cross-domain, pipeline, pre, extract,
-//       quantize, post, verify, gate, codec, quantizer, walsh, hadamard, symmetric,
-//       max-abs, block, outlier, cosine, kl, divergence, avalanche, hash, integrity,
-//       enum, error-handling, exhaustive-match, display, dependency-free, std-only,
-//       single-threaded, kernel, driver, staged
-//
-// Provenance: hand-authored companion to `knowledge/wiki/atom-quantizer.md`. Captures
-// the CROSS-DOMAIN atom composition PATTERN that the atom-quantizer research codec
-// uses, in a self-contained ~200-line std-only program a small model can adapt.
-// This is NOT a real GGUF quantizer -- it is the SHAPE. When an agent is asked to
-// build a codec / kernel / driver / pipeline / scheduler, this is the structural
-// answer to imitate: name atoms, choose their role, give each a bounded contract,
-// compose them in fixed order, and let two independent gates accept or reject the
-// composed result.
-//
-// Rustc gate: rustc --edition 2021 --emit=metadata -> exit 0.
-// Inline tests: `cargo test`-equivalent runs 6/6 passing.
-// Release run: `rustc -O` -> the composed pipeline prints its VERIFY verdict.
-//
-// Anti-pattern this shape avoids: DO NOT reach for atomic types, locks, or worker
-// threads for a "codec" at this scale. The atom pattern is sequential; parallelism
-// is a separate concern that comes AFTER a correct sequential composition exists.
-
 use std::fmt;
 
 // --------------------------------------------------------------------------

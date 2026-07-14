@@ -21,8 +21,30 @@ pub struct Evidence {
 struct WikiNode {
     id: String,
     title: String,
+    /// The first content line of the node — cheap for lexical scoring.
     excerpt: String,
+    /// The full markdown body (or, for programmatically-seeded nodes, the same
+    /// string as `excerpt`). Kept so the retrieval path can hand a caller the
+    /// whole note without a filesystem round-trip. This is the "graph is the
+    /// single source of retrieval" contract; the caller must never re-open
+    /// `knowledge/wiki/**` behind the graph's back.
+    body: String,
     tags: Vec<String>,
+}
+
+impl WikiNode {
+    /// Build a programmatically-seeded node (mission, bus, gate, atom, recipe,
+    /// learning, proof). Body defaults to the excerpt because these nodes have
+    /// no richer text than the one-line summary they were declared with.
+    fn seeded(id: String, title: String, excerpt: String, tags: Vec<String>) -> Self {
+        Self {
+            id,
+            title,
+            body: excerpt.clone(),
+            excerpt,
+            tags,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,67 +71,67 @@ pub struct WikiGraph {
 impl WikiGraph {
     pub fn seeded() -> Self {
         let mut nodes = vec![
-            WikiNode {
-                id: "mission:production-app-build".to_string(),
-                title: mission().title.to_string(),
-                excerpt: mission().body.to_string(),
-                tags: tags(&["production", "app", "mission", "product", "proof"]),
-            },
-            WikiNode {
-                id: "bus:spiderweb".to_string(),
-                title: "Spiderweb Bus".to_string(),
-                excerpt: "Messages move through L0 transport, L1 message, L2 flow, and L3 orchestration with ramps, evidence, and off-ramps.".to_string(),
-                tags: tags(&["spiderweb", "bus", "fabric", "flow", "transport", "orchestration"]),
-            },
-            WikiNode {
-                id: "rag:wiki-graph".to_string(),
-                title: "Wiki Graph RAG".to_string(),
-                excerpt: "Retrieval starts from atom and recipe graph relationships before text excerpts are used as supporting evidence.".to_string(),
-                tags: tags(&["wiki", "graph", "rag", "retrieval", "evidence", "relationship"]),
-            },
-            WikiNode {
-                id: "provider:openai-responses".to_string(),
-                title: "Provider API".to_string(),
-                excerpt: "OpenAI Responses API calls are prepared from current graph evidence and must fail closed when credentials are absent.".to_string(),
-                tags: tags(&["provider", "api", "model", "openai", "responses", "credential"]),
-            },
-            WikiNode {
-                id: "renderer:pmre-native".to_string(),
-                title: "Native Atom Renderer".to_string(),
-                excerpt: "PMRE renders the product as local mathematical primitives without Chrome, Electron, Tauri, or browser-local state.".to_string(),
-                tags: tags(&["renderer", "pmre", "native", "artifact", "atom", "no-browser"]),
-            },
-            WikiNode {
-                id: "gate:fail-closed".to_string(),
-                title: "Fail Closed Gate".to_string(),
-                excerpt: "Missing provider credentials, stale evidence, and unsupported routes become blockers, not silent fallbacks.".to_string(),
-                tags: tags(&["gate", "fail", "closed", "blocker", "provider", "evidence"]),
-            },
+            WikiNode::seeded(
+                "mission:production-app-build".to_string(),
+                mission().title.to_string(),
+                mission().body.to_string(),
+                tags(&["production", "app", "mission", "product", "proof"]),
+            ),
+            WikiNode::seeded(
+                "bus:spiderweb".to_string(),
+                "Spiderweb Bus".to_string(),
+                "Messages move through L0 transport, L1 message, L2 flow, and L3 orchestration with ramps, evidence, and off-ramps.".to_string(),
+                tags(&["spiderweb", "bus", "fabric", "flow", "transport", "orchestration"]),
+            ),
+            WikiNode::seeded(
+                "rag:wiki-graph".to_string(),
+                "Wiki Graph RAG".to_string(),
+                "Retrieval starts from atom and recipe graph relationships before text excerpts are used as supporting evidence.".to_string(),
+                tags(&["wiki", "graph", "rag", "retrieval", "evidence", "relationship"]),
+            ),
+            WikiNode::seeded(
+                "provider:openai-responses".to_string(),
+                "Provider API".to_string(),
+                "OpenAI Responses API calls are prepared from current graph evidence and must fail closed when credentials are absent.".to_string(),
+                tags(&["provider", "api", "model", "openai", "responses", "credential"]),
+            ),
+            WikiNode::seeded(
+                "renderer:pmre-native".to_string(),
+                "Native Atom Renderer".to_string(),
+                "PMRE renders the product as local mathematical primitives without Chrome, Electron, Tauri, or browser-local state.".to_string(),
+                tags(&["renderer", "pmre", "native", "artifact", "atom", "no-browser"]),
+            ),
+            WikiNode::seeded(
+                "gate:fail-closed".to_string(),
+                "Fail Closed Gate".to_string(),
+                "Missing provider credentials, stale evidence, and unsupported routes become blockers, not silent fallbacks.".to_string(),
+                tags(&["gate", "fail", "closed", "blocker", "provider", "evidence"]),
+            ),
         ];
 
         for atom in atoms() {
-            nodes.push(WikiNode {
-                id: atom.key.to_string(),
-                title: atom.key.to_string(),
-                excerpt: atom.currency.to_string(),
-                tags: tags(atom.keywords),
-            });
+            nodes.push(WikiNode::seeded(
+                atom.key.to_string(),
+                atom.key.to_string(),
+                atom.currency.to_string(),
+                tags(atom.keywords),
+            ));
         }
         for recipe in recipes() {
-            nodes.push(WikiNode {
-                id: recipe.id.to_string(),
-                title: recipe.name.to_string(),
-                excerpt: recipe.summary.to_string(),
-                tags: tags(recipe.atoms),
-            });
+            nodes.push(WikiNode::seeded(
+                recipe.id.to_string(),
+                recipe.name.to_string(),
+                recipe.summary.to_string(),
+                tags(recipe.atoms),
+            ));
         }
         for gate in gates() {
-            nodes.push(WikiNode {
-                id: gate.title.to_string(),
-                title: gate.title.to_string(),
-                excerpt: gate.body.to_string(),
-                tags: tags(&[gate.layer, "gate", "proof"]),
-            });
+            nodes.push(WikiNode::seeded(
+                gate.title.to_string(),
+                gate.title.to_string(),
+                gate.body.to_string(),
+                tags(&[gate.layer, "gate", "proof"]),
+            ));
         }
 
         let mut edges = static_edges(&[
@@ -250,6 +272,60 @@ impl WikiGraph {
         evidence
     }
 
+    /// Return the full markdown body of a graph node, or `None` if the node does
+    /// not exist. This is the single-source-of-retrieval accessor the wiki-graph
+    /// blueprint prescribes: a caller that needs the whole note (for example, to
+    /// materialise a pattern reference into the build prompt) MUST fetch it here
+    /// instead of reading `knowledge/wiki/**` behind the graph's back.
+    pub fn body_of(&self, node_id: &str) -> Option<&str> {
+        self.nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .map(|node| node.body.as_str())
+    }
+
+    /// Retrieve up to `limit` companion-pattern-note hits for the given intent,
+    /// scored ONLY against nodes under the `wiki:patterns:` namespace (excluding
+    /// the `:index` MOC). This is the fast-build path's primary hook: the
+    /// wiki-graph blueprint treats the companion pattern note as the primary
+    /// retrievable unit for a build intent because that is what the model must
+    /// adapt from, and the general `retrieve` cannot be used verbatim because
+    /// its doctrine-heavy propagation crowds out patterns for build-shaped
+    /// queries (the pathology that surfaced live on qwen 3.6-35b-a3b for
+    /// "make a small message bus"). Scoring uses the same `direct_score`
+    /// heuristic so tag+title+excerpt lexical hits still win, but the pool is
+    /// pattern-only so doctrine's accumulated propagation cannot displace a
+    /// legitimate pattern hit. Returns empty when nothing scored.
+    pub fn retrieve_patterns(
+        &self,
+        query: &str,
+        atom_keys: &[String],
+        limit: usize,
+    ) -> Vec<Evidence> {
+        let terms = tokenize(query);
+        let mut hits: Vec<Evidence> = self
+            .nodes
+            .iter()
+            .filter(|node| node.id.starts_with("wiki:patterns:") && !node.id.contains(":index"))
+            .filter_map(|node| {
+                let score = direct_score(node, &terms, atom_keys);
+                (score > 0).then(|| Evidence {
+                    node_id: node.id.clone(),
+                    title: node.title.clone(),
+                    excerpt: node.excerpt.clone(),
+                    score,
+                })
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.node_id.cmp(&b.node_id))
+        });
+        hits.truncate(limit);
+        hits
+    }
+
     pub fn has_relationship_path(&self, from: &str, to: &str, max_depth: usize) -> bool {
         if from == to {
             return true;
@@ -299,20 +375,22 @@ impl WikiGraph {
             node_tags.push(record.provider_model.to_ascii_lowercase());
         }
         node_tags.extend(record_atoms.iter().map(|atom| atom.to_ascii_lowercase()));
+        let excerpt = format!(
+            "{} proof for {} with {} evidence nodes, {} route envelopes, {} blockers, provider {}, output {} bytes {}.",
+            record.status,
+            record.recipe_id,
+            record.evidence_count,
+            record.route_len,
+            record.blockers.len(),
+            record.provider_state,
+            record.provider_output_len,
+            record.provider_output_hash
+        );
         self.nodes.push(WikiNode {
             id: id.clone(),
             title: format!("Proof: {}", record.recipe_id),
-            excerpt: format!(
-                "{} proof for {} with {} evidence nodes, {} route envelopes, {} blockers, provider {}, output {} bytes {}.",
-                record.status,
-                record.recipe_id,
-                record.evidence_count,
-                record.route_len,
-                record.blockers.len(),
-                record.provider_state,
-                record.provider_output_len,
-                record.provider_output_hash
-            ),
+            body: excerpt.clone(),
+            excerpt,
             tags: node_tags,
         });
         self.edges.push(WikiEdge {
@@ -358,10 +436,12 @@ impl WikiGraph {
                 self.remove_node(&superseded);
             }
         }
+        let excerpt = record.excerpt();
         self.nodes.push(WikiNode {
             id: id.clone(),
             title: record.title(),
-            excerpt: record.excerpt(),
+            body: excerpt.clone(),
+            excerpt,
             tags: record.tags(),
         });
         if self.nodes.iter().any(|node| node.id == record.recipe_id) {
@@ -472,6 +552,7 @@ impl WikiGraph {
             id: id.clone(),
             title,
             excerpt,
+            body: text.clone(),
             tags: node_tags.clone(),
         });
         let document_status = markdown_status(&text);
@@ -503,16 +584,16 @@ impl WikiGraph {
             section_tags.extend(tokenize(&section_title));
             section_tags.sort();
             section_tags.dedup();
+            let full_body = match &document_status {
+                Some(status) => format!("Document status: {status}\n{section_body}"),
+                None => section_body,
+            };
+            let excerpt = bounded_excerpt(&full_body, 1_400);
             self.nodes.push(WikiNode {
                 id: section_id,
                 title: section_title,
-                excerpt: bounded_excerpt(
-                    &match &document_status {
-                        Some(status) => format!("Document status: {status}\n{section_body}"),
-                        None => section_body,
-                    },
-                    1_400,
-                ),
+                excerpt,
+                body: full_body,
                 tags: section_tags,
             });
         }
@@ -1077,6 +1158,80 @@ mod tests {
             unresolved.is_empty(),
             "unresolved wiki edges: {unresolved:?}"
         );
+    }
+
+    #[test]
+    fn repository_pattern_notes_are_loaded_and_retrievable_and_body_accessible() {
+        // End-to-end guard on the Phase 1B refactor: the seven companion pattern
+        // notes under `knowledge/wiki/patterns/` MUST enter the graph as
+        // first-class WikiNodes, MUST come back from `graph.retrieve` on an
+        // intent that names the pattern, and MUST expose their full body via
+        // `body_of`. If any of these break, the fast-build path degrades to
+        // "no pattern retrieved" (the pathology surfaced live on qwen 3.6-35b
+        // where the blueprint decision showed no `Prior-art pattern references
+        // to adapt:` line).
+        let wiki = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("knowledge")
+            .join("wiki");
+        let graph = WikiGraph::from_markdown_dir(wiki).unwrap();
+
+        // Every companion note must exist as a graph node.
+        for slug in [
+            "stdin-rpn-calculator",
+            "error-handling-and-parsing",
+            "recursive-descent-expr",
+            "text-wordcount",
+            "atom-stack-kernel",
+            "cross-domain-atom-stack",
+            "typed-bus-strand",
+        ] {
+            let node_id = format!("wiki:patterns:{slug}");
+            assert!(
+                graph.nodes.iter().any(|node| node.id == node_id),
+                "pattern node {node_id} not loaded from knowledge/wiki/patterns/"
+            );
+            let body = graph
+                .body_of(&node_id)
+                .unwrap_or_else(|| panic!("no body for {node_id}"));
+            assert!(
+                body.contains("knowledge/wiki/examples/"),
+                "body of {node_id} must name its reference implementation path"
+            );
+        }
+
+        // Retrieval hits: the dedicated pattern retriever must surface the
+        // matching pattern for each build intent. The general `retrieve` mixes
+        // doctrine and patterns and doctrine dominates on build-shaped queries;
+        // the fast-build path uses this dedicated accessor instead so a
+        // legitimate pattern hit always wins its own namespace.
+        for (intent, expected) in [
+            ("make a small message bus", "wiki:patterns:typed-bus-strand"),
+            (
+                "make a small micro kernel",
+                "wiki:patterns:atom-stack-kernel",
+            ),
+            (
+                "build an rpn stack calculator with error handling",
+                "wiki:patterns:stdin-rpn-calculator",
+            ),
+        ] {
+            let hits = graph.retrieve_patterns(intent, &[], 4);
+            assert!(
+                hits.iter().any(|hit| hit.node_id == expected),
+                "expected {expected} to appear in retrieve_patterns for {intent:?}. Actual: {:?}",
+                hits.iter()
+                    .map(|h| format!("{}({})", h.node_id, h.score))
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                hits.iter()
+                    .all(|hit| hit.node_id.starts_with("wiki:patterns:")
+                        && !hit.node_id.contains(":index")),
+                "retrieve_patterns must only return pattern nodes (excluding MOC index)"
+            );
+        }
     }
 
     #[test]

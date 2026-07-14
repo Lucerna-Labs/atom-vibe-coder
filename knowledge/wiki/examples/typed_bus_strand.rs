@@ -1,33 +1,3 @@
-// EXEMPLAR: typed pub/sub bus with Strand trait + Socket by TypeId + a
-//           deterministic tick executor. Dependency-free, std-only, no async,
-//           no unsafe, no worker threads -- a sequential kernel is enough for
-//           the pattern. Publish fans out to every subscriber whose declared
-//           input Socket matches by (name, TypeId); the strand does not know
-//           any other strand exists.
-// tags: bus, strand, socket, dispatcher, router, pub-sub, publish-subscribe,
-//       typed, type-id, trait, plug-and-play, plugin, message-bus, event, runtime,
-//       in-process, sequential, tick, deterministic, dependency-free, std-only,
-//       no-async, single-threaded, enum, error-handling, exhaustive-match, display
-//
-// Provenance: hand-authored companion to `knowledge/wiki/spiderweb-bus-reference.md`.
-// Captures the CORE PATTERN of the Lucerna-Labs/spiderweb-bus reference kernel:
-// strands declare typed inputs and outputs, the bus wires them by TypeId with no
-// manual wiring, and the executor ticks strands in registration order. Real
-// spiderweb-bus adds threads, spider orchestrator, highway lanes, and lane
-// crypto -- this exemplar is the sequential skeleton small models can adapt.
-//
-// Rustc gate: rustc --edition 2021 --emit=metadata -> exit 0.
-// Inline tests: 6/6 passing.
-// Release run: `rustc -O` -> the bus routes a message from Source to Sink and
-// prints "Sink got: hello #1".
-//
-// Anti-pattern this shape avoids: DO NOT reach for atomics, locks, worker
-// threads, `async`, or `Pin` to implement a "message bus" at this scale. Real
-// spiderweb-bus is threaded, but only because process-wide fan-out and lane
-// crypto demand it -- the CORE contract (strands declare types, bus routes by
-// TypeId) is entirely expressible in a sequential loop, and getting that shape
-// right sequentially is the prerequisite for any threaded upgrade.
-
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt;

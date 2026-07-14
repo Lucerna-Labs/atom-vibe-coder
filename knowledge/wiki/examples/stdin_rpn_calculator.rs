@@ -1,12 +1,3 @@
-// EXEMPLAR: stdin REPL, tokenizer, stack evaluator, exhaustive error handling.
-// tags: cli, stdin, repl, calculator, rpn, stack, tokenizer, parser, enum, error-handling,
-//       exhaustive-match, dependency-free
-//
-// A reverse-polish-notation calculator: reads one expression per line from stdin,
-// tokenizes it, evaluates with a stack, and prints the result or a clear error.
-// Demonstrates: a custom error enum with Display, exhaustive `match`, borrow-safe
-// string handling, and a clean stdin loop — the idioms small models most often get wrong.
-
 use std::io::{self, BufRead, Write};
 
 #[derive(Debug, Clone, PartialEq)]

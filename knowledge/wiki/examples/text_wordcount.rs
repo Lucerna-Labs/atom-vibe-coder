@@ -1,11 +1,3 @@
-// EXEMPLAR: text processing with HashMap counting, iterator chains, and sorting.
-// tags: text, tokenize, wordcount, frequency, hashmap, iterator, sort, collections, stdin,
-//       dependency-free
-//
-// Counts word frequencies in text and prints the top-N most common words. Demonstrates:
-// HashMap entry counting, idiomatic iterator chains, lowercasing/filtering, and stable
-// sorting by count then key — common building blocks a small model often stitches wrong.
-
 use std::collections::HashMap;
 
 fn word_counts(text: &str) -> HashMap<String, usize> {

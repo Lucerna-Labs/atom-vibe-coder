@@ -425,20 +425,6 @@ impl NativeApp {
         // Mirror the slow path (`run_current_intent`), which sets `last_intent` before
         // the run begins.
         self.last_intent = intent.clone();
-        // Structured blueprint for THIS run (C1: pass directly, don't wait for
-        // scratchpad round-trip). Also persisted as a Decision so a future Run's
-        // prepare_turn projects it back — per-run scratchpad memory, distinct from the
-        // cross-run wiki-graph learning ledger (H5).
-        let blueprint = {
-            let state = self.runtime.state();
-            avc_core::format_build_blueprint(&intent, &state.selected_recipe, &state.selected_atoms)
-        };
-        if let Some(warn) = math_atoms_native_ledger::warn_if_memory_lost(
-            self.vibe.append_planner_blueprint(&blueprint),
-            "blueprint",
-        ) {
-            self.last_provider_output.push_str(&warn);
-        }
         // Bug #2 fix (stale evidence): `state.evidence` is populated only by the SLOW
         // `run_intent_in_mode` path. On the Run button, that field held evidence for
         // whatever intent last hit the slow path (often the boot-time mission), NOT
@@ -446,8 +432,56 @@ impl NativeApp {
         // current intent from prior Runs never reached the model. Re-query the graph
         // here with the ACTUAL intent so cross-Run learning works.
         let fresh_evidence = self.runtime.retrieve_evidence(&intent);
+        // Phase 1B: pattern retrieval goes through a DEDICATED graph accessor
+        // (`runtime.retrieve_patterns` -> `WikiGraph::retrieve_patterns`) that
+        // scores against the `wiki:patterns:*` namespace alone. The general
+        // `retrieve_evidence` cannot be used verbatim for patterns because
+        // doctrine nodes (mission, atom-quantizer, spiderweb-bus) accumulate
+        // wikilink propagation and displace patterns for build-shaped queries
+        // (the pathology that surfaced live on qwen 3.6-35b-a3b for
+        // "make a small message bus"). Bodies still come from
+        // `runtime.node_body` (-> `WikiGraph::body_of`). The single-source-of-
+        // retrieval contract holds: no code path opens `knowledge/wiki/**`
+        // behind the graph's back.
+        let pattern_hits = self.runtime.retrieve_patterns(&intent);
+        let pattern_references: Vec<avc_core::PatternReference> = pattern_hits
+            .iter()
+            .take(2)
+            .filter_map(|item| {
+                self.runtime.node_body(&item.node_id).and_then(|body| {
+                    avc_core::parse_pattern_reference(&item.node_id, body, item.score)
+                })
+            })
+            .collect();
+        let pattern_titles: Vec<String> = pattern_references
+            .iter()
+            .map(|reference| reference.title.clone())
+            .collect();
+        // Structured blueprint for THIS run (C1: pass directly, don't wait for
+        // scratchpad round-trip). Also persisted as a Decision so a future Run's
+        // prepare_turn projects it back — per-run scratchpad memory, distinct from the
+        // cross-run wiki-graph learning ledger (H5).
+        let blueprint = {
+            let state = self.runtime.state();
+            avc_core::format_build_blueprint(
+                &intent,
+                &state.selected_recipe,
+                &state.selected_atoms,
+                &pattern_titles,
+            )
+        };
+        if let Some(warn) = math_atoms_native_ledger::warn_if_memory_lost(
+            self.vibe.append_planner_blueprint(&blueprint),
+            "blueprint",
+        ) {
+            self.last_provider_output.push_str(&warn);
+        }
+        // Wiki-graph evidence: doctrine + recipes + prior-run learnings + section hits.
+        // Pattern nodes are filtered OUT here because they already flow into the dedicated
+        // pattern-reference block below; leaving them in would double-inject.
         let evidence: Vec<(String, String)> = fresh_evidence
             .iter()
+            .filter(|item| !item.node_id.starts_with("wiki:patterns:"))
             .take(6)
             .map(|item| (item.title.clone(), item.excerpt.clone()))
             .collect();
@@ -479,6 +513,7 @@ impl NativeApp {
             &intent,
             &blueprint,
             &scratchpad_memory,
+            &pattern_references,
             budget,
         );
         // C2: use the UI-applied provider (via runtime), not process env.

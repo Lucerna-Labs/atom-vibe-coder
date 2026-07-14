@@ -1,11 +1,3 @@
-// EXEMPLAR: lexer + recursive-descent parser + AST (recursive enum with Box) + evaluator.
-// tags: parser, recursive-descent, ast, lexer, tokenizer, expression, interpreter, precedence,
-//       enum, box, recursion, dependency-free
-//
-// Evaluates infix arithmetic with correct precedence, parentheses, and unary minus:
-// e.g. `2 + 3 * (4 - 1)` -> 11. Demonstrates: a `Box`ed recursive AST enum, a hand-written
-// lexer, a recursive-descent parser struct with a token cursor, and error propagation.
-
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Number(f64),

@@ -1,25 +1,3 @@
-// EXEMPLAR: small atom-stack kernel driver -- scan -> hash -> project -> compare -> order,
-//           with a typed error enum and inline unit tests. Dependency-free, std-only.
-// tags: kernel, micro-kernel, medium-kernel, atom, atom-stack, scan, hash, project, compare,
-//       order, pipeline, driver, scheduler, staged, enum, error-handling, exhaustive-match,
-//       display, dependency-free, std-only, single-threaded
-//
-// Provenance: generated live by qwen/qwen3.5-122b-a10b for the operator intent
-// "make a medium sized kernel", verified end-to-end -- rustc typecheck exit 0,
-// `--test` build passes 6/6 inline tests, release binary runs and produces the
-// expected atom-stack output. Seeded into the wiki-graph exemplar library so
-// smaller models ADAPT this proven pattern instead of generating a kernel from
-// weights that don't cover the shape.
-//
-// Anti-pattern this shape deliberately avoids: DO NOT reach for atomic types
-// (AtomicBool, AtomicU64), locks (Mutex/RwLock), or worker-thread spawns for a
-// "kernel" at this size. Small models (9b) will happily emit
-// `#[derive(Clone)] struct Core { running: AtomicBool }` which fails E0277
-// because atomics do not implement Clone; the model then burns every repair
-// round trying to fix a self-inflicted invariant. This exemplar shows the plain
-// single-threaded structure a kernel driver actually needs at this scale: a
-// sequential atom-stack over &[u8] state.
-
 use std::cmp::Ordering;
 use std::fmt;
 

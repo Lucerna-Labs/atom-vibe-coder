@@ -203,6 +203,27 @@ impl MathAtomsRuntime {
         self.graph.retrieve(intent, &atoms, 8)
     }
 
+    /// Fetch the full markdown body of a graph node so a caller can materialise
+    /// a retrieved `Evidence` into a richer payload (pattern description, doctrine
+    /// note, etc.) without opening `knowledge/wiki/**` behind the graph's back.
+    /// This is the accessor the fast-build path uses to walk from a
+    /// `wiki:patterns:*` hit into the note content the model sees.
+    pub fn node_body(&self, node_id: &str) -> Option<&str> {
+        self.graph.body_of(node_id)
+    }
+
+    /// Retrieve pattern-note hits for the given intent from the wiki-graph. The
+    /// fast-build path uses this INSTEAD of `retrieve_evidence` when it wants
+    /// pattern references, because the general retrieval mixes doctrine and
+    /// patterns and doctrine dominates on build-shaped queries. This method
+    /// scores against the `wiki:patterns:*` namespace alone so a legitimate
+    /// pattern hit always beats a doctrine node that just happened to score
+    /// higher via wikilink propagation. Delegates to `WikiGraph::retrieve_patterns`.
+    pub fn retrieve_patterns(&self, intent: &str) -> Vec<Evidence> {
+        let atoms = classify_intent(intent);
+        self.graph.retrieve_patterns(intent, &atoms, 4)
+    }
+
     pub fn run_intent(&mut self, intent: &str) -> ProofRun {
         self.run_intent_in_mode(intent, false)
     }

@@ -1,11 +1,3 @@
-// EXEMPLAR: idiomatic error handling — custom Error enum, Display, From, and `?` propagation.
-// tags: error-handling, result, enum, display, from, question-mark, parsing, config, key-value,
-//       dependency-free
-//
-// Parses `key = value` config lines into a typed struct, converting integer/bool fields with
-// proper error propagation. Demonstrates: one error enum that wraps lower-level errors via
-// `From`, the `?` operator, and returning `Result` all the way up — no `unwrap` in logic.
-
 use std::collections::HashMap;
 use std::num::ParseIntError;
 
